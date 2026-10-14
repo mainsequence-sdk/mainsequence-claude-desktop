@@ -127,3 +127,11 @@ source passed its release check with 87 tests and CI on Linux/macOS with Node 22
 retaining its pending OpenCode implementation passed 95 tests. An isolated VS Code
 consumer built against 0.2.2 passed 42 tests; one Python packaging-environment test
 was skipped. The real VS Code checkout and its 0.2.1 pin were unchanged.
+
+Registry dependency verification on 2026-10-14: devtools 0.2.2 was published by
+the configured GitHub Actions trusted publisher. The temporary packed dependency
+was removed, package-lock.json was generated from the public registry, and a fresh
+`npm ci --ignore-scripts` succeeded. The full Claude release check passed again
+with 43 tests and three native simulator tests against the extracted ZIP. The
+lockfile and bundled build metadata record the registry SHA-512 integrity; no
+local-file or sibling-checkout dependency is used.
