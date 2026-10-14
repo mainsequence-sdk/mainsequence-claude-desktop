@@ -62,3 +62,11 @@ The catalog update is a separate generated commit, preserving all source files.
 Before stable release, complete the live installation/update/rollback and
 multi-account acceptance checklist. Automatic fixtures cannot establish live
 request ownership or Desktop host-refresh behavior.
+
+After publication, set `MS_CLAUDE_DESKTOP_BINARY` and run
+`npm run verify:published` from the matching source version. It anonymously checks
+the marketplace, ZIP and checksum, installs into a disposable configuration, checks
+the bundled dependency integrity, and runs native validation, simulator tests and
+the standalone worker. It preserves the normal Desktop configuration and does not
+sign in to live accounts. This verifies engine installation; GUI acceptance remains
+a separate check.
