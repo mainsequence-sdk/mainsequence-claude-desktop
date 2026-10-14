@@ -1,0 +1,22 @@
+{
+  "name": "mainsequence-desktop",
+  "owner": {
+    "name": "MainSequence",
+    "url": "https://mainsequence.io"
+  },
+  "description": "MainSequence plugins for Claude Desktop Code. Preview channel.",
+  "plugins": [
+    {
+      "name": "mainsequence",
+      "version": "0.3.0",
+      "description": "MainSequence developer tools and account controls inside Claude Desktop Code.",
+      "homepage": "https://github.com/mainsequence-sdk/mainsequence-claude-desktop",
+      "license": "MIT",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/download/v0.3.0/mainsequence-claude-desktop-0.3.0.zip",
+        "sha256": "2d7070c2b6bd0758d32dc3ffec076c071db840cfacbf22917a02985f43b1da24"
+      }
+    }
+  ]
+}
