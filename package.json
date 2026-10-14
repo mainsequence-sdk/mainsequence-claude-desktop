@@ -20,7 +20,8 @@
     "verify:claude:distribution": "node scripts/verify-claude-distribution.cjs",
     "pack:claude": "npm run build && node scripts/pack-claude.cjs",
     "release:check": "npm run typecheck && npm test && npm run verify:docs && node scripts/pack-claude.cjs && npm run verify:claude:distribution",
-    "publish:claude": "node scripts/publish-claude.cjs"
+    "publish:claude": "node scripts/publish-claude.cjs",
+    "verify:published": "node scripts/verify-public-release.cjs"
   },
   "dependencies": {
     "@dev-mainsequence/devtools": "0.2.2"

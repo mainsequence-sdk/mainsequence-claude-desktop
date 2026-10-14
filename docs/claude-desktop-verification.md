@@ -59,7 +59,8 @@ The following remain **unverified** until completed in an isolated Desktop Code
 session with authorized test accounts and a disposable project:
 
 - [ ] Install through the Desktop plugin manager, enable, reload, update and remove.
-- [ ] Verify the published versioned archive/checksum and install through the public marketplace and direct archive upload routes.
+- [x] Verify the published versioned archive/checksum and install through the public marketplace in an isolated engine configuration.
+- [ ] Install the public marketplace and direct archive upload through the Desktop GUI.
 - [ ] Render and interact with every pane at normal window widths and with keyboard navigation.
 - [ ] Browser MainSequence login/renewal/logout and project setup against a test backend.
 - [ ] Python and frontend SDK workflows against supported installed SDK versions.
@@ -135,3 +136,18 @@ was removed, package-lock.json was generated from the public registry, and a fre
 with 43 tests and three native simulator tests against the extracted ZIP. The
 lockfile and bundled build metadata record the registry SHA-512 integrity; no
 local-file or sibling-checkout dependency is used.
+
+Published preview 0.3.1 was verified on 2026-10-14 after independent CI and release
+workflows passed. `npm run verify:published` anonymously fetched the public catalog,
+ZIP and checksum, installed with Desktop engine 2.1.295 into a disposable
+configuration, verified bundled devtools 0.2.2 and its lockfile integrity, then
+passed native validation, three simulator tests and worker diagnostics.
+
+- [Preview release](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.3.1)
+- [Release workflow](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/actions/runs/38578155128)
+- Source revision: `3514a621b2bb7b81cbe25f541c91f611af58400b`.
+- ZIP SHA-256: `466bce10675d2ee1e1942d0dcba32144a7ceba2747d6247be35ac9d3eeff4518`.
+
+The previous 0.3.0 ZIP and checksum assets retained their original hashes. GUI
+rendering, live account request ownership/refresh and the remaining acceptance
+items above are still unverified.
