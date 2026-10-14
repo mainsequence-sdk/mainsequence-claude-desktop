@@ -1,0 +1,32 @@
+{
+  "name": "@dev-mainsequence/claude-desktop",
+  "version": "0.3.1",
+  "private": true,
+  "description": "MainSequence integration for Claude Desktop Code",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git"
+  },
+  "scripts": {
+    "build": "node scripts/clean.cjs && tsc -p tsconfig.json && node scripts/build-claude.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "verify:docs": "node scripts/verify-claude-docs.cjs",
+    "verify:claude": "node scripts/verify-claude-host.cjs",
+    "verify:claude:distribution": "node scripts/verify-claude-distribution.cjs",
+    "pack:claude": "npm run build && node scripts/pack-claude.cjs",
+    "release:check": "npm run typecheck && npm test && npm run verify:docs && node scripts/pack-claude.cjs && npm run verify:claude:distribution",
+    "publish:claude": "node scripts/publish-claude.cjs"
+  },
+  "dependencies": {
+    "@dev-mainsequence/devtools": "0.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "18.19.130",
+    "typescript": "5.9.3"
+  }
+}

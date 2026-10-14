@@ -1,0 +1,59 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { isBuiltin } = require('node:module');
+const root = path.resolve(__dirname, '..');
+const pkg = require('../package.json');
+const coreEntry = require.resolve('@dev-mainsequence/devtools');
+const coreRoot = path.dirname(path.dirname(coreEntry));
+const core = JSON.parse(fs.readFileSync(path.join(coreRoot, 'package.json'), 'utf8'));
+if (core.version !== pkg.dependencies[core.name]) throw new Error('Installed devtools must match the exact dependency pin.');
+const lockPath = path.join(root, 'package-lock.json');
+const locked = fs.existsSync(lockPath) ? JSON.parse(fs.readFileSync(lockPath, 'utf8')).packages['node_modules/@dev-mainsequence/devtools'] : undefined;
+const target = path.join(root, 'claude');
+fs.rmSync(target, { recursive: true, force: true });
+fs.cpSync(path.join(root, 'manifests/claude'), target, { recursive: true });
+const manifestPath = path.join(target, '.claude-plugin/plugin.json');
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+manifest.version = pkg.version;
+fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+const copied = new Set();
+function bundle(source, destination, boundary) {
+  if (copied.has(destination)) return;
+  if (!source.startsWith(boundary + path.sep)) throw new Error('Dependency leaves its package.');
+  copied.add(destination);
+  let text = fs.readFileSync(source, 'utf8').replace(/^\/\/# sourceMappingURL=.*$/gm, '');
+  text = text.replace(/require\(["']([^"']+)["']\)/g, (expression, name) => {
+    let next, dest, nextBoundary = boundary;
+    if (name === '@dev-mainsequence/devtools') {
+      next = coreEntry; dest = 'vendor/devtools/index.js'; nextBoundary = path.dirname(coreEntry);
+    } else if (name.startsWith('.')) {
+      next = require.resolve(path.resolve(path.dirname(source), name));
+      dest = path.posix.normalize(path.posix.join(path.posix.dirname(destination), name));
+      if (!path.extname(dest)) dest += '.js';
+    } else {
+      if (!isBuiltin(name)) throw new Error(`Unexpected runtime dependency: ${name}`);
+      return expression;
+    }
+    if (dest.startsWith('../')) throw new Error('Bundled dependency leaves plugin.');
+    bundle(next, dest, nextBoundary);
+    let relative = path.posix.relative(path.posix.dirname(destination), dest);
+    if (!relative.startsWith('.')) relative = './' + relative;
+    return `require(${JSON.stringify(relative)})`;
+  });
+  const output = path.join(target, 'dist', destination);
+  fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, text);
+}
+bundle(path.join(root, 'dist/claudeRunner.js'), 'claudeRunner.js', path.join(root, 'dist'));
+fs.writeFileSync(path.join(target, 'dist/package.json'), '{"type":"commonjs"}\n');
+for (const name of ['LICENSE', 'NOTICE']) {
+  fs.copyFileSync(path.join(root, name), path.join(target, name));
+  fs.copyFileSync(path.join(coreRoot, name), path.join(target, 'dist/vendor/devtools', name));
+}
+fs.writeFileSync(path.join(target, 'dist/vendor/devtools/package.json'), JSON.stringify({ name: core.name, version: core.version, main: './index.js' }, null, 2) + '\n');
+fs.cpSync(path.join(root, 'docs'), path.join(target, 'docs'), { recursive: true });
+fs.cpSync(path.join(root, 'third_party'), path.join(target, 'third_party'), { recursive: true });
+fs.copyFileSync(path.join(root, 'README.md'), path.join(target, 'README.md'));
+fs.writeFileSync(path.join(target, 'build-info.json'), JSON.stringify({ version: pkg.version, node: pkg.engines.node,
+  host: 'claude-desktop-code', workerProtocol: 1, devtools: { name: core.name, version: core.version, ...(locked?.integrity ? { integrity: locked.integrity } : {}) },
+  accountReference: '60d5aed19856d548611472ca85c8836bfaa4bcd3' }, null, 2) + '\n');
+console.log(`Built Claude Desktop ${pkg.version} with ${core.name}@${core.version} from its package API.`);

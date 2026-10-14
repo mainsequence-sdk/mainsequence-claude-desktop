@@ -7,7 +7,8 @@ directly through the bundled worker; they do not require a model turn.
 
 This is a preview release. Live Desktop account acceptance remains outstanding.
 The public distribution is [mainsequence-claude-desktop](https://github.com/mainsequence-sdk/mainsequence-claude-desktop).
-The source repository retains its current visibility independently of distribution.
+This repository owns the Claude source and distribution; reusable operations come
+from the versioned public devtools package.
 The supported initial target is local macOS sessions. Desktop owns the Code engine;
 the version of a separately installed command-line client does not establish GUI
 compatibility. See [verification](claude-desktop-verification.md) for the exact
@@ -39,7 +40,7 @@ Claude's plugin service; include only the built plugin. See
 procedure, release automation and developer builds.
 
 The plugin also registers `/ms` as an optional shortcut for opening the same pane.
-It is not required for normal use. The source manifest is under
+It is not required for normal use. The source manifest in this repository is under
 `manifests/claude/.claude-plugin/plugin.json`; generated artifacts must not be edited.
 
 ## MainSequence connection and projects
@@ -184,7 +185,7 @@ session starts with Desktop-managed sign-in until you explicitly select a profil
 
 ## Updating, removing and troubleshooting
 
-Rebuild from source, update the plugin through Desktop's manager, and reload its Code
+Update the plugin through Desktop's manager and reload its Code
 session. The generated worker protocol and plugin version are packaged together.
 Uninstall/disable through the same manager. Uninstalling the plugin does not revoke
 MainSequence credentials, erase projects, or purge Claude account profiles. Restore
@@ -205,8 +206,8 @@ blindly remove lock files or account metadata.
 npm run typecheck
 npm test
 npm run verify:docs
-npm pack --ignore-scripts --pack-destination artifacts
-npm run verify:package
+npm run pack:claude
+npm run verify:claude:distribution
 # Optional native validation with Desktop's actual bundled executable:
 MS_CLAUDE_DESKTOP_BINARY=/absolute/path/to/Desktop/bundled/claude npm run verify:claude
 ```
