@@ -1,0 +1,41 @@
+name: Release Claude Desktop plugin
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the checked preview and update the marketplace
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: claude-desktop-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Check release tag
+        if: github.ref_type == 'tag'
+        run: node -e 'if(process.env.GITHUB_REF_NAME !== `v${require("./package.json").version}`) process.exit(1)'
+      - run: npm run release:check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-desktop-release
+          include-hidden-files: true
+          path: artifacts/
+      - name: Publish from this repository
+        if: github.ref_type == 'tag' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run publish:claude

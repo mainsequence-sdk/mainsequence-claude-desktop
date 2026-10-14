@@ -20,9 +20,12 @@ check. The suites cover:
   host-managed sessions remaining under Desktop's control; automatic transitions
   deferred until main and observed background turns complete, manual mid-turn switches refused, and
   unresolved transitions blocking model dispatch.
-- Docker argv construction/cancellation, canonical local deletion, stale previews,
-  JSONC comment preservation and refusal of incompatible container configurations.
-- The existing MainSequence authentication, SDK, MCP, Codex and OpenCode suites.
+- Public devtools dependency boundaries and delegation to shared operations.
+
+Devtools separately tests Docker argv construction/cancellation, canonical local
+deletion, stale previews, JSONC comment preservation and incompatible container
+configurations, alongside MainSequence authentication, SDK and MCP behavior.
+Codex and OpenCode tests remain with their implementations in devtools.
 
 Native loader validation uses Desktop's bundled Code **2.1.295**. The installed
 Desktop application inspected during development is **2.37337.1**. These numbers
@@ -46,8 +49,7 @@ this inspection; the install checkbox below remains open.
 
 The distribution repository is
 [mainsequence-claude-desktop](https://github.com/mainsequence-sdk/mainsequence-claude-desktop).
-It contains a checksum-pinned marketplace and versioned release archives. The
-source repository retains its current visibility. Archive validation and release
+It contains a checksum-pinned marketplace and versioned release archives. Both source repositories are public. Archive validation and release
 publication do not establish successful installation through the Desktop GUI;
 installation and upgrades remain acceptance items until exercised there.
 
@@ -110,3 +112,18 @@ When running a check, record the command, engine/app version, outcome and any
 limitation here. Update checkboxes only after observing the stated behavior; a
 native validator pass covers loading/static analysis, and native simulator tests
 cover fixture interactions. Neither substitutes for actual window rendering or auth.
+
+## Repository separation
+
+The 0.3.1 plugin imports devtools 0.2.2. Shared project-operation tests live with
+devtools; Claude account/UI/protocol/native-host tests live in this repository.
+The full 134-test result above records the original combined implementation, not
+a claim that the separated Claude test suite contains all those tests. Dependency
+boundary tests reject private imports and copied shared implementation.
+
+Separation verification on 2026-10-14: the independent Claude suite passed 43 tests
+and the native engine passed three simulator tests. The additive devtools 0.2.2
+source passed its release check with 87 tests and CI on Linux/macOS with Node 22. The development checkout
+retaining its pending OpenCode implementation passed 95 tests. An isolated VS Code
+consumer built against 0.2.2 passed 42 tests; one Python packaging-environment test
+was skipped. The real VS Code checkout and its 0.2.1 pin were unchanged.

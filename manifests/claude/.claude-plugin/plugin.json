@@ -1,0 +1,23 @@
+{
+  "name": "mainsequence",
+  "version": "0.3.1",
+  "description": "MainSequence developer tools and account controls inside Claude Desktop Code.",
+  "author": {
+    "name": "MainSequence"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "nodePath": {
+      "type": "string",
+      "title": "Node executable",
+      "description": "Node 22+ executable available to Claude Desktop",
+      "default": "node"
+    },
+    "claudeExecutable": {
+      "type": "string",
+      "title": "Claude executable for sign-in",
+      "description": "Optional path to the local Claude engine; blank automatically locates Desktop's bundled engine",
+      "default": ""
+    }
+  }
+}

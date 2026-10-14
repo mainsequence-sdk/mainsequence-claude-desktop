@@ -6,9 +6,24 @@ separately in [verification](../claude-desktop-verification.md).
 ## Decision
 
 Target local Claude Desktop Code using function hooks and native UI elements.
-Keep one npm package and shared MainSequence domain implementation. A generated
-Claude plugin contains the native UI, a private Node worker, docs and attribution.
-Codex/OpenCode adapters and the public library retain their existing entry points.
+All Claude-specific source is maintained in `mainsequence-claude-desktop`.
+It pins the public `@dev-mainsequence/devtools` package and imports only public
+exports. Devtools owns reusable MainSequence domain behavior. A generated Claude
+plugin bundles that dependency, the native UI, private worker, docs and attribution.
+Codex/OpenCode remain in devtools for now; VS Code already has its own repository.
+
+```mermaid
+flowchart TD
+  Claude[mainsequence-claude-desktop: UI, hooks, accounts, worker, releases] --> Core[mainsequence-devtools: public shared API]
+  VSCode[ms-vscode-extension: existing independent extension] --> Core
+  Core --> Shared[Auth, repositories, SDK workflows, MCP, project operations]
+  Core -. currently contains .-> Hosts[Codex and OpenCode adapters: future extraction]
+  Claude --> Plugin[Self-contained Claude plugin ZIP and marketplace]
+```
+
+The dependency points toward devtools. Devtools does not import the Claude
+repository. Bundled dependency files are generated from the pinned npm package;
+they are not a second maintained copy of the shared implementation.
 
 The hook runtime cannot import Node built-ins directly. Native callbacks invoke
 `$.process.spawn({argv, cwd, input})`; the child reads a bounded JSON envelope from
@@ -73,8 +88,9 @@ release requirement independent of fixture tests.
 ## Shared behavior and compatibility
 
 Reuse shared auth, repositories, SDK capabilities, dependency-only sync, MCP and
-project locks. Extract Docker, JSONC devcontainer edits, local deletion and runtime
-diagnostics from host-specific UI into a Desktop project adapter. JSONC changes
+project locks. Docker, JSONC devcontainer edits and local deletion use devtools' shared
+`createProjectOperations` API. The Desktop project adapter only implements native
+folder/container callbacks and plugin-specific runtime diagnostics. JSONC changes
 preserve user content and use preview digests to reject stale writes. Deletion
 checks canonical boundaries and Git/path fingerprints and refuses linked worktrees.
 It permanently removes local uncommitted/untracked content only after confirmation
@@ -91,19 +107,13 @@ changing the Code session root and launching a container session remain host gap
 The shared `allowMcpSkills` option now affects capability reporting as well as
 dispatch. Its default remains disabled, preserving existing host behavior.
 
-Node is a runtime prerequisite, not a new published package dependency. Builds do
+Node is a runtime prerequisite. The exact devtools dependency is bundled at build time. Builds do
 not install plugins, sign in to services, publish releases, or mutate user settings.
 Documentation and package checks ensure the shipped artifact contains the same
 worker, UI, license and compatibility information tested in the repository.
 
-The intended public distribution repository is
-`mainsequence-sdk/mainsequence-claude-desktop`; implementation source remains in the
-internal `mainsequence-sdk/mainsequence-devtools` repository. Versioned artifacts,
-marketplace publication and public installation are release concerns, independent
-of a successful local build. This adapter remains a prerelease until the relevant
-live acceptance checks are recorded.
-
-Validation separates worker/fixture suites, the native loader's static analysis,
-native simulator element/event tests, and live Desktop/authentication acceptance.
-Simulator tests exercise confirmation, process cancellation and recovery dispatch
-without authenticating production accounts or proving model request ownership.
+Both repositories are public. Claude source, marketplace and releases share this
+repository; the release workflow uses its own repository token. There is no
+cross-repository publisher. Plugin version 0.3.1 pins devtools 0.2.2 independently.
+The previous 0.3.0 release remains intact. Public dependency updates require
+compatibility tests, a lockfile update and a new plugin release.
