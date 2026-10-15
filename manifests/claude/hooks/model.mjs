@@ -1,5 +1,5 @@
 export const PANE = 'mainsequence';
-export const TABS = ['General', 'Projects', 'Current Project', 'MCP', 'Activity'];
+export const TABS = ['General', 'Projects', 'Current Project', 'MCP', 'Agents', 'Activity'];
 export const clean = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '').slice(0, 16000);
 export const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 export const rows = value => Array.isArray(value) ? value : Array.isArray(value?.results) ? value.results : Array.isArray(value?.items) ? value.items : [];
@@ -7,9 +7,10 @@ export const request = (scope, action, values = {}) => ({ scope, request: { acti
 export function initialState(options = {}) {
   return { tab: 'General', expanded: {}, contextRevision: 0, initializing: false, projectsLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
     fields: { backend: 'https://api.main-sequence.app', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
-      image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}',
+      image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}', agentSearch: '',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },
     editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
+    agentRevision: 0, agentListRevision: 0, agentOffset: 0, agentDetail: null, agentAccount: '', agentTools: {}, activeAgent: null, agentsLoading: false, agentStarting: false,
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };
 }
 export function meetsVersion(value, minimum = [2, 1, 296]) {

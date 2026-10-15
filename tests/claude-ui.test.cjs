@@ -8,6 +8,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 const success = (action, data) => ({ schemaVersion: 1, action, status: 'success', summary: `${action} completed.`, data });
 
 function fixture(options = {}) {
+  const stores = options.stores || new Map();
   const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
   const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
@@ -23,7 +24,8 @@ function fixture(options = {}) {
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
     session: { cwd: async () => '/work/repo', id: async () => 'session-1', version: async () => ({ version: options.version || '2.1.295' }) },
-    store: { get: async key => key === 'settings' ? options.saved : options.environments, set: async (key, value) => { calls.push({ store: key, value }); } },
+    store: { get: async key => stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined, set: async (key, value) => { stores.set(key, value); calls.push({ store: key, value }); } },
+    prompt: { submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
     command: { register: async spec => { calls.push({ command: spec }); } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool' },
@@ -64,18 +66,18 @@ function fixture(options = {}) {
     for (const child of tree.props?.children || []) { const found = find(child, key); if (found) return found; } };
   const press = async key => { const node = find(await pane(), key); assert.ok(node, `Missing ${key}`); node.props.onPress(); await flush(); };
   const field = async (key, value) => { const node = find(await pane(), `field-${key}`); assert.ok(node, `Missing field ${key}`); node.props.onInput(value); await flush(); };
-  return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, find, get nextCalls() { return nextCalls; } };
+  return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, stores, find, get nextCalls() { return nextCalls; } };
 }
 
-test('one native pane has five coordinated sections and no above-prompt launcher', async () => {
+test('one native pane has six coordinated sections and no above-prompt launcher', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start', {surface:'desktop'});
   assert.equal(f.calls[0].command.name, 'ms');
   assert.deepEqual(f.calls.find(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence' });
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
   assert.equal(band, undefined);
-  for (const tab of ['General', 'Projects', 'Current-Project', 'MCP', 'Activity', 'General']) {
+  for (const tab of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity', 'General']) {
     await f.press(`tab-${tab}`); const tree = await f.pane();
-    for (const name of ['General', 'Projects', 'Current-Project', 'MCP', 'Activity']) assert.equal(f.find(tree, `tab-${name}`).props.dimColor, name !== tab);
+    for (const name of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity']) assert.equal(f.find(tree, `tab-${name}`).props.dimColor, name !== tab);
     assert.equal(f.find(tree, 'more-tools'), undefined); assert.equal(f.find(tree, 'tab-Accounts'), undefined);
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'Pane', requestId: 'mainsequence', props: {} }), { type: 'engine', ref: 1 });
@@ -309,4 +311,102 @@ test('late tool registration cannot replace the current environment tool map', a
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[0].name })).deny, /no longer connected/);
   assert.equal((await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[1].name })).isError, undefined);
   assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').at(-1).request.request.environmentUid, 'b');
+});
+
+const agentId = n => `00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
+const agentEnvironment=agentId(1), agentUid=agentId(2), agentSession=agentId(3), agentTask=agentId(4);
+async function agentFixture(options={}) {
+  const account='agent-user@example.test';
+  const agent={uid:agentUid,name:'Research assistant',description:'Explain portfolio risk',environmentUid:agentEnvironment,environmentName:'Research',repositoryBranch:'develop',runtimeState:'current',runtimeReleaseUid:agentId(5),responseKinds:['message','task'],skills:[{name:'Risk',description:'Explain exposure',examples:['Explain exposure']}],...options.agent};
+  const f=fixture({...options,ask:options.ask||'Send',respond:domain=>{
+    const r=domain.request;
+    const override=options.respond?.(r); if(override)return override;
+    if(r.action==='workspace-preferences')return success(r.action,{backend:'https://platform.example',baseDir:'/repos'});
+    if(r.action==='auth-status')return success(r.action,{authenticated:true,username:account});
+    if(r.action==='mcp-environments')return success(r.action,[{uid:agentEnvironment,name:'Research'},{uid:agentId(9),name:'Production'}]);
+    if(r.action==='mcp-list'||r.action==='mcp-discover')return success(r.action,[]);
+    if(r.action==='agents-list')return success(r.action,{account,results:r.environmentUid===agentEnvironment?[agent]:[],count:r.environmentUid===agentEnvironment?1:0});
+    if(r.action==='agent-get')return success(r.action,{account,agent});
+    if(r.action==='agent-send')return success(r.action,{account,agent,sessionUid:agentSession,responseKind:r.responseKind,...(r.responseKind==='task'?{taskUid:agentTask,status:'working',terminal:false}:{message:'I explain risk. Supply a portfolio identifier.'})});
+    if(r.action.startsWith('agent-task-'))return success(r.action,{account,agent,sessionUid:agentSession,responseKind:'task',taskUid:agentTask,status:'working',terminal:false});
+    return success(r.action,{});
+  }});
+  const {register}=await load();register(f.on);await f.emit('session.start',{surface:'desktop'});
+  f.timers.find(t=>t.ms===0).callback();await flush();await f.press('tab-Agents');
+  f.find(await f.pane(),'mcp-environment').props.onSelect(agentEnvironment);await flush();
+  f.agent=agent; f.tool=kind=>'mcp__mainsequence__'+f.tools.find(t=>t.name.startsWith(`ms_agent_${kind}_`)).name;
+  f.startTalk=async()=>{await f.press(`agent-talk-${agentUid}`);f.timers.filter(t=>t.ms===0).at(-1).callback();await flush();};
+  return f;
+}
+test('Agents is additive and uses the shared environment; Talk queues a real prompt before any send',async()=>{
+ const f=await agentFixture();let tree=await f.pane();assert.match(JSON.stringify(tree),/Research assistant/);
+ assert.equal(f.find(tree,'mcp-environment').props.value,agentEnvironment);
+ await f.press('tab-MCP');assert.equal(f.find(await f.pane(),'mcp-environment').props.value,agentEnvironment);await f.press('tab-Agents');
+ await f.startTalk();assert.equal(f.calls.filter(c=>c.submitted).length,1);assert.match(f.calls.find(c=>c.submitted).submitted.text,/Research assistant.*Research/);
+ assert.ok(f.calls.find(c=>c.submitted).submitted.text.includes(f.tool('introduce')));
+ assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
+ const result=await f.emit('tool.call',{tool:f.tool('introduce')});assert.match(result.result.data.message,/Supply a portfolio/);
+ const sent=f.calls.find(c=>c.request?.request.action==='agent-send').request.request;
+ assert.equal(sent.environmentUid,agentEnvironment);assert.equal(sent.expectedAccount,'agent-user@example.test');assert.ok(sent.handleId);assert.match(sent.message,/Do not run an analysis/);
+ assert.match((await f.emit('tool.call',{tool:f.tool('introduce')})).deny,/already requested/);
+ await f.press(`agent-talk-${agentUid}`);assert.equal(f.calls.filter(c=>c.submitted).length,1);assert.equal(f.calls.filter(c=>c.suggested).length,1);
+ assert.equal(f.calls.some(c=>c.request?.scope==='accounts'),false);
+});
+test('agent follow-ups require approval, reuse session identity, and only accept tasks from this conversation',async()=>{
+ const f=await agentFixture();await f.startTalk();await f.emit('tool.call',{tool:f.tool('introduce')});
+ const send=f.tool('send');f.$.ui.ask=async()=> 'Go back';const before=f.calls.filter(c=>c.request?.request.action==='agent-send').length;
+ assert.match((await f.emit('tool.call',{tool:send,message:'Analyze A',responseKind:'task'})).deny,/cancelled/);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,before);
+ f.$.ui.ask=async()=> 'Send';await f.emit('tool.call',{tool:send,message:'Analyze A',responseKind:'task'});
+ const sent=f.calls.filter(c=>c.request?.request.action==='agent-send').at(-1).request.request;assert.equal(sent.sessionUid,agentSession);assert.equal(sent.handleId,undefined);
+ assert.match((await f.emit('tool.call',{tool:f.tool('get'),taskUid:agentId(99)})).deny,/this conversation/);
+ await f.emit('tool.call',{tool:f.tool('wait'),taskUid:agentTask,afterSequence:2});assert.equal(f.calls.filter(c=>c.request).at(-1).request.request.afterSequence,2);
+ await f.press('tab-Activity');assert.match(JSON.stringify(await f.pane()),/Talk to agent/);
+});
+test('environment changes invalidate old agent tools, including while a send approval is open',async()=>{
+ const f=await agentFixture();await f.startTalk();const tool=f.tool('send');let approve;
+ f.$.ui.ask=()=>new Promise(resolve=>{approve=resolve});const pending=f.emit('tool.call',{tool,message:'Hello',responseKind:'message'});await flush();
+ f.find(await f.pane(),'mcp-environment').props.onSelect(agentId(9));await flush();approve('Send');
+ assert.match((await pending).deny,/changed/);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
+ assert.match((await f.emit('tool.call',{tool,message:'Hello',responseKind:'message'})).deny,/no longer active/);
+ assert.doesNotMatch(JSON.stringify(await f.pane()),/Research assistant/);
+});
+test('uncertain sends are not replayed, including after reopening the same Claude session',async()=>{
+ const stores=new Map();const respond=r=>r.action==='agent-send'?{schemaVersion:1,action:r.action,status:'failure',summary:'Connection interrupted',effects:{state:'partial-or-uncertain'}}:null;
+ const f=await agentFixture({stores,respond});await f.startTalk();await f.emit('tool.call',{tool:f.tool('introduce')});
+ assert.match((await f.emit('tool.call',{tool:f.tool('send'),message:'Retry',responseKind:'message'})).deny,/uncertain/);
+ assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,1);
+ const reopened=await agentFixture({stores,respond});await reopened.press(`agent-talk-${agentUid}`);assert.equal(reopened.calls.filter(c=>c.submitted).length,0);
+ assert.ok(reopened.find(await reopened.pane(),'agent-new-conversation'));assert.match(reopened.calls.filter(c=>c.toast).at(-1).toast,/uncertain/);
+ assert.doesNotMatch(JSON.stringify([...stores]),/Explain your purpose|accessToken|refreshToken/);
+});
+test('a successful agent session can be resumed without creating a new platform conversation',async()=>{
+ const stores=new Map();const first=await agentFixture({stores});await first.startTalk();await first.emit('tool.call',{tool:first.tool('introduce')});
+ const reopened=await agentFixture({stores});await reopened.startTalk();await reopened.emit('tool.call',{tool:reopened.tool('introduce')});
+ const sent=reopened.calls.find(c=>c.request?.request.action==='agent-send').request.request;assert.equal(sent.sessionUid,agentSession);assert.equal(sent.handleId,undefined);
+});
+test('agent details show real card capabilities; unavailable agents cannot start a conversation',async()=>{
+ const f=await agentFixture({agent:{runtimeState:'not_deployed',runtimeReleaseUid:null}});
+ assert.equal(f.find(await f.pane(),`agent-talk-${agentUid}`),undefined);await f.press(`agent-details-${agentUid}`);
+ assert.match(JSON.stringify(await f.pane()),/Explain exposure/);assert.match(JSON.stringify(await f.pane()),/Not deployed/);
+ await f.press('agents-back');assert.ok(f.find(await f.pane(),'agents-search'));
+});
+
+test('a late response cannot overwrite an explicitly restarted agent conversation',async()=>{
+ const f=await agentFixture();await f.startTalk();
+ const original=f.$.process.spawn;let finish;
+ f.$.process.spawn=input=>{
+  const envelope=JSON.parse(input.input);if(envelope.request.request.action!=='agent-send')return original(input);
+  const gate=new Promise(resolve=>{finish=resolve});
+  const stream=(async function*(){await gate;yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:success('agent-send',{sessionUid:agentSession,responseKind:'message',message:'Old reply'})})+'\n'};})();stream.result=Promise.resolve({code:0});return stream;
+ };
+ const pending=f.emit('tool.call',{tool:f.tool('introduce')});await flush();
+ await f.press('agent-active-details');await f.press('agent-new-conversation');await f.press('confirm-action');
+ const key='agent-conversations-session-1';const replacement=JSON.stringify(f.stores.get(key));
+ finish();await pending;assert.equal(JSON.stringify(f.stores.get(key)),replacement);assert.doesNotMatch(replacement,new RegExp(agentSession));
+});
+
+test('failed native tool registration can be retried without sending an agent message',async()=>{
+ const f=await agentFixture();const original=f.$.tool.register;f.$.tool.register=async()=>{throw new Error('host not ready')};
+ await f.press(`agent-talk-${agentUid}`);assert.match(JSON.stringify(await f.pane()),/Conversation needs attention/);assert.equal(f.calls.filter(c=>c.submitted).length,0);
+ f.$.tool.register=original;await f.startTalk();assert.equal(f.calls.filter(c=>c.submitted).length,1);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
 });

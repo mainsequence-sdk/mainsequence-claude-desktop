@@ -1,7 +1,7 @@
 {
   "name": "mainsequence",
-  "version": "0.4.1",
-  "description": "MainSequence login, projects, MCP and activity inside Claude Desktop Code.",
+  "version": "0.4.2",
+  "description": "MainSequence login, projects, MCP, agents and activity inside Claude Desktop Code.",
   "author": {
     "name": "MainSequence"
   },

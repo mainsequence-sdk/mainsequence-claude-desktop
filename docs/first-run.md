@@ -4,7 +4,9 @@ This walkthrough covers the published **0.4.1 preview**. It targets a local Code
 session in Claude Desktop. Node 22+ must already be installed; MainSequence does
 not install it for you. macOS with Desktop's bundled Code 2.1.295 is the recorded
 native test environment. See [verification](claude-desktop-verification.md) for
-what has and has not been checked on a live Desktop window.
+what has and has not been checked on a live Desktop window. The source-only
+[0.4.2 candidate](agents.md) also includes Agents; that section is not part of the
+published 0.4.1 walkthrough below.
 
 ## Follow the setup flow
 

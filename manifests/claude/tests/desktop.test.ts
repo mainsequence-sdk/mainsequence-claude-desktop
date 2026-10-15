@@ -105,3 +105,43 @@ test('MainSequence login uses shared auth while native Claude credentials remain
   await ui.unmount();
   expect(credentialAccesses).toBe(0);
 });
+
+test('Agents queues a visible Claude prompt and returns a real tool result from the selected environment', async ($, on) => {
+  const clock=mock.clock(on,{now:1000});mock.store(on);mock.env(on,{HOME:'/fixture/user'});
+  const id=n=>`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
+  const env=id(1),uid=id(2),requests=[],prompts=[],toasts=[],tools=[];
+  const agent={uid,name:'Research assistant',description:'Explain risk',environmentUid:env,environmentName:'Research',repositoryBranch:'develop',runtimeState:'current',runtimeReleaseUid:id(5),responseKinds:['message'],skills:[]};
+  on('session.cwd',()=>({value:'/fixture/project'}));on('session.id',()=>({value:'native-agent-test'}));
+  on('session.version',()=>({value:{version:'2.1.295'}}));on('session.start',($,e)=>({cwd:e.cwd}));
+  on('ui.open',()=>({value:undefined}));on('ui.toast',($,e)=>{toasts.push(e);return {value:undefined};});
+  on('command.register',()=>({value:{command:'ms'}}));
+  on('tool.register',($,e)=>{tools.push(e);return {value:{tool:`mcp__mainsequence__${e.name}`}};});
+  // Capture the submitted prompt before inference: this test never contacts a model or real agent.
+  on('prompt.submit',($,e)=>{prompts.push(e);return {drop:'Captured by the isolated test; no inference runs.'};});
+  on('process.spawn',async function*($,e){
+    const envelope=JSON.parse(e.input),r=envelope.request.request;requests.push(r);let data={};
+    if(r.action==='workspace-preferences')data={backend:'https://fixture.example',baseDir:'/fixture/user/mainsequence'};
+    if(r.action==='auth-status')data={authenticated:true,username:'fixture@example.test'};
+    if(r.action==='mcp-environments')data=[{uid:env,name:'Research'}];
+    if(r.action==='agents-list')data={account:'fixture@example.test',results:[agent],count:1};
+    if(r.action==='agent-get')data={account:'fixture@example.test',agent};
+    if(r.action==='agent-send')data={account:'fixture@example.test',agent,sessionUid:id(3),responseKind:'message',message:'I explain portfolio risk. Provide a portfolio identifier.'};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:r.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});await clock.settle();
+  const ui=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await ui.press({key:'tab-Agents'});await clock.settle();
+  await ui.select({key:'mcp-environment',value:env});await clock.settle();
+  expect(await ui.find({key:`agent-${uid}`})).toBeDefined();
+  await ui.press({key:`agent-talk-${uid}`});await clock.settle();
+  expect(prompts,JSON.stringify({requests,toasts,tools})).toHaveLength(1);expect(prompts[0].text).toContain('Research assistant');expect(prompts[0].origin).toEqual({kind:'plugin',name:'mainsequence'});
+  expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(0);
+  const tool=tools.find(t=>t.name.includes('ms_agent_introduce_'));
+  expect(tool).toBeDefined();
+  const reply=await $.tool.call({tool:`mcp__mainsequence__${tool.name}`});
+  expect(JSON.stringify(reply)).toContain('I explain portfolio risk');
+  expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(1);
+  expect(requests.find(r=>r.action==='agent-send').environmentUid).toBe(env);
+  await ui.unmount();
+});

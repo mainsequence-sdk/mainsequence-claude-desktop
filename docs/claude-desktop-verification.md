@@ -11,13 +11,16 @@ configuration edits are part of verification.
 
 The published preview is **0.4.1**, with devtools **0.2.3**. The tracked marketplace
 and distribution metadata agree with the archive identity in the evidence below.
-Publication and installation are complete; the unchecked live GUI/backend items
-remain outstanding. The [first-run walkthrough](first-run.md) describes the intended
+Publication and installation of 0.4.1 are complete; the unchecked live GUI/backend
+items remain outstanding. Source version 0.4.2 with devtools 0.2.4 is an unpublished
+Agents candidate, whose separate implementation evidence is recorded below. The
+[first-run walkthrough](first-run.md) describes the intended
 workflow and does not claim those live checks have passed.
 
-Documentation was reconciled with `main` at `ba72cf6976497d54ace60e00d371fb1459c4dc24`
-on 2026-10-15. That commit already contained the post-publication results. This
-review does not rerun those account-facing operations or upgrade the installed plugin.
+Documentation was reconciled with `main` at `b5229664d253641772232fb48b8aaf0c8f456c59`
+on 2026-10-15, preserving both the published 0.4.1 results and the newer
+0.4.2 implementation/dependency evidence. This review does not rerun those
+account-facing operations or upgrade the installed plugin.
 
 ## Automated checks
 
@@ -30,14 +33,14 @@ simulator checks against Desktop's actual bundled engine.
 
 Coverage includes:
 
-- One pane, five sections, one selected navigation state, no Tools placeholder or
+- One pane, six sections, one selected navigation state, no Tools placeholder or
   AbovePrompt launcher; MainSequence branding packaged with the plugin.
 - MainSequence login, renewal, logout, startup session reads and settings preservation.
 - Explicit mutation confirmations and context-sensitive repository/SDK actions.
 - Empty and populated Activity, collapsed details, streaming progress/cancellation.
 - MCP exact-release registration and confirmed tool dispatch.
 - Rejection of the removed accounts worker domain, including old serialized requests.
-- No Claude token/credential APIs, prompt/model hooks, account worker or rotation loop.
+- No Claude token/credential APIs, account-related prompt/model hooks, account worker or rotation loop.
 - Public devtools API imports, exact version/integrity pin, no copied shared source.
 
 Native simulator tests mount actual native element trees while mocking processes,
@@ -129,3 +132,39 @@ Claude's separate Desktop preferences file changed while the app was running;
 its contents were not restored or edited, and byte-for-byte preservation of that
 file is not claimed. No account switching, provider changes, live MainSequence
 mutations or backend changes were performed for this verification.
+
+## 0.4.2 Agents implementation evidence
+
+On 2026-10-15 the isolated devtools 0.2.4 candidate passed 97 tests and its complete
+release/package checks. Claude 0.4.2 passed 36 Node tests, typechecking, documentation
+verification, portable ZIP checks and standalone worker execution using the exact
+local devtools archive pinned by integrity in the initial implementation lockfile.
+
+Desktop's bundled Code 2.1.295 validated the extracted portable ZIP and passed all
+four native simulator tests. The Agents test mounts the real native pane, selects
+an environment, clicks Talk, observes the plugin-attributed prompt, and invokes its
+registered conversation tool to receive a synthetic agent reply. Host storage, tool
+registration, process responses and prompt inference are mocked. No model or live
+agent was contacted. This verifies the host API wiring, not live agent availability
+or the final desktop window styling.
+
+Regression coverage includes environment changes while approval is pending, stale
+tool refusal, approved follow-ups, persisted conversation identity, task ownership,
+crash/uncertain-send suppression and late replies after starting a new conversation.
+No normal Desktop configuration, existing accounts, provider settings or backend
+files were changed. The public marketplace remains on 0.4.1.
+
+Pending live acceptance after publication/install: select an authorized environment,
+open a deployed Message-capable agent, verify Claude receives its actual capability
+reply, approve a follow-up, then switch environment and verify stale tools refuse.
+Exercise Task mode only with an authorized disposable task. Shared package publication
+precedes the dependent Claude release; see [release order](agents.md#verification-and-coordinated-release).
+
+### Published shared dependency
+
+The [devtools 0.2.4 publication workflow](https://github.com/mainsequence-sdk/mainsequence-devtools/actions/runs/38732377231)
+succeeded from commit `57bb311` on 2026-10-15. The npm registry confirmed the version
+and archive integrity; the compiled files match the tested local implementation.
+Claude's lockfile now pins that public archive. A fresh `npm ci --ignore-scripts`
+and the complete release check passed with all 36 Node tests against that dependency.
+Claude 0.4.2 itself remains unpublished and the installed Desktop plugin is unchanged.

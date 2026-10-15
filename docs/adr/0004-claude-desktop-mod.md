@@ -1,7 +1,7 @@
 # ADR 0004: Native MainSequence integration for Claude Desktop Code
 
-Status: revised for 0.4.1 workspace defaults and environment-scoped MCP tools;
-retains the approved 0.4.0 layout and removal of Claude account switching.
+Status: covers published 0.4.1 workspace defaults and environment-scoped MCP tools,
+and the 0.4.2 Agents implementation candidate. Claude account switching remains removed.
 
 ## Ownership and dependency direction
 
@@ -25,8 +25,9 @@ generated dependency output, not a separately maintained implementation.
 
 ## Native UI and transport
 
-One pane contains General, Projects, Current Project, MCP and Activity. Two aligned
-navigation rows share one selected section. Native Box, Button, Text, Input, Select,
+The published 0.4.1 pane contains General, Projects, Current Project, MCP and Activity.
+The 0.4.2 candidate adds Agents. Two aligned navigation rows share one selected
+section. Native Box, Button, Text, Input, Select,
 Svg and Code elements implement the approved grouping without DOM injection. The
 pane opens on Desktop session startup without stealing focus; `/ms` opens it on
 request. No AbovePrompt hook is registered. Claude controls native placement and
@@ -40,14 +41,18 @@ invent percentages or reuse fictional preview data.
 Native callbacks call `$.process.spawn({argv, cwd, input})`. A bounded JSON envelope
 on stdin routes only `devtools` and `projects`; correlated NDJSON carries progress
 and results. The removed `accounts` domain is rejected before handler dispatch.
-No model turn or shell-command parser is used. Runtime adapters provide native
+Project controls use no model turn or shell-command parser. The Agents addition
+deliberately submits a visible, attributed Claude prompt and serves the agent reply
+through a conversation-specific tool. See the [Agents design](../agents.md).
+Runtime adapters provide native
 folder selection, existing workspace-preference reads, organization lookup through
 the public RepositoryClient, and diagnostics; shared operations remain in devtools.
 
 ## Workspace settings resolution
 
-The Claude adapter calls the public `readWorkspacePreferences` API from devtools
-0.2.3. The shared layer resolves only the backend and repositories folder from
+The Claude adapter calls the public `readWorkspacePreferences` API introduced in
+devtools 0.2.3 and retained in the candidate's pinned devtools 0.2.4. The shared
+layer resolves only the backend and repositories folder from
 existing non-secret configuration; it neither signs in nor writes that configuration.
 Claude owns its saved overrides and editable form state.
 
@@ -69,7 +74,9 @@ Claude owns the selector and the per-backend choice in the separate
 `mcp-environments` store key. Opening MCP loads authorized environments. No first
 or production environment is selected implicitly. A saved choice is revalidated
 on startup before its tools are restored; choosing an environment persists it
-independently of General's Save button.
+independently of General's Save button. In the 0.4.2 candidate, Agents shares this
+environment selection with MCP; its additional identity and conversation checks
+are documented in the [Agents guide](../agents.md).
 
 ```mermaid
 flowchart LR
