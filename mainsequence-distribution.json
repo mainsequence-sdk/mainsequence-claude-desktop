@@ -1,7 +1,7 @@
 {
   "host": "claude-desktop-code",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "devtools": "0.2.2",
-  "archiveSha256": "466bce10675d2ee1e1942d0dcba32144a7ceba2747d6247be35ac9d3eeff4518",
-  "sourceRevision": "3514a621b2bb7b81cbe25f541c91f611af58400b"
+  "archiveSha256": "e65c92f88bf130a8769495a03ce7056b158e424e197226b6f5c269241bbab8f2",
+  "sourceRevision": "db16205888a371f4cbac676b99a231e642a26395"
 }
