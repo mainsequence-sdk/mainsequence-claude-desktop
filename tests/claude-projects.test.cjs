@@ -25,3 +25,17 @@ test('native capabilities are reported truthfully and only invoked when supplied
   assert.equal(diagnostics.data.capabilities.pickFolder, true); assert.equal(diagnostics.data.capabilities.openContainer, true);
   assert.deepEqual(calls, [root, root]);
 });
+
+
+test('workspace preferences reuse only the existing folder and never rewrite configuration', async t => {
+  const {root}=await localProject(t),configPath=path.join(root,'config.json');
+  const original=JSON.stringify({mainsequence_path:root,provider:{key:'fixture-only'},accessToken:'fixture-session'});
+  await fs.writeFile(configPath,original);
+  const actions=createClaudeProjectActions({host:createNodeHost(),configPath});
+  const result=await actions.dispatch({action:'workspace-preferences'});
+  assert.deepEqual(result.data,{baseDir:root});
+  assert.equal(await fs.readFile(configPath,'utf8'),original);
+  assert.doesNotMatch(JSON.stringify(result),/fixture-only|fixture-session/);
+  await fs.writeFile(configPath,JSON.stringify({mainsequence_path:'relative-path'}));
+  assert.equal(path.isAbsolute((await actions.dispatch({action:'workspace-preferences'})).data.baseDir),true);
+});

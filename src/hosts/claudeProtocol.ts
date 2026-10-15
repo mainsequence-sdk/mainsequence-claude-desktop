@@ -1,6 +1,6 @@
 import { ActionRequest, ActionResult, ToolingError } from '@dev-mainsequence/devtools';
 
-export type ClaudeScope = 'devtools' | 'projects' | 'accounts';
+export type ClaudeScope = 'devtools' | 'projects';
 export type ClaudeEnvelope = {
   protocolVersion: 1;
   id: string;
@@ -19,11 +19,11 @@ export function parseClaudeEnvelope(input: unknown): ClaudeEnvelope {
     throw new ToolingError('INVALID_REQUEST', 'Unsupported Desktop action protocol or request ID.');
   }
   const r = e.request;
-  if (!r || typeof r !== 'object' || Array.isArray(r) || !['devtools', 'projects', 'accounts'].includes(r.scope)
+  if (!r || typeof r !== 'object' || Array.isArray(r) || !['devtools', 'projects'].includes(r.scope)
     || Object.keys(r).some(key => !['scope', 'request'].includes(key)) || !r.request || typeof r.request !== 'object'
     || Array.isArray(r.request) || typeof r.request.action !== 'string'
     || !/^[a-z][a-z0-9-]{0,63}$/.test(r.request.action)) {
-    throw new ToolingError('INVALID_REQUEST', 'Choose a supported MainSequence, project, or account action.');
+    throw new ToolingError('INVALID_REQUEST', 'Choose a supported MainSequence or project action.');
   }
   return e as ClaudeEnvelope;
 }
@@ -38,7 +38,6 @@ export function claudeFailure(action: string, error: unknown, cancelled = false)
 export async function executeClaudeEnvelope(input: unknown, handlers: {
   devtools(request: ActionRequest): Promise<ActionResult>;
   projects(request: any): Promise<ActionResult>;
-  accounts(request: any): Promise<ActionResult>;
 }): Promise<ActionResult> {
   let action = 'invalid';
   try {

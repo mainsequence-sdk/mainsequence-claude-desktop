@@ -34,3 +34,13 @@ test('built worker includes the pinned package and shared failures keep the publ
   const result = await core.createProjectOperations({ host: core.createNodeHost() }).dispatch({ action: 'unsupported-operation' });
   assert.equal(result.schemaVersion, 1); assert.equal(result.error.code, 'INVALID_REQUEST');
 });
+
+
+test('release carries branding but no Claude credential reader, account worker or auth lifecycle hooks', () => {
+  for(const filename of ['claudeAccounts.js','claudeRuntime.js']) assert.equal(fs.existsSync(path.join(root,'claude/dist/hosts',filename)),false);
+  const hooks=fs.readFileSync(path.join(root,'claude/hooks/register.mjs'),'utf8');
+  assert.doesNotMatch(hooks,/CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_SECURESTORAGE_CONFIG_DIR|\$\.env\.|\$\.fs\.read|projectAccount|runAccount|prompt\.submit|turn\.step|AbovePrompt/);
+  const manifest=JSON.parse(fs.readFileSync(path.join(root,'claude/.claude-plugin/plugin.json'),'utf8'));
+  assert.equal(manifest.userConfig.claudeExecutable,undefined);
+  assert.ok(fs.statSync(path.join(root,'claude/assets/mainsequence-emblem.png')).size>0);
+});

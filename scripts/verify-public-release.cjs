@@ -59,7 +59,7 @@ async function main() {
     const result = JSON.parse(worker.stdout.trim());
     assert.equal(result.result.status, 'success'); assert.equal(result.result.data.version, pkg.version);
     assert.equal(result.result.data.bundleHealth.compiledEntry, true);
-    console.log('Public marketplace installation, pinned dependency, native fixtures and standalone worker passed. Live GUI/account acceptance is separate.');
+    console.log('Public marketplace installation, pinned dependency, native fixtures and standalone worker passed. Live GUI acceptance is separate.');
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error.message); process.exitCode = 1; });

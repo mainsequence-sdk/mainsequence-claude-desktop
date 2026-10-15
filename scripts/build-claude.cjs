@@ -54,6 +54,5 @@ fs.cpSync(path.join(root, 'docs'), path.join(target, 'docs'), { recursive: true 
 fs.cpSync(path.join(root, 'third_party'), path.join(target, 'third_party'), { recursive: true });
 fs.copyFileSync(path.join(root, 'README.md'), path.join(target, 'README.md'));
 fs.writeFileSync(path.join(target, 'build-info.json'), JSON.stringify({ version: pkg.version, node: pkg.engines.node,
-  host: 'claude-desktop-code', workerProtocol: 1, devtools: { name: core.name, version: core.version, ...(locked?.integrity ? { integrity: locked.integrity } : {}) },
-  accountReference: '60d5aed19856d548611472ca85c8836bfaa4bcd3' }, null, 2) + '\n');
+  host: 'claude-desktop-code', workerProtocol: 1, devtools: { name: core.name, version: core.version, ...(locked?.integrity ? { integrity: locked.integrity } : {}) } }, null, 2) + '\n');
 console.log(`Built Claude Desktop ${pkg.version} with ${core.name}@${core.version} from its package API.`);

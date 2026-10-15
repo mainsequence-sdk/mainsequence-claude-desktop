@@ -1,76 +1,87 @@
 # MainSequence for Claude Desktop Code
 
-MainSequence adds a native pane to **Claude Desktop → Code**, with connection,
-repositories, current-project actions, Claude accounts, MCP, activity and settings.
-Normal operations use buttons, selectors and confirmations. Operations execute
-directly through the bundled worker; they do not require a model turn.
+MainSequence provides a native pane in local Claude Desktop Code sessions. The
+approved layout has five visible sections with one active selection: **General,
+Projects, Current Project, MCP, Activity**. There is no Tools picker, Accounts page,
+rotation configuration or launcher strip above the chat. The MainSequence emblem
+comes from MainSequencePublic.
 
-This is a preview release. Live Desktop account acceptance remains outstanding.
-The public distribution is [mainsequence-claude-desktop](https://github.com/mainsequence-sdk/mainsequence-claude-desktop).
-This repository owns the Claude source and distribution; reusable operations come
-from the versioned public devtools package.
-The supported initial target is local macOS sessions. Desktop owns the Code engine;
-the version of a separately installed command-line client does not establish GUI
-compatibility. See [verification](claude-desktop-verification.md) for the exact
-checks performed and the live acceptance checks still outstanding.
+## Installation and opening
 
-## Installation and prerequisites
-
-- Claude Desktop with function-hook mods and streaming process support. The native
-  validator used during development is Desktop's bundled Code 2.1.295. Basic mod
-  rendering is documented from 2.1.286, but that is not a claim that all MainSequence
-  APIs have been tested on every intervening version.
-- Node 22 or later, available to Desktop. Set an absolute Node executable in the
-  plugin configuration or MainSequence Settings if Desktop's PATH does not find it.
-- Git and SSH for repository operations; `uv` for Python environments; npm for
-  frontend projects; Docker/buildx for image builds. These prerequisites are not
-  installed silently.
+Use Claude Desktop with function-hook plugins and streaming process support, plus
+Node 22+. The bundled Code engine tested during development is 2.1.295; the version
+of a separately installed command-line client does not establish GUI compatibility.
+The startup guard rejects engines older than 2.1.286; this is not a claim that every
+intermediate build has been tested.
 
 In **Customize → Plugins → Add marketplace → Add from repository**, enter
-`https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git`, then install
-**MainSequence** from `mainsequence-desktop`. The marketplace fetches a compiled,
-versioned ZIP and verifies its SHA-256. No source checkout or local build is needed.
-Enable the plugin for local Code sessions and reload or start a session. The
-**MainSequence** button appears above the prompt when the mod is loaded.
+`https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git` and install
+MainSequence from `mainsequence-desktop`. The catalog supplies a versioned ZIP with
+a pinned SHA-256. A local build remains unpublished until the release workflow runs.
+You can also upload a built ZIP using **Add plugin → Upload plugin**.
 
-Alternatively, download the ZIP and checksum from the public release and use
-**Customize → Plugins → Add plugin → Upload plugin**. Uploading an archive uses
-Claude's plugin service; include only the built plugin. See
-[distribution, updates and rollback](claude-desktop-distribution.md) for the complete
-procedure, release automation and developer builds.
+Enable the plugin in a local Code session and start a fresh session. It opens its
+native pane without requesting keyboard focus. `/ms` reopens the same pane if
+closed. Claude controls its final position and native button styling: the plugin
+does not patch the Desktop application or register an unsupported toolbar button.
+The approved browser preview defines grouping, navigation and content, not custom
+CSS injected into the Desktop application.
 
-The plugin also registers `/ms` as an optional shortcut for opening the same pane.
-It is not required for normal use. The source manifest in this repository is under
-`manifests/claude/.claude-plugin/plugin.json`; generated artifacts must not be edited.
+Git/SSH, uv for Python, npm for frontend projects and Docker/buildx for builds are
+required only for the corresponding operations. They are not installed silently.
+If Desktop cannot locate Node, configure its absolute path through the plugin's
+Node executable setting or **General → Advanced → Runtime & diagnostics →
+Executable overrides**.
 
-## MainSequence connection and projects
+## General: MainSequence login and settings
 
-1. In **Connection**, enter the backend and use **Sign in to MainSequence**. Complete
-   browser authorization. **Check connection**, **Renew login** and **Sign out** use
-   the existing shared machine-session service.
-2. In **Projects**, refresh the remote list, choose a repository and branch, and
-   select the local base folder. Setup reuses the canonical
-   `<base>/<organization>/projects/<name>-<uid>` layout and repository SSH identity.
-3. In **Current Project**, select a project folder and refresh status. Install or
-   synchronize dependencies, inspect the SDK, and run supported skills/instruction
-   actions. Mutations require a confirmation; available previews are separate.
-4. In **Activity**, inspect progress, results and partial-effect warnings, or cancel
-   an operation. Raw subprocess stderr is deliberately not copied into the UI.
+The pane reads the existing MainSequence session on startup without initiating a
+new sign-in. It reads the existing local repositories preference when available;
+a missing preference defaults to the user's `mainsequence` home folder. These
+startup reads do not overwrite configuration.
 
-Dependency synchronization refreshes dependency files and environments. It does not
-commit, tag or push. SDK update controls must respect the SDK status contract;
-the update and preview buttons require a fresh status reporting both supported and
-available. Python's current source-version comparison is not proof of a published
-update, so it does not enable an automatic Python SDK upgrade.
-MainSequence supports one saved identity per backend under the existing credential
-schema. Claude subscription profiles do not change that schema.
+Use **Sign in with browser** for MainSequence authorization. A signed-in card shows
+the account and connection state. **Check connection** verifies it; **Manage
+account** expands **Renew session** and the confirmed **Sign out** action. These use
+the existing shared machine-session service and concern MainSequence only.
 
-**Renew login** refreshes the saved MainSequence session. In **Current Project**,
-**Clean legacy environment credentials** separately migrates the selected project's
-environment file to endpoint-only authentication. Setup also writes the backend
-endpoint without copying access tokens into the project. Other environment values
-are preserved; a tracked environment file is refused. These are explicit actions,
-so signing in does not silently migrate every local project.
+Workspace settings contain the backend URL and code repositories folder. Settings
+are saved explicitly to the plugin store; unknown/legacy fields are preserved.
+Runtime diagnostics and the Node executable override are collapsed under Advanced.
+Technical JSON is hidden until requested.
+
+## Projects and Current Project
+
+Opening Projects loads the existing repository list through shared devtools APIs.
+Choose a repository and branch, then **Set up locally** or **Set up & install**.
+A single available branch is selected automatically. Setup uses the canonical
+`<base>/<organization>/projects/<name>-<uid>` layout and repository SSH identity.
+Existing local copies lead to **Manage project** instead of another clone.
+
+Current Project contains project status, dependency/SDK operations, instructions,
+skills and workspace tools. Selecting a folder changes the operation target, not
+Claude's session working directory. Mutations have explicit confirmations; supported
+previews remain separate. Stale results are discarded after context changes.
+
+MainSequence supports the existing one-saved-identity-per-backend credential model.
+Setup writes the endpoint without copying access tokens into the project. **Clean
+legacy environment credentials** is an explicit project action; signing in does
+not silently migrate other projects or rewrite their provider settings.
+
+## MCP and Activity
+
+MCP retains project discovery, exact-release connections, tool inspection, and
+confirmed tool calls. Registration makes connected tools available to subsequent
+Claude prompts. Removed connections are refused by the call handler.
+
+Activity shows actual operations from the session, their running/completed/failed/
+cancelled status, progress text, outcome and partial-effect warnings. Result details
+are collapsed. Cancellation stops the worker stream; it does not promise rollback.
+When there are no operations, the empty state links to Projects and MCP.
+
+The browser preview used illustrative operations and setup steps. Production uses
+real worker progress messages: no fabricated percentages, step counts or sample
+history. Raw subprocess stderr stays private.
 
 ## Feature coverage and host adaptations
 
@@ -97,125 +108,36 @@ The signed-terminal, session-navigation and container-launch limitations are exp
 host gaps, not completed parity claims. Every action remains accounted for in this
 table. Dormant legacy extension panels/scripts are not treated as active features.
 
-## Claude accounts
+## Claude accounts and provider preservation
 
-Account management adapts the MIT-licensed [Claude account rotator](https://github.com/ivokund/claude-account-rotator)
-at revision `60d5aed19856d548611472ca85c8836bfaa4bcd3`. Its credential-slot technique is
-combined with a Desktop-specific OAuth environment projection. Attribution ships
-under `third_party/claude-account-rotator` inside the artifact.
+Claude account switching is removed in 0.4.0. The plugin has no account list,
+sign-in/rotation controls, usage thresholds, token projection, quota polling,
+credential refresh/recovery loop or prompt/model-dispatch hooks. The worker rejects
+the former `accounts` domain. Claude's own account and provider controls manage
+model authentication.
 
-Use **Accounts** to add profiles and complete browser sign-in. **Sign in all accounts
-needing login** processes them one at a time; **Cancel sign-in** or Activity can stop
-the current sign-in. Cards show identity, organization, plan, expiry, usage/reset
-times and active-session counts when those values are available. Display settings
-control five-hour/weekly meters, percentages and the active-account marker.
+The plugin does not read, modify, migrate or delete Claude Keychain entries,
+credential files, saved profiles, provider configuration or OAuth environment
+variables. Earlier MainSequence account metadata under
+`~/.config/mainsequence/claude-accounts/` is left intact and unused. The obsolete
+Claude executable setting is ignored; unrelated existing settings are retained.
+No backend endpoints, schema or configuration are changed by this release.
 
-Profiles are independent of MainSequence login and external provider configuration.
-The stored default Claude profile is a native credential slot; it is not evidence
-that Desktop's current app login uses that identity. New sign-ins use Desktop's
-installed Code executable where it can be discovered; an explicit executable may
-be configured when needed. Duplicate saved identities are rejected for selection.
+## Upgrade, removal and troubleshooting
 
-Choose a profile and confirm **Use for this session**, or explicitly **Rotate now**,
-before enabling automatic rotation. A session using Desktop-managed sign-in stays
-under Desktop's control even when automatic mode is saved in account preferences.
-**Use Desktop sign-in again** restores the session's captured engine settings and
-releases its stored-account reservation.
+Update through the plugin manager or install the built archive. Fully close old
+Code sessions and start fresh sessions after upgrading from 0.3.x. An already
+running old plugin process retains its old hooks until it exits. This release does
+not try to rewrite authentication inside that process or delete stored profiles.
+Disabling/uninstalling the plugin does not revoke MainSequence credentials or
+remove projects. Use MainSequence's confirmed Sign out action only when desired.
 
-Automatic rotation is opt-in. The initial thresholds are 90% of five-hour usage and
-95% of weekly usage. Settings control these thresholds, the eligible accounts and
-whether rotation stays within the same organization (the default). Eligible targets
-need fresh usage and an identified, unexpired login. Unknown usage is not treated
-as unused capacity; an explicitly absent weekly limit is distinguished from a
-missing or malformed weekly reading. Credential changes invalidate cached identity
-and quota information before selecting that profile.
+If the pane is missing, verify a local Code session with the plugin enabled, then
+use `/ms`. For worker failures, open **General → Advanced → Runtime & diagnostics**.
+For operation failures, inspect Activity before retrying; cancellation can leave
+partial filesystem effects. Backend changes clear stale connection/repository
+results so another backend's state is not displayed as current.
 
-Automatic refresh and recovery wait until the main turn and any observed background
-subagent turns complete. Manual account changes are refused during an active turn. An unresolved credential transition
-blocks model dispatch until it is resolved, including an action already in flight
-when a turn starts.
-
-**Refresh accounts** reloads saved metadata. **Check logins and usage** checks native
-sign-ins and refreshes usage, reusing a valid reading for up to ten minutes. Automatic
-mode also checks when Desktop reports a rate-limit measurement change. The minute
-heartbeat maintains session reservations; it does not continuously poll quota.
-
-For an explicitly selected profile in automatic mode, a main-session
-`rate_limit` or `authentication_failed` stop can prepare another eligible profile.
-Recovery is limited to two switches within five minutes. It never resubmits a prompt
-or replays tools: review Accounts and Activity, then decide whether to submit again.
-If a selected credential cannot be read or has expired before submission, the mod
-blocks that prompt instead of falling back to a different identity.
-
-**Selection is not proof of request identity.** Desktop injects and refreshes its own
-OAuth token. The mod projects the chosen token and credential slot into the current
-engine, and labels the result as `projected-unverified`. It does not claim the whole
-Desktop application's account changed or use similar usage percentages as identity
-proof. Live request ownership, host refresh, restart and multi-account acceptance
-must be verified as described in the verification document before calling switching
-production-verified. Expired stored credentials require re-authentication; the mod
-does not invent an undocumented OAuth refresh endpoint.
-
-Account lists are updated atomically under a cross-process lock. Selections carry
-generations and session usage records so stale completions cannot replace a newer
-selection. Account transitions within a session are serialized, and failed
-projection restores its previous selection. Removal/re-authentication must respect
-other sessions' use of a profile.
-
-Reservations do not expire automatically: a paused or sleeping Desktop can still
-be using its selected account. Normal session end or **Use Desktop sign-in again**
-releases the reservation. After a crash, **Accounts** can show an old reservation
-with **Release reservation for closed session**. Use it only after confirming that
-the named session is closed; an old heartbeat alone does not prove that. A new
-session starts with Desktop-managed sign-in until you explicitly select a profile.
-
-## Storage, credentials and preservation
-
-- MainSequence credentials remain in the existing native machine store.
-- Claude tokens remain in Claude's native credential mechanism: macOS Keychain or
-  profile credential files where supported. The worker returns references, never
-  token values. Projection reads credentials privately inside the hook callback.
-- Claude profile/usage/preferences metadata lives in
-  `~/.config/mainsequence/claude-accounts/`. This is distinct from upstream rotator
-  storage; existing upstream profiles are not automatically imported or deleted.
-- Mod UI preferences use the plugin store. Raw tokens are excluded from UI results,
-  public worker messages, diagnostics and persistent plugin state.
-- Installation does not rewrite OpenCode, VS Code, external-provider or MainSequence
-  backend configurations. Project writes happen only through selected actions.
-
-## Updating, removing and troubleshooting
-
-Update the plugin through Desktop's manager and reload its Code
-session. The generated worker protocol and plugin version are packaged together.
-Uninstall/disable through the same manager. Uninstalling the plugin does not revoke
-MainSequence credentials, erase projects, or purge Claude account profiles. Restore
-Desktop sign-in and release account selections in open sessions before removing
-profiles. Profile removal is a separate explicit action.
-
-If the button is missing, check that this is a local **Code** session, mods are allowed,
-and the plugin is enabled. If a worker cannot start, check the Node executable and
-artifact completeness in **Settings → Run diagnostics**. If a project operation
-stops, inspect Activity's partial-effect warning before retrying. A busy account or
-repository must be released by its owning operation. For an account reservation
-left by a confirmed closed session, use the release control described above; do not
-blindly remove lock files or account metadata.
-
-## Developer verification
-
-```sh
-npm run typecheck
-npm test
-npm run verify:docs
-npm run pack:claude
-npm run verify:claude:distribution
-# Optional native validation with Desktop's actual bundled executable:
-MS_CLAUDE_DESKTOP_BINARY=/absolute/path/to/Desktop/bundled/claude npm run verify:claude
-```
-
-The final command validates this artifact with the native plugin loader and runs its
-native simulator tests when packaged. Those tests mount native UI elements with
-mocked processes and credentials; they do not establish actual Desktop window
-rendering or live request ownership. Automated tests use fixtures and temporary
-stores, never the user's production logins. See
-[architecture](adr/0004-claude-desktop-mod.md) and
-[verification/acceptance](claude-desktop-verification.md).
+See [verification](claude-desktop-verification.md),
+[distribution](claude-desktop-distribution.md) and
+[architecture](adr/0004-claude-desktop-mod.md).
