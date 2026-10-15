@@ -225,3 +225,37 @@ MainSequencePublic emblem. The approved mockup's exact button styling is therefo
 not claimed. This uses the supported footer hook without patching the app or
 inserting a strip above the chat. The launcher is visible in the tested active
 local Code session, not on the new-session landing page before an engine starts.
+
+
+### Published 0.4.3 and installed Desktop verification
+
+The [0.4.3 release](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.3)
+was published on 2026-10-15 by the
+[release workflow](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/actions/runs/38747460679)
+from source `49f7750ddc8017f29a4c147861de37e9138368bc`. The public marketplace
+catalog pins archive SHA-256:
+`2e244300adbcae93f56919d26a340b5b09de6d9444ef1bd71a0519ab968211a0`.
+The exact shared dependency remains devtools 0.2.4.
+
+Anonymous download verified the catalog, archive and checksum asset. A disposable
+marketplace installation passed native validation, all five native simulator tests
+and the standalone worker check. Linux and macOS CI passed the 37-test release
+check. The normal user-scope updater then upgraded the existing enabled plugin
+from 0.4.2 to 0.4.3. Its installed hook matched the release source, its dependency
+matched the lockfile, and all other installed plugin records were unchanged.
+
+All eight protected configuration/account/store fingerprints were byte-identical
+immediately before and after the marketplace update. Across the longer live test,
+Claude updated its own feature/cache timestamps, runtime process metadata, pane
+opening history and the test session's layout/selection state. Existing account,
+provider, MainSequence and saved plugin setting values were unchanged. No backend
+changes, sign-in/out, credential migration or account-switching actions were made.
+
+After the update, `/reload-plugins` was run only in the dedicated empty test session.
+The native MainSequence **Run diagnostics** action reported **Plugin 0.4.3** and
+**Plugin files Ready**, verifying the published worker was active. The button
+opened the pane, remained visible after closing it, reopened the same pane, and
+remained visible after a second close. The pane was left closed and the test prompt
+empty. The existing unrelated Code sessions were not stopped or reloaded. Runtime
+diagnostics is a local read-only operation; no live backend operation was invoked
+for this final check.
