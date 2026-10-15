@@ -6,7 +6,11 @@ session renewal, connection checks and workspace settings. The pane uses the
 MainSequence emblem and one coordinated section selection; it adds no strip above
 the prompt.
 
-Version **0.4.0** removes Claude account switching, rotation, quota controls,
+Version **0.4.1** adds editable workspace defaults and an organization-environment
+selector that scopes MCP discovery and tool use. Saved settings take precedence,
+and defaults work without saving.
+
+Version **0.4.0** removed Claude account switching, rotation, quota controls,
 credential overrides and account workers. Claude manages its own accounts and model
 providers. Existing credentials, saved profiles and provider configuration are
 retained; this release has no account migration or deletion routine.

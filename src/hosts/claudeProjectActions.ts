@@ -1,8 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { ActionResult, HostServices, ToolingError, createProjectOperations,
-  PROJECT_OPERATION_ACTIONS, ProjectOperationRequest, RepositoryClient, createSessionService, requireBackend, safeSlug } from '@dev-mainsequence/devtools';
+  PROJECT_OPERATION_ACTIONS, ProjectOperationRequest, RepositoryClient, createSessionService, requireBackend, safeSlug, readWorkspacePreferences } from '@dev-mainsequence/devtools';
 import { claudeFailure } from './claudeProtocol';
 
 export type ClaudeProjectRequest = ProjectOperationRequest
@@ -45,16 +44,7 @@ export function createClaudeProjectActions(options: ClaudeProjectOptions) {
       options.signal?.throwIfAborted();
       let data: unknown;
       if (request.action === 'workspace-preferences') {
-        // Read the existing VS Code/CLI preference for this host. Do not rewrite
-        // that file, and never import token.json or credential fields.
-        const env = options.env || process.env;
-        const directory = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'MainSequenceCLI')
-          : process.platform === 'win32' ? path.join(env.APPDATA || os.homedir(), 'MainSequenceCLI') : path.join(os.homedir(), '.config', 'mainsequence');
-        const configPath = options.configPath || path.join(directory, 'config.json');
-        const config = await fs.readFile(configPath, 'utf8').then(text => JSON.parse(text)).catch(() => ({}));
-        const folder = config?.mainsequence_path;
-        data = { baseDir: typeof folder === 'string' && path.isAbsolute(folder) && !/[\0\r\n]/.test(folder)
-          ? folder : path.join(os.homedir(), 'mainsequence') };
+        data = await readWorkspacePreferences({ env: options.env, configPath: options.configPath });
       } else if (request.action === 'workspace-profile') {
         const session = createSessionService(options.host, { env: options.env, signal: options.signal });
         const profile = await new RepositoryClient(session, requireBackend(request.backend)).getCurrentUserProfile();

@@ -45,8 +45,15 @@ the account and connection state. **Check connection** verifies it; **Manage
 account** expands **Renew session** and the confirmed **Sign out** action. These use
 the existing shared machine-session service and concern MainSequence only.
 
-Workspace settings contain the backend URL and code repositories folder. Settings
-are saved explicitly to the plugin store; unknown/legacy fields are preserved.
+Workspace settings show actual editable values, not example placeholders. Saved
+plugin values take precedence. Otherwise, shared devtools resolves the backend from
+`MAINSEQUENCE_ENDPOINT`, then the existing MainSequence configuration, then
+`https://api.main-sequence.app`. The repositories folder uses the existing absolute
+`mainsequence_path`, otherwise `<home>/mainsequence` displayed as a full path.
+Defaults are usable without saving and do not depend on successful authentication.
+Startup resolution never overwrites a user's in-progress edits. Edits apply for the
+current session; **Save settings** retains them for future sessions. Unknown/legacy
+fields remain intact. Startup never writes the shared configuration.
 Runtime diagnostics and the Node executable override are collapsed under Advanced.
 Technical JSON is hidden until requested.
 
@@ -70,9 +77,25 @@ not silently migrate other projects or rewrite their provider settings.
 
 ## MCP and Activity
 
-MCP retains project discovery, exact-release connections, tool inspection, and
-confirmed tool calls. Registration makes connected tools available to subsequent
-Claude prompts. Removed connections are refused by the call handler.
+Choose an **Organization environment** in MCP. The choices come from the existing
+MainSequence organization-environments endpoint. No environment is selected
+implicitly, including Production. The choice is remembered per backend in the
+plugin store, independently of General's Save button, and is validated when a new
+session restores it. Changing it scopes discovery, connected MCPs, tool inspection,
+and Claude tool calls to that environment. Labels and tool confirmations show the
+environment name. Other environments' connections stay saved.
+
+The shared devtools API validates the current release environment before exchanging
+credentials or calling an MCP. Switching environments clears pending confirmations,
+cancels outstanding MCP workers, and immediately denies stale registered tools. An
+operation already sent remotely may have completed before cancellation; inspect
+Activity rather than assuming rollback. This restricts this plugin's MCP actions;
+it does not change permissions or configuration of unrelated clients.
+
+Desktop's mod API has no tool-unregister operation: old tool names can remain in an
+existing session's advertised catalog, but are refused by the handler. A fresh Code
+session starts with only the saved, validated environment's tools. New registrations
+are available from the next prompt. Exact release identities remain pinned.
 
 Activity shows actual operations from the session, their running/completed/failed/
 cancelled status, progress text, outcome and partial-effect warnings. Result details

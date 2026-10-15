@@ -19,7 +19,7 @@ async function execute($, state, domain, quiet = false) {
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
   if (state.running.size >= 8) return fail(action, 'Wait for a running operation to finish.', 'PROJECT_BUSY');
   const id = `${state.sessionId}-${++state.sequence}`;
-  const op = { id, title: operationTitle(action), context: domain.scope === 'devtools' && !sessionActions.has(action) ? domain.request.root || 'MainSequence' : 'MainSequence', label: `${domain.scope} · ${action}`, status: 'running', progress: 'Starting…', cancelled: false };
+  const op = { id, title: operationTitle(action), context: domain.request.environmentUid ? `Environment: ${environmentLabel(state)}` : domain.scope === 'devtools' && !sessionActions.has(action) ? domain.request.root || 'MainSequence' : 'MainSequence', label: `${domain.scope} · ${action}`, status: 'running', progress: 'Starting…', cancelled: false };
   state.running.set(id, op);
   if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); update($); }
   const envelope = { protocolVersion: 1, id, request: domain };
@@ -40,6 +40,10 @@ function devRequest(state, action, extra = {}) {
     branch: f.branch, baseDir: f.baseDir, ...extra });
   if (action.startsWith('mcp-')) {
     const values = { ...(f.backend.trim() ? { backend: f.backend.trim() } : {}) };
+    if (action !== 'mcp-environments') {
+      if (!f.mcpEnvironment) throw new Error('Choose an organization environment in MCP first.');
+      values.environmentUid = f.mcpEnvironment;
+    }
     if (['mcp-add', 'mcp-remove', 'mcp-tools', 'mcp-call'].includes(action)) values.releaseUid = state.selectedMcp;
     if (action === 'mcp-discover') Object.assign(values, { search: f.mcpSearch, limit: 25, offset: 0 });
     if (action === 'mcp-call') {
@@ -55,8 +59,9 @@ function devRequest(state, action, extra = {}) {
 async function runDev($, state, action, extra = {}) {
   const revision = state.contextRevision;
   let domain;
+  if (state.preferencesLoading) { $.ui.toast('Workspace settings are loading.'); return; }
   try { domain = devRequest(state, action, extra); }
-  catch { $.ui.toast('Enter valid JSON object arguments before calling the tool.'); return; }
+  catch { $.ui.toast(action.startsWith('mcp-') && !state.fields.mcpEnvironment ? 'Choose an organization environment in MCP first.' : 'Enter valid JSON object arguments before calling the tool.'); return; }
   if (action === 'mcp-discover') state.mcpOffset = domain.request.offset;
   const result = await execute($, state, domain);
   if (state.closed || revision !== state.contextRevision) return result;
@@ -67,7 +72,7 @@ async function runDev($, state, action, extra = {}) {
     if (action === 'update-sdk' || action === 'install') await execute($, state, devRequest(state, 'sdk-status'), true);
   }
   if (result.status === 'success' && action === 'logout') {
-    state.mcpTools = {}; state.selectedMcp = ''; state.selectedLocal = ''; state.fields.repositoryUid = ''; state.fields.branch = '';
+    clearMcp($, state); state.fields.mcpEnvironment = ''; delete state.results['devtools.mcp-environments']; state.selectedLocal = ''; state.fields.repositoryUid = ''; state.fields.branch = '';
     for (const key of ['devtools.repositories', 'projects.local-repositories', 'devtools.mcp-list', 'devtools.mcp-discover', 'devtools.mcp-tools']) delete state.results[key];
   }
   if (result.status === 'success' && action === 'setup') await runProject($, state, 'local-repositories');
@@ -88,7 +93,7 @@ async function runProject($, state, action, extra = {}) {
   const data = record(result.data);
   if (action === 'workspace-profile' && typeof data.organization === 'string') state.fields.organization = data.organization;
   if (action === 'pick-folder' && typeof data.path === 'string' && ['root', 'baseDir'].includes(destination)) {
-    state.fields[destination] = data.path;
+    state.editedSettings.add(destination); state.fields[destination] = data.path;
     if (destination === 'baseDir') { state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
     if (destination === 'root') { state.contextRevision++; state.confirmation = null; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
   }
@@ -103,8 +108,8 @@ async function runProject($, state, action, extra = {}) {
   return result;
 }
 
-function toolName(release, name) {
-  const value = `${release}:${name}`;
+function toolName(backend, environment, release, name) {
+  const value = `${backend}:${environment}:${release}:${name}`;
   let hash = 2166136261;
   for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619) >>> 0;
   return `ms_${String(name).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 42)}_${hash.toString(16)}`;
@@ -112,22 +117,27 @@ function toolName(release, name) {
 
 async function refreshTools($, state) {
   const revision = state.contextRevision;
+  state.mcpTools = {};
+  if (!state.fields.mcpEnvironment || state.preferencesLoading) return;
+  const environmentUid = state.fields.mcpEnvironment;
   const listed = await execute($, state, devRequest(state, 'mcp-list'), true);
   if (state.closed || revision !== state.contextRevision) return;
   if (listed.status !== 'success') { state.results['mcp.registration'] = publicValue(listed); update($); return; }
   const next = {};
   const unavailable = [];
   for (const connection of rows(listed.data)) {
+    if (connection.mcp_connection?.organization_environment_uid !== environmentUid) continue;
     const releaseUid = connection.resource_release_uid;
     const backend = connection.backend;
-    const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, releaseUid }), true);
+    const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, environmentUid, releaseUid }), true);
     if (state.closed || revision !== state.contextRevision) return;
     if (answer.status !== 'success') { unavailable.push(clean(connection.name)); continue; }
     for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
-      const name = toolName(releaseUid, tool.name);
+      const name = toolName(backend, environmentUid, releaseUid, tool.name);
       const full = `mcp__${$.plugin.name}__${name}`;
-      next[full] = { backend, releaseUid, tool: tool.name };
-      await $.tool.register({ name, description: clean(`MainSequence ${connection.name}: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
+      next[full] = { backend, environmentUid, releaseUid, tool: tool.name };
+      await $.tool.register({ name, description: clean(`MainSequence ${connection.name} [${environmentLabel(state)}]: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
+      if (state.closed || revision !== state.contextRevision) return;
     }
   }
   // Removed servers' previously registered names are refused by the handler below.
@@ -138,6 +148,42 @@ async function refreshTools($, state) {
   update($);
 }
 
+function environmentLabel(state) {
+  return rows(state.results['devtools.mcp-environments']?.data).find(row => row.uid === state.fields.mcpEnvironment)?.name || state.fields.mcpEnvironment;
+}
+function clearMcp($, state) {
+  state.contextRevision++; state.mcpTools = {}; state.selectedMcp = ''; state.confirmation = null;
+  state.fields.mcpTool = ''; state.mcpOffset = 0;
+  for (const key of ['devtools.mcp-discover', 'devtools.mcp-list', 'devtools.mcp-tools', 'devtools.mcp-call', 'mcp.registration']) delete state.results[key];
+  for (const op of state.running.values()) if (op.label.startsWith('devtools · mcp-') && op.cancel) void op.cancel().catch(() => {});
+  update($);
+}
+async function selectEnvironment($, state, uid, persist = true) {
+  if (uid && !rows(state.results['devtools.mcp-environments']?.data).some(row => row.uid === uid)) return;
+  clearMcp($, state); state.fields.mcpEnvironment = uid;
+  const revision = state.contextRevision, backend = state.fields.backend;
+  state.environmentSelections[backend] = uid;
+  if (persist) {
+    const previous = record(await $.store.get('mcp-environments'));
+    if (revision === state.contextRevision && !state.closed) await $.store.set('mcp-environments', { ...previous, [backend]: uid });
+  }
+  if (!uid || revision !== state.contextRevision || state.closed) return;
+  await refreshTools($, state);
+  if (revision === state.contextRevision) await runDev($, state, 'mcp-discover');
+}
+async function loadEnvironments($, state) {
+  if (state.environmentsLoading || state.preferencesLoading) return;
+  state.environmentsLoading = true; const revision = state.contextRevision; update($);
+  try {
+    const result = await execute($, state, request('devtools', 'mcp-environments', { backend: state.fields.backend }), true);
+    if (revision !== state.contextRevision || state.closed) return;
+    if (result.status !== 'success') { clearMcp($, state); state.fields.mcpEnvironment = ''; return; }
+    const selected = state.fields.mcpEnvironment || state.environmentSelections[state.fields.backend];
+    const uid = rows(result.data).some(row => row.uid === selected) ? selected : '';
+    await selectEnvironment($, state, uid, false);
+  } finally { state.environmentsLoading = false; update($); }
+}
+
 function actionsFor($, state) {
   const background = work => { void Promise.resolve(work).catch(() => $.ui.toast('The action could not complete. Check Activity and diagnostics.')); };
   return {
@@ -145,9 +191,12 @@ function actionsFor($, state) {
     tab: tab => {
       if (!TABS.includes(tab)) return;
       state.tab = tab; state.confirmation = null; update($);
+      if (tab === 'MCP' && !state.results['devtools.mcp-environments']) background(loadEnvironments($, state));
       if (tab === 'Projects' && !state.results['devtools.repositories']) background(loadProjects($, state));
       if (tab === 'Current Project' && !state.results['devtools.status']) background(runDev($, state, 'status'));
     },
+    refreshEnvironments: () => background(loadEnvironments($, state)),
+    selectEnvironment: uid => background(selectEnvironment($, state, uid)),
     toggle: key => { state.expanded[key] = !state.expanded[key]; update($); },
     refreshProjects: () => background(loadProjects($, state)),
     chooseRepository: uid => {
@@ -158,9 +207,11 @@ function actionsFor($, state) {
     },
     field: (key, value) => {
       if (Object.hasOwn(state.fields, key)) {
+        state.editedSettings.add(key);
         state.fields[key] = String(value);
         if (key === 'repositoryUid') state.fields.branch = '';
         if (key === 'backend') {
+          clearMcp($, state); state.fields.mcpEnvironment = '';
           state.contextRevision++;
           state.fields.repositoryUid = ''; state.fields.branch = ''; state.fields.organization = ''; state.selectedLocal = '';
           for (const resultKey of Object.keys(state.results)) delete state.results[resultKey];
@@ -202,29 +253,36 @@ async function boot($, state, e) {
   // The loader validates every named API. Reading an API method as a value is forbidden.
   state.ready = meetsVersion(state.version, [2, 1, 286]);
   state.problem = state.ready ? '' : 'Update Claude Desktop: this mod needs bundled Claude Code 2.1.286+ and streaming process support.';
+  const home = await $.env.get('HOME') || await $.env.get('USERPROFILE');
+  if (typeof home === 'string' && home.trim()) state.fields.baseDir = `${home.replace(/[\\/]+$/, '')}${home.includes('\\') ? '\\' : '/'}mainsequence`;
   const saved = record(await $.store.get('settings'));
-  for (const key of ['backend', 'baseDir', 'organization', 'nodePath']) if (typeof saved[key] === 'string') state.fields[key] = saved[key];
+  state.savedSettings = saved;
+  state.environmentSelections = record(await $.store.get('mcp-environments'));
+  for (const key of ['backend', 'baseDir', 'organization', 'nodePath']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
   await $.command.register({ name: 'ms', description: 'Open MainSequence developer tools', immediate: true });
   if (e.surface === 'desktop') {
+    state.preferencesLoading = true;
     // Register the native pane without stealing focus or adding a composer band.
     await $.ui.open({ id: PANE, title: 'MainSequence' });
-    state.timers.push($.clock.after(0, () => { void initializeWorkspace($, state).catch(() => { state.initializing = false; update($); }); }));
+    state.timers.push($.clock.after(0, () => { void initializeWorkspace($, state).catch(() => { state.initializing = false; state.preferencesLoading = false; update($); }); }));
   }
   update($);
 }
 
 async function initializeWorkspace($, state) {
-  if (!state.ready || state.closed) return;
+  if (!state.ready || state.closed) { state.preferencesLoading = false; return; }
   state.initializing = true; update($);
-  const revision = state.contextRevision;
   try {
     const preferences = await execute($, state, request('projects', 'workspace-preferences'), true);
-    if (state.closed || revision !== state.contextRevision) return;
-    if (!state.fields.baseDir && typeof preferences.data?.baseDir === 'string') state.fields.baseDir = preferences.data.baseDir;
-    const session = await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
-    if (state.closed || revision !== state.contextRevision) return;
-    if (!state.fields.backend && typeof session.data?.backend === 'string') state.fields.backend = session.data.backend;
-  } finally { state.initializing = false; update($); }
+    if (state.closed) return;
+    for (const key of ['backend', 'baseDir']) {
+      if (!state.editedSettings.has(key) && !String(state.savedSettings[key] || '').trim()
+        && typeof preferences.data?.[key] === 'string' && preferences.data[key].trim()) state.fields[key] = preferences.data[key];
+    }
+    state.preferencesLoading = false; update($);
+    await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
+    if (state.tab === 'MCP' || state.environmentSelections[state.fields.backend]) await loadEnvironments($, state);
+  } finally { state.initializing = false; state.preferencesLoading = false; update($); }
 }
 
 async function loadProjects($, state) {
@@ -250,9 +308,11 @@ export function register(on, options = {}) {
   });
   on('tool.call', { tool: /^mcp__mainsequence__/ }, async ($, e) => {
     const entry = state.mcpTools[e.tool];
-    if (!entry) return { deny: 'This MainSequence MCP tool is no longer connected. Refresh MainSequence tools.' };
-    const answer = await $.ui.ask(`Run MainSequence tool ${entry.tool}?`, ['Run tool', 'Cancel']);
+    if (!entry || entry.environmentUid !== state.fields.mcpEnvironment) return { deny: 'This MainSequence MCP tool is no longer connected. Refresh MainSequence tools.' };
+    const revision = state.contextRevision;
+    const answer = await $.ui.ask(`Run MainSequence tool ${entry.tool} in ${environmentLabel(state)}?`, ['Run tool', 'Cancel']);
     if (answer !== 'Run tool') return { deny: 'The user cancelled this MainSequence action.' };
+    if (state.closed || revision !== state.contextRevision || state.mcpTools[e.tool] !== entry) return { deny: 'The selected environment changed. Review the tool in the current environment.' };
     const { tool, tool_use_id, agentId, ...arguments_ } = e;
     const result = await execute($, state, request('devtools', 'mcp-call', { ...entry, arguments: arguments_ }));
     return { result: publicValue(result), ...(result.status !== 'success' ? { isError: true } : {}) };

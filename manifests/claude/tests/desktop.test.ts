@@ -3,7 +3,7 @@ import { test, expect, mock } from 'claude-code/testing';
 test('Desktop pane renders native controls and dispatches a confirmed structured action', async ($, on) => {
   const clock = mock.clock(on, { now: 1000 });
   mock.store(on);
-  mock.env(on, {});
+  mock.env(on, {HOME:'/fixture/user'});
   const requests = [];
   on('session.cwd', () => ({ value: '/fixture/project' }));
   on('session.id', () => ({ value: 'desktop-test-session' }));
@@ -15,13 +15,15 @@ test('Desktop pane renders native controls and dispatches a confirmed structured
     const envelope = JSON.parse(e.input);
     requests.push(envelope.request);
     yield { stream: 'stdout', text: JSON.stringify({ type: 'result', id: envelope.id,
-      result: { schemaVersion: 1, action: envelope.request.request.action, status: 'success', summary: 'Fixture operation completed', data: envelope.request.request.action === 'auth-status' ? { backend: 'https://fixture.example', authenticated: true, username: 'fixture@example.test' } : {} } }) + '\n' };
+      result: { schemaVersion: 1, action: envelope.request.request.action, status: 'success', summary: 'Fixture operation completed', data: envelope.request.request.action === 'workspace-preferences' ? {backend:'https://fixture.example',baseDir:'/fixture/user/mainsequence'} : envelope.request.request.action === 'auth-status' ? { backend: 'https://fixture.example', authenticated: true, username: 'fixture@example.test' } : {} } }) + '\n' };
     return { value: { code: 0, signal: null } };
   });
   await $.session.start({ cwd: '/fixture/project', surface: 'desktop', isInteractive: true });
   const ui = await $.ui.mount({ plugin: 'mainsequence', surface: 'desktop', component: 'Pane', requestId: 'mainsequence', props: {} });
+  await clock.settle();
   expect(await ui.find({ key: 'tab-General' })).toBeDefined();
   await ui.input({ key: 'field-backend', text: 'https://fixture.example' });
+  await clock.settle();
   await ui.press({ key: 'auth-status' });
   await clock.settle();
   expect(requests).toContainEqual({ scope: 'devtools', request: { action: 'auth-status', backend: 'https://fixture.example', check: true } });
@@ -40,7 +42,7 @@ test('Desktop pane renders native controls and dispatches a confirmed structured
 
 test('Desktop cancellation closes a waiting native process stream without waiting for its next chunk', async ($, on) => {
   const clock = mock.clock(on, { now: 1000 });
-  mock.store(on); mock.env(on, {});
+  mock.store(on); mock.env(on, {HOME:'/fixture/user'});
   let closed = false;
   on('session.cwd', () => ({ value: '/fixture/project' }));
   on('session.id', () => ({ value: 'cancel-test' }));
@@ -49,6 +51,7 @@ test('Desktop cancellation closes a waiting native process stream without waitin
   on('ui.open', () => ({ value: undefined }));
   on('command.register', () => ({ value: { command: 'ms' } }));
   on('process.spawn', async function* ($, e, next) {
+    if(JSON.parse(e.input).request.request.action==='workspace-preferences'){yield {stream:'stdout',text:JSON.stringify({type:'result',id:JSON.parse(e.input).id,result:{schemaVersion:1,status:'success',summary:'Defaults',data:{backend:'https://api.main-sequence.app',baseDir:'/fixture/user/mainsequence'}}})+'\n'};return {value:{code:0,signal:null}};}
     try {
       yield { stream: 'stdout', text: JSON.stringify({ type: 'progress', message: 'Fixture waiting' }) + '\n' };
       await new Promise(resolve => next.signal.addEventListener('abort', resolve, { once: true }));
@@ -57,6 +60,7 @@ test('Desktop cancellation closes a waiting native process stream without waitin
   });
   await $.session.start({ cwd: '/fixture/project', surface: 'desktop', isInteractive: true });
   const ui = await $.ui.mount({ plugin: 'mainsequence', surface: 'desktop', component: 'Pane', requestId: 'mainsequence', props: {} });
+  await clock.settle();
   await ui.press({ key: 'auth-status' });
   await clock.settle();
   await ui.press({ key: 'tab-Activity' });
@@ -74,7 +78,7 @@ test('MainSequence login uses shared auth while native Claude credentials remain
   const clock = mock.clock(on, { now: 1000 }); mock.store(on);
   let credentialAccesses = 0; let signedIn = false; const requests = [];
   on('env.set', () => { credentialAccesses++; return { value: undefined }; });
-  on('env.get', () => { credentialAccesses++; return { value: undefined }; });
+  on('env.get', ($, e) => { if(e.name==='HOME' || e.key==='HOME') return {value:'/fixture/user'}; if(e.name==='USERPROFILE'||e.key==='USERPROFILE')return {value:undefined}; credentialAccesses++; return { value: undefined }; });
   on('fs.read', () => { credentialAccesses++; return { value: '' }; });
   on('process.run', () => { credentialAccesses++; return { value: { exitCode: 1, stdout: '', stderr: '' } }; });
   on('session.cwd', () => ({ value: '/fixture/project' }));

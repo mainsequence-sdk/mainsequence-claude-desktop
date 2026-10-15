@@ -8,7 +8,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 const success = (action, data) => ({ schemaVersion: 1, action, status: 'success', summary: `${action} completed.`, data });
 
 function fixture(options = {}) {
-  const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries(options.env || {}));
+  const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
   const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
     if (type === 'Select') assert.ok(props.options.length);
@@ -23,7 +23,7 @@ function fixture(options = {}) {
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
     session: { cwd: async () => '/work/repo', id: async () => 'session-1', version: async () => ({ version: options.version || '2.1.295' }) },
-    store: { get: async () => options.saved, set: async (key, value) => { calls.push({ store: key, value }); } },
+    store: { get: async key => key === 'settings' ? options.saved : options.environments, set: async (key, value) => { calls.push({ store: key, value }); } },
     command: { register: async spec => { calls.push({ command: spec }); } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool' },
@@ -110,11 +110,12 @@ test('preview binds the exact container image and digest to the later write', as
 test('MCP tools refresh from exact releases, use flattened hook arguments, and confirm each call', async () => {
   const { register } = await load();
   const f = fixture({ respond: domain => {
-    if (domain.request.action === 'mcp-list') return success('mcp-list', [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example' }]);
+    if (domain.request.action === 'mcp-environments') return success('mcp-environments',[{uid:'env-1',name:'Research'}]);
+    if (domain.request.action === 'mcp-list') return success('mcp-list', [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example', mcp_connection:{organization_environment_uid:'env-1'} }]);
     if (domain.request.action === 'mcp-tools') return success('mcp-tools', { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] });
     return success(domain.request.action, {});
   } });
-  register(f.on); await f.emit('session.start'); await f.press('tab-MCP'); await f.press('mcp-register');
+  register(f.on); await f.emit('session.start'); await f.press('tab-MCP'); f.find(await f.pane(),'mcp-environment').props.onSelect('env-1'); await flush();
   assert.equal(f.tools.length, 1);
   const full = 'mcp__mainsequence__' + f.tools[0].name;
   await f.emit('tool.call', { tool: full, tool_use_id: 'call-1', query: 'hello' });
@@ -168,7 +169,7 @@ test('MainSequence login, renewal and logout remain available without touching C
     if (domain.request.action === 'logout') signedIn = false;
     return success(domain.request.action, domain.request.action === 'auth-status' ? { authenticated: signedIn, username: 'fixture@example.test' } : {});
   } });
-  f.$.env.get = f.$.env.set = f.$.fs.read = f.$.process.run = async () => assert.fail('Claude credential APIs must never be used');
+  f.$.env.set = f.$.fs.read = f.$.process.run = async () => assert.fail('Claude credential APIs must never be used');
   register(f.on); await f.emit('session.start');
   await f.press('login'); assert.match(JSON.stringify(await f.pane()), /fixture@example.test/);
   await f.press('toggle-connection-actions'); await f.press('refresh-token');
@@ -176,7 +177,7 @@ test('MainSequence login, renewal and logout remain available without touching C
   await f.press('save-settings'); const stored = f.calls.find(c => c.store).value;
   assert.deepEqual(stored.provider, saved.provider); assert.equal(stored.claudeExecutable, saved.claudeExecutable);
   for (const event of ['prompt.submit','turn.start','turn.step','turn.complete','session.measure','classic.StopFailure']) assert.equal(f.hooks.some(h => h.event === event), false, event);
-  await f.emit('session.end'); assert.deepEqual(Object.fromEntries(f.env), original);
+  await f.emit('session.end'); assert.deepEqual(Object.fromEntries(f.env), {HOME:'/fixture/home',...original});
   assert.ok(f.calls.filter(c => c.request).every(c => c.request.scope !== 'accounts'));
   assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'login').map(c => c.request.scope), ['devtools']);
 });
@@ -184,15 +185,15 @@ test('MainSequence login, renewal and logout remain available without touching C
 test('Activity has useful empty state navigation, real operation results and collapsed details', async () => {
   const { register } = await load(); const f=fixture(); register(f.on); await f.emit('session.start');
   await f.press('tab-Activity'); assert.match(JSON.stringify(await f.pane()), /No activity yet/);
-  await f.press('activity-mcp'); assert.ok(f.find(await f.pane(),'mcp-discover'));
+  await f.press('activity-mcp'); assert.ok(f.find(await f.pane(),'mcp-environments'));
   await f.press('tab-General'); await f.press('auth-status'); await f.press('tab-Activity');
   let tree=await f.pane(); assert.match(JSON.stringify(tree),/Check MainSequence connection/); assert.match(JSON.stringify(tree),/Completed/);
   assert.doesNotMatch(JSON.stringify(tree),/"type":"Code"/);
-  await f.press('toggle-activity-session-1-1'); assert.match(JSON.stringify(await f.pane()),/"type":"Code"/);
+  await f.press('toggle-activity-' + f.calls.find(c=>c.request?.request.action==='auth-status').id); assert.match(JSON.stringify(await f.pane()),/"type":"Code"/);
 });
 
 test('startup reads existing MainSequence session without saving or rotating credentials', async () => {
-  const {register}=await load(); const f=fixture({ respond: domain => success(domain.request.action, domain.request.action==='workspace-preferences' ? {baseDir:'/existing/repos'} : {backend:'https://saved.example',authenticated:true,username:'saved@example.test'}) });
+  const {register}=await load(); const f=fixture({ respond: domain => success(domain.request.action, domain.request.action==='workspace-preferences' ? {backend:'https://saved.example',baseDir:'/existing/repos'} : {backend:'https://saved.example',authenticated:true,username:'saved@example.test'}) });
   register(f.on); await f.emit('session.start',{surface:'desktop'});
   for(const timer of f.timers.filter(t=>t.ms===0))timer.callback(); await flush();
   const tree=await f.pane(); assert.match(JSON.stringify(tree),/saved@example.test/);
@@ -217,4 +218,95 @@ test('late repository results cannot restore a previous backend selection', asyn
   await f.press('tab-Projects');await f.press('tab-General');await f.field('backend','https://new.example');finish();await flush();
   f.$.process.spawn=originalSpawn;await f.press('tab-Projects');
   assert.doesNotMatch(JSON.stringify(await f.pane()),/Old backend repository/);
+});
+
+
+test('actual defaults are editable before initialization and usable without saving even when login fails',async()=>{
+ const {register}=await load();
+ const f=fixture({respond:domain=>domain.request.action==='workspace-preferences'?success('workspace-preferences',{backend:'https://api.main-sequence.app',baseDir:'/fixture/home/mainsequence'}):{schemaVersion:1,action:domain.request.action,status:'failure',summary:'No saved session'}});
+ register(f.on);await f.emit('session.start',{surface:'desktop'});
+ let tree=await f.pane();assert.equal(f.find(tree,'field-backend').props.value,'https://api.main-sequence.app');assert.equal(f.find(tree,'field-backend').props.placeholder,'');assert.equal(f.find(tree,'field-baseDir').props.value,'/fixture/home/mainsequence');
+ for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
+ await f.press('auth-status');assert.equal(f.calls.filter(c=>c.request).at(-1).request.request.backend,'https://api.main-sequence.app');
+ assert.equal(f.calls.some(c=>c.store),false);
+});
+test('saved and user-edited settings win over late defaults, with unknown saved fields retained',async()=>{
+ const {register}=await load();const saved={backend:'https://existing.example',baseDir:'/existing',provider:{name:'keep'}};
+ const f=fixture({saved,respond:d=>success(d.request.action,{backend:'https://discovered.example',baseDir:'/discovered'})});register(f.on);await f.emit('session.start',{surface:'desktop'});
+ await f.field('baseDir','/edited');for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
+ const tree=await f.pane();assert.equal(f.find(tree,'field-backend').props.value,saved.backend);assert.equal(f.find(tree,'field-baseDir').props.value,'/edited');
+ assert.equal(f.calls.some(c=>c.store),false);await f.press('save-settings');assert.deepEqual(f.calls.find(c=>c.store==='settings').value.provider,saved.provider);
+});
+test('environment selection scopes tools and denies stale calls, including changes while awaiting confirmation',async()=>{
+ const {register}=await load();let asks=0;let approve;
+ const f=fixture({respond:d=>{
+  const q=d.request;
+  if(q.action==='mcp-environments')return success(q.action,[{uid:'research',name:'Research'},{uid:'production',name:'Production',isProduction:true}]);
+  if(q.action==='mcp-list')return success(q.action,[{backend:'https://api.main-sequence.app',resource_release_uid:'release-'+q.environmentUid,name:'Same project',mcp_connection:{organization_environment_uid:q.environmentUid}}]);
+  if(q.action==='mcp-tools')return success(q.action,{tools:[{name:'lookup',inputSchema:{type:'object'}}]});
+  return success(q.action,{count:0,results:[]});
+ }});register(f.on);await f.emit('session.start');await f.press('tab-MCP');
+ assert.equal(f.tools.length,0);
+ f.find(await f.pane(),'mcp-environment').props.onSelect('research');await flush();
+ const old='mcp__mainsequence__'+f.tools[0].name;
+ assert.match(f.tools[0].description,/Research/);
+ f.$.ui.ask=()=>{asks++;return new Promise(resolve=>{approve=resolve})};
+ const pending=f.emit('tool.call',{tool:old,query:'hello'});await flush();
+ f.find(await f.pane(),'mcp-environment').props.onSelect('production');await flush();approve('Run tool');
+ assert.match((await pending).deny,/environment changed/);assert.match((await f.emit('tool.call',{tool:old})).deny,/no longer connected/);assert.equal(asks,1);
+ assert.equal(f.calls.some(c=>c.request?.request.action==='mcp-call'),false);
+ assert.ok(f.calls.filter(c=>c.request&&['mcp-list','mcp-discover','mcp-tools'].includes(c.request.request.action)).every(c=>c.request.request.environmentUid));
+ assert.equal(f.calls.some(c=>c.request?.request.action==='mcp-remove'),false);
+ assert.equal(f.calls.filter(c=>c.store==='mcp-environments').at(-1).value['https://api.main-sequence.app'],'production');
+});
+
+test('saved MCP environment restores only its tools in a new session without changing General settings',async()=>{
+ const {register}=await load();const backend='https://saved.example';
+ const f=fixture({saved:{backend,baseDir:'/saved',provider:{keep:true}},environments:{[backend]:'research','https://other.example':'production'},respond:d=>{
+  const q=d.request;
+  if(q.action==='workspace-preferences')return success(q.action,{backend:'https://default.example',baseDir:'/default'});
+  if(q.action==='mcp-environments')return success(q.action,[{uid:'research',name:'Research'}]);
+  if(q.action==='mcp-list')return success(q.action,[{backend,resource_release_uid:'r',name:'Project',mcp_connection:{organization_environment_uid:'research'}}]);
+  if(q.action==='mcp-tools')return success(q.action,{tools:[{name:'lookup',inputSchema:{type:'object'}}]});
+  return success(q.action,{});
+ }});register(f.on);await f.emit('session.start',{surface:'desktop'});for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
+ assert.equal(f.tools.length,1);assert.match(f.tools[0].description,/Research/);assert.equal(f.calls.some(c=>c.store),false);
+ assert.equal(f.find(await f.pane(),'field-backend').props.value,backend);
+});
+
+test('a folder chosen during startup survives preferences resolution without saving', async () => {
+  const { register } = await load();
+  const f = fixture({ respond: d => success(d.request.action, d.request.action === 'pick-folder'
+    ? { path: '/chosen/repos' } : { backend: 'https://default.example', baseDir: '/default/repos' }) });
+  register(f.on); await f.emit('session.start', { surface: 'desktop' });
+  await f.press('pick-base');
+  for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback();
+  await flush();
+  assert.equal(f.find(await f.pane(), 'field-baseDir').props.value, '/chosen/repos');
+  assert.equal(f.calls.some(c => c.store), false);
+});
+
+test('late tool registration cannot replace the current environment tool map', async () => {
+  const { register } = await load();
+  const f = fixture({ respond: d => {
+    const q = d.request;
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'a', name: 'A' }, { uid: 'b', name: 'B' }]);
+    if (q.action === 'mcp-list') return success(q.action, [{ backend: 'https://api.main-sequence.app', resource_release_uid: 'r', name: 'Project', mcp_connection: { organization_environment_uid: q.environmentUid } }]);
+    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
+    return success(q.action, {});
+  } });
+  const registerTool = f.$.tool.register;
+  let finish;
+  f.$.tool.register = async spec => {
+    const result = await registerTool(spec);
+    if (spec.description.includes('[A]')) await new Promise(resolve => { finish = resolve; });
+    return result;
+  };
+  register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('a'); await flush();
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('b'); await flush();
+  finish(); await flush();
+  assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[0].name })).deny, /no longer connected/);
+  assert.equal((await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[1].name })).isError, undefined);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').at(-1).request.request.environmentUid, 'b');
 });

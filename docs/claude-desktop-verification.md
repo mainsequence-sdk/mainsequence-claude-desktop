@@ -1,8 +1,8 @@
 # Claude Desktop plugin verification
 
-## Scope of 0.4.0
+## Scope
 
-The user approved the five-section browser layout on 2026-10-15. This implementation
+The user approved the five-section browser layout on 2026-10-15. The 0.4.0 baseline
 retains MainSequence login, removes Claude account switching and its runtime hooks,
 and changes only this Claude repository. No backend changes or live account/provider
 configuration edits are part of verification.
@@ -32,7 +32,7 @@ cancellation of a waiting worker and MainSequence login without Claude credentia
 access. They do not prove live backend operation success or final Desktop window
 placement/styling. Tests use disposable configuration and synthetic values.
 
-## Current evidence
+## 0.4.0 baseline evidence
 
 2026-10-15: TypeScript check and 22 Node tests passed in the implementation build.
 The release check passed, including documentation and standalone ZIP checks.
@@ -41,18 +41,18 @@ simulator tests. The final ZIP was extracted into an isolated directory with spa
 native validation and all three simulator tests passed there too. No normal Desktop installation, sign-in or provider changes were
 performed to run these checks.
 
-The prior 0.3.1 release used devtools 0.2.2 and was separately verified through the
-public marketplace on 2026-10-14. That historical result does not establish
-publication or GUI acceptance of 0.4.0. The shared dependency remains 0.2.2.
+The 0.4.0 release with devtools 0.2.2 was published and verified through a public
+marketplace installation on 2026-10-15. Version 0.4.1 uses devtools 0.2.3 and requires
+its own post-publication verification; earlier evidence is not GUI acceptance.
 
 ## Live acceptance still required
 
-- [ ] Install/update 0.4.0 through the normal Desktop plugin manager and start a fresh Code session.
+- [ ] Install/update 0.4.1 through the supported plugin updater and start a fresh Code session.
 - [ ] Check native pane width, section alignment, focus behavior and every section in the Desktop window.
 - [ ] Verify MainSequence browser login/renewal/logout against an authorized test backend.
 - [ ] Exercise Python/frontend setup and supported SDK workflows on disposable projects.
 - [ ] Exercise actual Docker build/cancellation and inspect container configuration output.
-- [ ] Verify the newly published 0.4.0 marketplace archive after release publication.
+- [ ] Verify the newly published 0.4.1 marketplace archive after release publication.
 
 Existing accounts/provider configuration must remain intact. Do not use production
 credentials in CI or save tokens in evidence. The account-switching acceptance
@@ -69,3 +69,15 @@ Signed native terminals, changing the Code session's working directory and launc
 container sessions remain unavailable. Shared folder reveal and operation-target
 selection are independent. Activity renders real textual progress, without fictional
 setup percentages. See the [feature matrix](claude-desktop.md#feature-coverage-and-host-adaptations).
+
+## 0.4.1 settings and environment verification
+
+The shared dependency is devtools 0.2.3. Its 89 automated tests cover read-only
+settings resolution and cross-environment enforcement. All 28 Claude Node tests and
+the full portable release check passed against the published dependency. Regression tests
+cover initial real default values, failed login, saved overrides, late responses,
+settings preservation, environment-specific tool registration, stale tool rejection,
+and switching while a confirmation is pending. Native loader validation and the
+three Desktop simulator tests passed against Code 2.1.295 with disposable settings.
+Only HOME and USERPROFILE are read by the hook; no credential environment variables
+are read or written. Live backend/GUI acceptance remains distinct from these tests.
