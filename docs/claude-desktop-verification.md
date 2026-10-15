@@ -42,17 +42,18 @@ native validation and all three simulator tests passed there too. No normal Desk
 performed to run these checks.
 
 The 0.4.0 release with devtools 0.2.2 was published and verified through a public
-marketplace installation on 2026-10-15. Version 0.4.1 uses devtools 0.2.3 and requires
-its own post-publication verification; earlier evidence is not GUI acceptance.
+marketplace installation on 2026-10-15. Version 0.4.1 uses devtools 0.2.3; its separate post-publication evidence is recorded
+below. Automated installation evidence is not live GUI acceptance.
 
 ## Live acceptance still required
 
-- [ ] Install/update 0.4.1 through the supported plugin updater and start a fresh Code session.
+- [x] Install/update 0.4.1 through the supported plugin updater.
+- [ ] Start a fresh Code session and verify the live environment picker.
 - [ ] Check native pane width, section alignment, focus behavior and every section in the Desktop window.
 - [ ] Verify MainSequence browser login/renewal/logout against an authorized test backend.
 - [ ] Exercise Python/frontend setup and supported SDK workflows on disposable projects.
 - [ ] Exercise actual Docker build/cancellation and inspect container configuration output.
-- [ ] Verify the newly published 0.4.1 marketplace archive after release publication.
+- [x] Verify the published 0.4.1 marketplace archive after release publication.
 
 Existing accounts/provider configuration must remain intact. Do not use production
 credentials in CI or save tokens in evidence. The account-switching acceptance
@@ -81,3 +82,25 @@ and switching while a confirmation is pending. Native loader validation and the
 three Desktop simulator tests passed against Code 2.1.295 with disposable settings.
 Only HOME and USERPROFILE are read by the hook; no credential environment variables
 are read or written. Live backend/GUI acceptance remains distinct from these tests.
+
+
+### Published 0.4.1 evidence
+
+On 2026-10-15 the release workflow passed and published
+[0.4.1](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.1).
+The public catalog and archive were downloaded anonymously; the catalog checksum,
+checksum asset, bundled devtools version and npm integrity pin matched. Archive SHA-256:
+`f04e48e2f39f91ca28a82af16aa0ea569e728cdd9327ba87f73633c4b648150d`.
+An isolated marketplace installation passed native validation, all three simulator
+tests and the standalone worker check.
+
+The existing user installation was then updated from 0.4.0 to 0.4.1 with Desktop's
+bundled plugin updater, without replacing it by a manually extracted ZIP. The
+installed build reports devtools 0.2.3. Active user sessions were not restarted.
+
+Before/after hashes matched for Claude Code settings, local settings, its main
+configuration, MainSequence CLI configuration and the MainSequence plugin store.
+Claude's separate Desktop preferences file changed while the app was running;
+its contents were not restored or edited, and byte-for-byte preservation of that
+file is not claimed. No account switching, provider changes, live MainSequence
+mutations or backend changes were performed for this verification.
