@@ -82,13 +82,16 @@ VS Code and other adapters are unchanged.
 
 ## Verification and coordinated release
 
-The implementation branch prepares Claude **0.4.2** with shared devtools **0.2.4**.
-These are unpublished candidates. The checked-in public marketplace stays on 0.4.1.
-Publish and verify devtools first, then verify `npm ci` against its public registry
-integrity, and only then publish the Claude archive through the existing release
-workflow. No new repository, marketplace or runtime dependency download is needed.
+Claude **0.4.2** pins the published shared devtools **0.2.4** npm archive. Devtools
+was published on 2026-10-15 through its
+[existing release workflow](https://github.com/mainsequence-sdk/mainsequence-devtools/actions/runs/38732377231),
+and Claude's lockfile records the registry integrity. The Claude candidate is not yet
+published; the checked-in public marketplace stays on 0.4.1. Run `npm ci --ignore-scripts`
+and `npm run release:check` against the public registry before publishing the Claude
+archive through the existing release workflow. No new repository, marketplace or
+runtime dependency download is needed.
 
-For local verification before producer publication:
+The original local verification before producer publication used these steps:
 
 1. In the shared devtools implementation checkout, run `npm run release:check`.
 2. In this checkout run `npm install --ignore-scripts --no-save --package-lock=false /absolute/path/to/dev-mainsequence-devtools-0.2.4.tgz`.
@@ -97,8 +100,8 @@ For local verification before producer publication:
    `CLAUDE_SECURESTORAGE_CONFIG_DIR` to run `npm run verify:claude` without touching
    normal Desktop settings.
 
-The local tarball must match the consumer lockfile integrity; do not regenerate it
-from different producer contents and present it as the verified archive. Local
+The lockfile now pins the published archive rather than that earlier local tarball.
+Use the standard clean registry install for current verification. Local
 build/verification does not publish, install or update the normal Desktop plugin.
 See [verification evidence](claude-desktop-verification.md) for the distinction
 between automated contracts, native simulator checks and live agent acceptance.

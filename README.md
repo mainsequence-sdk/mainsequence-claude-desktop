@@ -36,8 +36,9 @@ See [installation, features and upgrade behavior](docs/claude-desktop.md).
 
 This repository owns Claude UI, lifecycle hooks, worker transport, tests and
 releases. Shared functionality is imported from the exact
-`@dev-mainsequence/devtools` dependency. Released builds use its published npm archive;
-the Agents candidate uses the verified local 0.2.4 archive until publication. It is bundled into the ZIP; no sibling
+`@dev-mainsequence/devtools` dependency. The Agents candidate pins the published
+0.2.4 npm archive, verified by a clean install and exact lockfile integrity.
+It is bundled into the ZIP; no sibling
 checkout, backend change or runtime npm download is required.
 
 Run `npm ci` and `npm run release:check`. Set `MS_CLAUDE_DESKTOP_BINARY` to include

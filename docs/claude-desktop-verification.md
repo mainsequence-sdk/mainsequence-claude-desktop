@@ -110,7 +110,7 @@ mutations or backend changes were performed for this verification.
 On 2026-10-15 the isolated devtools 0.2.4 candidate passed 97 tests and its complete
 release/package checks. Claude 0.4.2 passed 36 Node tests, typechecking, documentation
 verification, portable ZIP checks and standalone worker execution using the exact
-local devtools archive pinned by integrity in its lockfile.
+local devtools archive pinned by integrity in the initial implementation lockfile.
 
 Desktop's bundled Code 2.1.295 validated the extracted portable ZIP and passed all
 four native simulator tests. The Agents test mounts the real native pane, selects
@@ -130,4 +130,13 @@ Pending live acceptance after publication/install: select an authorized environm
 open a deployed Message-capable agent, verify Claude receives its actual capability
 reply, approve a follow-up, then switch environment and verify stale tools refuse.
 Exercise Task mode only with an authorized disposable task. Shared package publication
-must precede the dependent Claude release; see [release order](agents.md#verification-and-coordinated-release).
+precedes the dependent Claude release; see [release order](agents.md#verification-and-coordinated-release).
+
+### Published shared dependency
+
+The [devtools 0.2.4 publication workflow](https://github.com/mainsequence-sdk/mainsequence-devtools/actions/runs/38732377231)
+succeeded from commit `57bb311` on 2026-10-15. The npm registry confirmed the version
+and archive integrity; the compiled files match the tested local implementation.
+Claude's lockfile now pins that public archive. A fresh `npm ci --ignore-scripts`
+and the complete release check passed with all 36 Node tests against that dependency.
+Claude 0.4.2 itself remains unpublished and the installed Desktop plugin is unchanged.
