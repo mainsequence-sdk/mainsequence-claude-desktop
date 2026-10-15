@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
-const documents = ['README.md', 'docs/claude-desktop.md', 'docs/claude-desktop-verification.md', 'docs/claude-desktop-distribution.md', 'docs/adr/0004-claude-desktop-mod.md'];
+const documents = ['docs/agents.md', 'README.md', 'docs/claude-desktop.md', 'docs/claude-desktop-verification.md', 'docs/claude-desktop-distribution.md', 'docs/adr/0004-claude-desktop-mod.md'];
 for (const filename of documents) {
   const source = fs.readFileSync(path.join(root, filename), 'utf8');
   for (const match of source.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {

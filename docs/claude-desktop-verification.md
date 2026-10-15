@@ -16,14 +16,14 @@ simulator checks against Desktop's actual bundled engine.
 
 Coverage includes:
 
-- One pane, five sections, one selected navigation state, no Tools placeholder or
+- One pane, six sections, one selected navigation state, no Tools placeholder or
   AbovePrompt launcher; MainSequence branding packaged with the plugin.
 - MainSequence login, renewal, logout, startup session reads and settings preservation.
 - Explicit mutation confirmations and context-sensitive repository/SDK actions.
 - Empty and populated Activity, collapsed details, streaming progress/cancellation.
 - MCP exact-release registration and confirmed tool dispatch.
 - Rejection of the removed accounts worker domain, including old serialized requests.
-- No Claude token/credential APIs, prompt/model hooks, account worker or rotation loop.
+- No Claude token/credential APIs, account-related prompt/model hooks, account worker or rotation loop.
 - Public devtools API imports, exact version/integrity pin, no copied shared source.
 
 Native simulator tests mount actual native element trees while mocking processes,
@@ -104,3 +104,30 @@ Claude's separate Desktop preferences file changed while the app was running;
 its contents were not restored or edited, and byte-for-byte preservation of that
 file is not claimed. No account switching, provider changes, live MainSequence
 mutations or backend changes were performed for this verification.
+
+## 0.4.2 Agents implementation evidence
+
+On 2026-10-15 the isolated devtools 0.2.4 candidate passed 97 tests and its complete
+release/package checks. Claude 0.4.2 passed 36 Node tests, typechecking, documentation
+verification, portable ZIP checks and standalone worker execution using the exact
+local devtools archive pinned by integrity in its lockfile.
+
+Desktop's bundled Code 2.1.295 validated the extracted portable ZIP and passed all
+four native simulator tests. The Agents test mounts the real native pane, selects
+an environment, clicks Talk, observes the plugin-attributed prompt, and invokes its
+registered conversation tool to receive a synthetic agent reply. Host storage, tool
+registration, process responses and prompt inference are mocked. No model or live
+agent was contacted. This verifies the host API wiring, not live agent availability
+or the final desktop window styling.
+
+Regression coverage includes environment changes while approval is pending, stale
+tool refusal, approved follow-ups, persisted conversation identity, task ownership,
+crash/uncertain-send suppression and late replies after starting a new conversation.
+No normal Desktop configuration, existing accounts, provider settings or backend
+files were changed. The public marketplace remains on 0.4.1.
+
+Pending live acceptance after publication/install: select an authorized environment,
+open a deployed Message-capable agent, verify Claude receives its actual capability
+reply, approve a follow-up, then switch environment and verify stale tools refuse.
+Exercise Task mode only with an authorized disposable task. Shared package publication
+must precede the dependent Claude release; see [release order](agents.md#verification-and-coordinated-release).

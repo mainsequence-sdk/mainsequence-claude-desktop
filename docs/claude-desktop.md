@@ -1,8 +1,8 @@
 # MainSequence for Claude Desktop Code
 
 MainSequence provides a native pane in local Claude Desktop Code sessions. The
-approved layout has five visible sections with one active selection: **General,
-Projects, Current Project, MCP, Activity**. There is no Tools picker, Accounts page,
+approved layout has six visible sections with one active selection: **General,
+Projects, Current Project, MCP, Agents, Activity**. There is no Tools picker, Accounts page,
 rotation configuration or launcher strip above the chat. The MainSequence emblem
 comes from MainSequencePublic.
 
@@ -77,7 +77,7 @@ not silently migrate other projects or rewrite their provider settings.
 
 ## MCP and Activity
 
-Choose an **Organization environment** in MCP. The choices come from the existing
+Choose an **Organization environment** in MCP or Agents. The choices come from the existing
 MainSequence organization-environments endpoint. No environment is selected
 implicitly, including Production. The choice is remembered per backend in the
 plugin store, independently of General's Save button, and is validated when a new
@@ -106,6 +106,11 @@ The browser preview used illustrative operations and setup steps. Production use
 real worker progress messages: no fabricated percentages, step counts or sample
 history. Raw subprocess stderr stays private.
 
+## Agents
+
+The [Agents guide](agents.md) explains environment-scoped discovery, direct
+conversation through Claude, task polling, local continuity and uncertain requests.
+
 ## Feature coverage and host adaptations
 
 | Extension feature | Desktop behavior |
@@ -125,6 +130,7 @@ history. Raw subprocess stderr stays private.
 | Devcontainer configuration | Preview and digest-checked JSONC edit; preserves comments and custom fields. Existing Compose/build-based configurations are refused rather than rewritten into incompatible image-based ones. |
 | Reopen in container | Current mod APIs do not provide an implemented Desktop container-session launcher. The action reports unavailable; it never opens VS Code as an implicit substitute. |
 | Diagnostics/errors/previews | Bundle/runtime checks, actionable errors, Activity results/cancellation, explicit mutation confirmations, and previews for supported SDK/skills operations, Docker, container configuration and local deletion. Cancellation can leave partial effects, which are reported. |
+| Agent discovery and conversations | Shared environment selector, public card details, visible Claude introduction prompt, approved follow-ups, Task status/wait/cancel and local conversation continuity. |
 | MCP discovery/connections/tools | Search/paginate project MCPs, connect/disconnect exact releases, inspect/call tools and register them for Claude. Tool calls request approval and disconnected tools are refused. |
 
 The signed-terminal, session-navigation and container-launch limitations are explicit
@@ -135,7 +141,7 @@ table. Dormant legacy extension panels/scripts are not treated as active feature
 
 Claude account switching is removed in 0.4.0. The plugin has no account list,
 sign-in/rotation controls, usage thresholds, token projection, quota polling,
-credential refresh/recovery loop or prompt/model-dispatch hooks. The worker rejects
+credential refresh/recovery loop or account-related prompt/model-dispatch hooks. The worker rejects
 the former `accounts` domain. Claude's own account and provider controls manage
 model authentication.
 

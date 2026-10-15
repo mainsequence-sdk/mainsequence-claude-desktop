@@ -1,4 +1,5 @@
 import { TABS, clean, record, rows, resultText } from './model.mjs';
+import { renderAgents } from './agentView.mjs';
 import { EMBLEM } from './branding.mjs';
 
 /** Native Desktop controls, grouped into compact cards. No model calls or DOM. */
@@ -31,6 +32,17 @@ export function renderPane(ui, state, actions) {
   const f = state.fields;
   const busy = (scope, action) => state.operations.some(op => op.status === 'running' && op.label === `${scope} · ${action}`);
   const section = state.tab;
+  const headerEnvironments = rows(state.results['devtools.mcp-environments']?.data);
+  const headerEnvironment = headerEnvironments.find(row => row.uid === f.mcpEnvironment);
+  const sharedEnvironment = ['MCP', 'Agents'].includes(section) ? card('Organization environment', [
+        state.environmentsLoading && muted('Loading organization environments…'),
+        select('mcp-environment', 'Environment', headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) + (row.isProduction ? ' · Production' : '') })), f.mcpEnvironment, actions.selectEnvironment),
+        headerEnvironment ? line('Active environment', headerEnvironment.name) : muted('Choose an environment to find MCPs and agents.'),
+        muted('Applies to MCP tools and agents. Connections in other environments stay saved.'),
+        button('mcp-environments', 'Refresh environments', actions.refreshEnvironments, !state.environmentsLoading),
+        state.results['devtools.mcp-environments']?.status === 'failure' && text(state.results['devtools.mcp-environments'].summary),
+        !state.environmentsLoading && state.results['devtools.mcp-environments']?.status === 'success' && !headerEnvironments.length && muted('No organization environments are available for this account.'),
+      ]) : null;
   const header = column([
     Box({ flexDirection: 'row', alignItems: 'center', gap: 2, paddingY: 1, children: [Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 36, height: 36 }), column([title('MainSequence'), muted(section)])] }),
     Box({ key: 'section-navigation', flexDirection: 'column', gap: 1, padding: 1, borderStyle: 'round', borderDimColor: true,
@@ -41,6 +53,7 @@ export function renderPane(ui, state, actions) {
         children: [Button({ key: `tab-${tab.replaceAll(' ', '-')}`, label: tab, dimColor: tab !== state.tab, onPress: () => actions.tab(tab) })],
       })) })),
     }),
+    sharedEnvironment,
     state.problem && text(state.problem),
   ]);
   const page = body => Box({ flexDirection: 'column', gap: 2, padding: 1, children: [header, ...body.filter(Boolean)] });
@@ -170,15 +183,6 @@ export function renderPane(ui, state, actions) {
     const connected = rows(state.results['devtools.mcp-list']?.data).filter(matches);
     const tools = record(state.results['devtools.mcp-tools']?.data).tools;
     body = column([
-      card('Organization environment', [
-        state.environmentsLoading && muted('Loading organization environments…'),
-        select('mcp-environment', 'Environment', environments.map(row => ({ value: row.uid, label: clean(row.name) + (row.isProduction ? ' · Production' : '') })), f.mcpEnvironment, actions.selectEnvironment),
-        environment ? line('Active environment', environment.name) : muted('Choose an environment to find MCPs and enable its tools.'),
-        muted('Only this environment’s MCPs are shown and available to Claude. Connections in other environments stay saved.'),
-        button('mcp-environments', 'Refresh environments', actions.refreshEnvironments, !state.environmentsLoading),
-        state.results['devtools.mcp-environments']?.status === 'failure' && text(state.results['devtools.mcp-environments'].summary),
-        !state.environmentsLoading && state.results['devtools.mcp-environments']?.status === 'success' && !environments.length && muted('No organization environments are available for this account.'),
-      ]),
       environment && card('Find project MCPs', [
       input('mcpSearch', 'Search project MCPs'), buttons([button('mcp-discover', 'Find project MCPs', dev('mcp-discover', { offset: 0 })),
         button('mcp-next', 'Next page', dev('mcp-discover', { offset: state.mcpOffset + 25 }), state.mcpOffset + discovered.length < (state.results['devtools.mcp-discover']?.data?.count || 0)), button('mcp-list', 'Refresh connections', dev('mcp-list'))]),
@@ -202,9 +206,10 @@ export function renderPane(ui, state, actions) {
       ]),
     ]);
   }
+  if (state.tab === 'Agents') body = renderAgents(ui, state, actions);
   if (state.tab === 'Activity') body = column([
     card('Session activity', [
-      muted('Repository setup, project tasks and MCP actions from this session.'),
+      muted('Repository setup, project tasks, MCP actions and agent conversations from this session.'),
       state.operations.length ? line('This session', ['running', 'success', 'failure', 'cancelled'].map(status => { const count = state.operations.filter(op => op.status === status).length; return count ? `${count} ${{ running: 'running', success: 'completed', failure: 'failed', cancelled: 'cancelled' }[status]}` : ''; }).filter(Boolean).join(' · ')) : null,
     ]),
     ...(state.operations.length ? state.operations.slice().reverse().map(op => card(op.title || op.label, [

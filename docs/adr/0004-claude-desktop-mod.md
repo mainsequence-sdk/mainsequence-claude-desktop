@@ -39,7 +39,10 @@ invent percentages or reuse fictional preview data.
 Native callbacks call `$.process.spawn({argv, cwd, input})`. A bounded JSON envelope
 on stdin routes only `devtools` and `projects`; correlated NDJSON carries progress
 and results. The removed `accounts` domain is rejected before handler dispatch.
-No model turn or shell-command parser is used. Runtime adapters provide native
+Project controls use no model turn or shell-command parser. The Agents addition
+deliberately submits a visible, attributed Claude prompt and serves the agent reply
+through a conversation-specific tool. See the [Agents design](../agents.md).
+Runtime adapters provide native
 folder selection, existing workspace-preference reads, organization lookup through
 the public RepositoryClient, and diagnostics; shared operations remain in devtools.
 
