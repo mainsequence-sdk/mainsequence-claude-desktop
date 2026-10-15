@@ -9,7 +9,8 @@ the prompt.
 The **0.4.2 implementation candidate** adds [environment-scoped agents and direct
 conversation through Claude](docs/agents.md). It is not yet in the public marketplace.
 
-Version **0.4.1** adds editable workspace defaults and an organization-environment
+[Published preview **0.4.1**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.1)
+adds editable workspace defaults and an organization-environment
 selector that scopes MCP discovery and tool use. Saved settings take precedence,
 and defaults work without saving.
 
@@ -19,6 +20,9 @@ providers. Existing credentials, saved profiles and provider configuration are
 retained; this release has no account migration or deletion routine.
 
 ## Install
+
+Start with the [first-run walkthrough](docs/first-run.md) for installation,
+MainSequence login and selecting your first MCP environment.
 
 Use the published marketplace in Claude Desktop: **Customize → Plugins → Add
 marketplace → Add from repository**, then enter
@@ -30,7 +34,9 @@ update it. Node 22+ is required.
 For an approved local build, use the ZIP produced by `npm run pack:claude` with
 Claude's **Add plugin → Upload plugin** flow. Restart existing Code sessions after
 upgrading from 0.3.x so the removed hooks cannot remain loaded in an old process.
-See [installation, features and upgrade behavior](docs/claude-desktop.md).
+For an existing installation, follow the [update instructions](docs/claude-desktop-distribution.md#update-an-existing-installation),
+including the macOS fallback when Desktop shows only Remove.
+See [features and settings](docs/claude-desktop.md).
 
 ## Architecture and development
 
@@ -41,7 +47,7 @@ releases. Shared functionality is imported from the exact
 It is bundled into the ZIP; no sibling
 checkout, backend change or runtime npm download is required.
 
-Run `npm ci` and `npm run release:check`. Set `MS_CLAUDE_DESKTOP_BINARY` to include
+Run `npm ci --ignore-scripts` and `npm run release:check`. Set `MS_CLAUDE_DESKTOP_BINARY` to include
 native loader validation and simulator tests against Desktop's bundled engine.
 
 - [Architecture and dependency boundaries](docs/adr/0004-claude-desktop-mod.md)
