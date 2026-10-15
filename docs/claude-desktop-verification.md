@@ -123,8 +123,9 @@ or the final desktop window styling.
 Regression coverage includes environment changes while approval is pending, stale
 tool refusal, approved follow-ups, persisted conversation identity, task ownership,
 crash/uncertain-send suppression and late replies after starting a new conversation.
-No normal Desktop configuration, existing accounts, provider settings or backend
-files were changed. The public marketplace remains on 0.4.1.
+During implementation validation, no normal Desktop configuration, existing accounts,
+provider settings or backend files were changed. At that stage the public marketplace
+remained on 0.4.1.
 
 Pending live acceptance after publication/install: select an authorized environment,
 open a deployed Message-capable agent, verify Claude receives its actual capability
@@ -139,4 +140,40 @@ succeeded from commit `57bb311` on 2026-10-15. The npm registry confirmed the ve
 and archive integrity; the compiled files match the tested local implementation.
 Claude's lockfile now pins that public archive. A fresh `npm ci --ignore-scripts`
 and the complete release check passed with all 36 Node tests against that dependency.
-Claude 0.4.2 itself remains unpublished and the installed Desktop plugin is unchanged.
+At this shared-dependency checkpoint, Claude 0.4.2 had not yet been published and the
+installed Desktop plugin was unchanged. Its later publication is recorded below.
+
+
+## Published 0.4.2 and normal installation
+
+On 2026-10-15, [release 0.4.2](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.2)
+was published by the [existing release workflow](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/actions/runs/38735235100)
+from source `5e4885a00cf5e6ac860460cd23221adce3173e16`, bundling the published devtools
+0.2.4 archive and its lockfile integrity. The catalog and distribution metadata now
+advertise 0.4.2. Archive SHA-256:
+`99222ad46bfa244ddd225be47b0aff09e6bd4751180d776a2c760f1b643b2cc2`.
+
+A clean registry install passed the full release check with 36 Node tests. Native
+Code 2.1.295 validated the plugin and passed four simulator tests, including the
+Agents prompt/tool-result flow with synthetic replies. Anonymous download verified
+the public catalog, ZIP and checksum. A disposable marketplace installation passed
+native validation, all four simulator tests and standalone worker execution.
+
+The normal user-scope plugin was updated from 0.4.1 to 0.4.2 using Desktop's bundled
+marketplace and plugin updater. Its enabled setting remained true, its installed
+hooks matched the release source, and its bundled devtools version/integrity matched
+the lockfile. The actual installed copy passed the worker check, native validation
+and all four simulator tests using disposable configuration.
+
+All eight protected account/configuration/store file snapshots were byte-identical
+immediately before and after the update; other installed plugins were unchanged.
+Across the longer verification period, the running app advanced a feature-cache
+timestamp and an automatic-mode denial counter before the update snapshot. No
+account/provider values, MainSequence settings or plugin-store contents changed.
+Configuration values and credentials are not included in this evidence.
+
+Claude had active sessions and the user was using its window. Those sessions were
+not stopped, reloaded or restarted. A fresh local Code session is required to load
+the new hooks. Final live pane styling and live agent conversation acceptance remain
+pending; no live agent messages, task creation, sign-in changes or backend changes
+were performed. Draft onboarding documentation PR #6 was left unchanged.
