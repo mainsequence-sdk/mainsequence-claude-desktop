@@ -7,8 +7,22 @@ retains MainSequence login, removes Claude account switching and its runtime hoo
 and changes only this Claude repository. No backend changes or live account/provider
 configuration edits are part of verification.
 
+## Release status and evidence scope
+
+The published preview is **0.4.1**, with devtools **0.2.3**. The tracked marketplace
+and distribution metadata agree with the archive identity in the evidence below.
+Publication and installation are complete; the unchecked live GUI/backend items
+remain outstanding. The [first-run walkthrough](first-run.md) describes the intended
+workflow and does not claim those live checks have passed.
+
+Documentation was reconciled with `main` at `ba72cf6976497d54ace60e00d371fb1459c4dc24`
+on 2026-10-15. That commit already contained the post-publication results. This
+review does not rerun those account-facing operations or upgrade the installed plugin.
+
 ## Automated checks
 
+Run `npm run verify:docs` for local documentation links, referenced npm commands
+and attribution. This validates structure, not factual accuracy or live UI behavior.
 Run `npm run release:check` for TypeScript, Node tests, documentation links,
 packaging, checksum-pinned generated marketplace, portable ZIP inventory and
 standalone worker checks. Set `MS_CLAUDE_DESKTOP_BINARY` for native loader and
@@ -50,6 +64,7 @@ below. Automated installation evidence is not live GUI acceptance.
 - [x] Install/update 0.4.1 through the supported plugin updater.
 - [ ] Start a fresh Code session and verify the live environment picker.
 - [ ] Check native pane width, section alignment, focus behavior and every section in the Desktop window.
+- [ ] Capture native first-run screenshots for the plugin install card, General defaults and MCP environment selector, using a test account without personal information.
 - [ ] Verify MainSequence browser login/renewal/logout against an authorized test backend.
 - [ ] Exercise Python/frontend setup and supported SDK workflows on disposable projects.
 - [ ] Exercise actual Docker build/cancellation and inspect container configuration output.
@@ -58,6 +73,16 @@ below. Automated installation evidence is not live GUI acceptance.
 Existing accounts/provider configuration must remain intact. Do not use production
 credentials in CI or save tokens in evidence. The account-switching acceptance
 checklist from 0.3.x is retired because the feature is removed.
+
+## Native screenshot evidence
+
+The first-run guide currently contains a labelled navigation diagram. It does not
+contain native Desktop screenshots. No native screenshot evidence has been recorded
+for 0.4.1 yet, so screenshot capture and layout acceptance remain unchecked.
+When completing the live checks, record the Desktop and bundled Code versions,
+plugin version and capture date alongside screenshots. Show only the relevant
+plugin UI, using test values with no tokens, personal account details or project
+secrets; do not substitute browser mockups for native evidence.
 
 ## Host limitations
 

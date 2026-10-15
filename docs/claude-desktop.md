@@ -8,6 +8,9 @@ comes from MainSequencePublic.
 
 ## Installation and opening
 
+For a guided installation and first MCP connection, follow the
+[first-run walkthrough](first-run.md).
+
 Use Claude Desktop with function-hook plugins and streaming process support, plus
 Node 22+. The bundled Code engine tested during development is 2.1.295; the version
 of a separately installed command-line client does not establish GUI compatibility.
@@ -148,7 +151,9 @@ No backend endpoints, schema or configuration are changed by this release.
 
 ## Upgrade, removal and troubleshooting
 
-Update through the plugin manager or install the built archive. Fully close old
+Follow [the update procedure](claude-desktop-distribution.md#update-an-existing-installation)
+to refresh the marketplace, download the release and verify the installed version.
+`/reload-plugins` alone does not download an update. Fully close old
 Code sessions and start fresh sessions after upgrading from 0.3.x. An already
 running old plugin process retains its old hooks until it exits. This release does
 not try to rewrite authentication inside that process or delete stored profiles.

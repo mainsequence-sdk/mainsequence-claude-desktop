@@ -1,6 +1,7 @@
 # ADR 0004: Native MainSequence integration for Claude Desktop Code
 
-Status: revised for the approved 0.4.0 layout and removal of Claude account switching.
+Status: revised for 0.4.1 workspace defaults and environment-scoped MCP tools;
+retains the approved 0.4.0 layout and removal of Claude account switching.
 
 ## Ownership and dependency direction
 
@@ -43,6 +44,63 @@ No model turn or shell-command parser is used. Runtime adapters provide native
 folder selection, existing workspace-preference reads, organization lookup through
 the public RepositoryClient, and diagnostics; shared operations remain in devtools.
 
+## Workspace settings resolution
+
+The Claude adapter calls the public `readWorkspacePreferences` API from devtools
+0.2.3. The shared layer resolves only the backend and repositories folder from
+existing non-secret configuration; it neither signs in nor writes that configuration.
+Claude owns its saved overrides and editable form state.
+
+| Value | Precedence |
+| --- | --- |
+| Backend | Nonempty saved plugin value; otherwise `MAINSEQUENCE_ENDPOINT`, MainSequence `backend_url`, then `https://api.main-sequence.app`. |
+| Repositories folder | Nonempty saved plugin value; otherwise an existing absolute MainSequence `mainsequence_path`, then the user's home `mainsequence` folder. |
+
+The initial form uses concrete defaults while the worker resolves preferences.
+Shared devtools actions wait for that resolution. Authentication status is read
+separately, so failed login cannot make the default backend disappear. Saved values
+and edits made during startup, including folder-picker results, win over late
+preference responses. Form edits apply in the current session; Save merges the
+known fields into the existing `settings` store, retaining unknown fields.
+
+## MCP environment ownership and enforcement
+
+Claude owns the selector and the per-backend choice in the separate
+`mcp-environments` store key. Opening MCP loads authorized environments. No first
+or production environment is selected implicitly. A saved choice is revalidated
+on startup before its tools are restored; choosing an environment persists it
+independently of General's Save button.
+
+```mermaid
+flowchart LR
+  UI[Claude environment selector] --> Request[Request with environmentUid]
+  Request --> Core[Shared devtools MCP API]
+  Core --> Existing[Existing MainSequence endpoints]
+  Core --> Check[Validate release environment]
+  Check --> MCP[Credential exchange and MCP tools]
+```
+
+The public `mcp-environments` action lists environments through the existing backend
+endpoint. `environmentUid` scopes discovery and saved connections, and is checked
+against the current release before connecting, reading tools or calling a tool.
+Disconnect checks the saved connection's environment. Other environments' saved
+connections are retained. Since the existing MCP directory API has no environment
+filter, shared devtools filters before paginating matching results, with a bounded
+scan; it reports a limit error rather than returning a silently incomplete list.
+Other hosts retain their prior behavior when they omit the optional environment.
+
+Changing the backend or environment invalidates the current tool map, clears
+pending confirmations and cancels outstanding MCP workers. Tool names include the
+backend, environment, release and tool identity. A call rechecks the selected
+context after confirmation, and late registration responses cannot replace the
+new environment's tool map. Cancellation cannot undo a request already completed
+remotely.
+
+The native API has no tool-unregister operation. Old names may remain advertised
+in an existing session but their handlers refuse execution. A fresh session
+registers only the saved, validated environment. This is plugin-local execution
+scoping, not a change to backend permissions or to other clients' configurations.
+
 ## Authentication and update boundary
 
 MainSequence authentication continues through shared machine-session APIs. Claude
@@ -61,7 +119,9 @@ removal notice; no account-rotator runtime ships in 0.4.0.
 ## Validation and remaining host gaps
 
 Tests cover coordinated navigation, shared MainSequence login/renewal/logout,
-empty and populated Activity, real cancellation, credential isolation, rejection
+workspace-default precedence, late responses, environment restoration, stale tool
+rejection, switching during confirmation/registration, empty and populated Activity,
+real cancellation, credential isolation, rejection
 of legacy account requests, and public dependency boundaries. Native engine
 validation/simulator tests supplement Node tests. ZIP checks verify portability,
 checksums, documentation and standalone execution.
