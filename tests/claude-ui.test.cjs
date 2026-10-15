@@ -9,7 +9,7 @@ const success = (action, data) => ({ schemaVersion: 1, action, status: 'success'
 
 function fixture(options = {}) {
   const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries(options.env || {}));
-  const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown'].map(type => [type, props => {
+  const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
     if (type === 'Select') assert.ok(props.options.length);
     return { type, props };
@@ -23,12 +23,12 @@ function fixture(options = {}) {
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
     session: { cwd: async () => '/work/repo', id: async () => 'session-1', version: async () => ({ version: options.version || '2.1.295' }) },
-    store: { get: async () => undefined, set: async (key, value) => { calls.push({ store: key, value }); } },
+    store: { get: async () => options.saved, set: async (key, value) => { calls.push({ store: key, value }); } },
     command: { register: async spec => { calls.push({ command: spec }); } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool' },
     tool: { register: async spec => { tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
-    clock: { now: async () => 1000, after: (ms, callback) => ({ cancel() {} }), every: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; } },
+    clock: { now: async () => 1000, after: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; } },
     env: { get: async key => env.get(key), set: async (key, value) => { value === undefined ? env.delete(key) : env.set(key, value); } },
     fs: { read: async () => JSON.stringify({ claudeAiOauth: { accessToken: 'secret-new-token', expiresAt: 1000000 } }) },
     process: {
@@ -64,16 +64,19 @@ function fixture(options = {}) {
     for (const child of tree.props?.children || []) { const found = find(child, key); if (found) return found; } };
   const press = async key => { const node = find(await pane(), key); assert.ok(node, `Missing ${key}`); node.props.onPress(); await flush(); };
   const field = async (key, value) => { const node = find(await pane(), `field-${key}`); assert.ok(node, `Missing field ${key}`); node.props.onInput(value); await flush(); };
-  return { $, on, emit, pane, press, field, calls, tools, timers, env, find, get nextCalls() { return nextCalls; } };
+  return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, find, get nextCalls() { return nextCalls; } };
 }
 
-test('Desktop launcher and all native tabs render; terminal surface is left to the engine', async () => {
-  const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start');
+test('one native pane has five coordinated sections and no above-prompt launcher', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start', {surface:'desktop'});
   assert.equal(f.calls[0].command.name, 'ms');
+  assert.deepEqual(f.calls.find(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence' });
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
-  assert.ok(f.find(band, 'mainsequence-open'));
-  for (const tab of ['Connection', 'Projects', 'Current-Project', 'Accounts', 'MCP', 'Activity', 'Settings']) {
-    await f.press(`tab-${tab}`); assert.ok(await f.pane());
+  assert.equal(band, undefined);
+  for (const tab of ['General', 'Projects', 'Current-Project', 'MCP', 'Activity', 'General']) {
+    await f.press(`tab-${tab}`); const tree = await f.pane();
+    for (const name of ['General', 'Projects', 'Current-Project', 'MCP', 'Activity']) assert.equal(f.find(tree, `tab-${name}`).props.dimColor, name !== tab);
+    assert.equal(f.find(tree, 'more-tools'), undefined); assert.equal(f.find(tree, 'tab-Accounts'), undefined);
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'Pane', requestId: 'mainsequence', props: {} }), { type: 'engine', ref: 1 });
   await f.emit('command.run', { command: 'ms' }); assert.equal(f.calls.at(-1).pane.id, 'mainsequence');
@@ -119,25 +122,6 @@ test('MCP tools refresh from exact releases, use flattened hook arguments, and c
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__missing' })).deny, /no longer connected/);
 });
 
-test('account projection stays private, restores previous engine credentials, and reports identity unverified', async () => {
-  const { register } = await load();
-  const f = fixture({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'original-secret', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/original' }, respond: domain => {
-    const data = { accounts: [{ id: 'a', label: 'Personal', health: 'ready' }], session: {}, config: { mode: 'manual' } };
-    if (domain.request.action === 'select') data.projection = { generation: 'generation-1', accountId: 'a', slot: '/profiles/a', credential: { kind: 'keychain', service: 'service-a', user: 'person' }, expiresAt: 1000000 };
-    return success(domain.request.action, data);
-  } });
-  register(f.on); await f.emit('session.start'); await f.press('tab-Accounts'); await f.press('account-list');
-  f.find(await f.pane(), 'account-choice').props.onSelect('a');
-  await f.press('account-use'); await f.press('confirm-action');
-  assert.equal(f.env.get('CLAUDE_CODE_OAUTH_TOKEN'), 'secret-new-token');
-  assert.equal(f.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR'), '/profiles/a');
-  const tree = JSON.stringify(await f.pane()); assert.match(tree, /identity unverified/);
-  assert.doesNotMatch(tree, /secret-new-token|original-secret|service-a|generation-1/);
-  await f.emit('session.end'); assert.equal(f.env.get('CLAUDE_CODE_OAUTH_TOKEN'), 'original-secret');
-  assert.equal(f.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR'), '/original');
-  assert.equal(f.calls.filter(c => c.request).at(-1).request.request.action, 'release');
-});
-
 test('worker protocol rejects malformed result and cancellation closes the real stream', async () => {
   const { runWorker } = await load(); let closed = 0;
   const child = (async function* () { yield { stream: 'stdout', text: '{wrong}\n' }; return { code: 0 }; })();
@@ -156,11 +140,11 @@ test('older bundled engines show a guard instead of running worker operations', 
 test('repository selections do not display an unselected first item and branch choices come from the API', async () => {
   const { register } = await load(); const f = fixture({ respond: domain => success(domain.request.action,
     [{ uid: 'repo-1', code_repository_name: 'Real project', branches: [{ uid: 'branch-1', repository_branch: 'develop' }] }]) });
-  register(f.on); await f.emit('session.start'); await f.press('tab-Projects'); await f.press('list-repositories');
+  register(f.on); await f.emit('session.start'); await f.field('baseDir', '/repos'); await f.press('tab-Projects'); await f.press('list-repositories');
   let choice = f.find(await f.pane(), 'remote-repository'); assert.equal(choice.props.value, '');
   assert.equal(choice.props.options[1].label, 'Real project'); choice.props.onSelect('repo-1'); await flush();
-  choice = f.find(await f.pane(), 'repository-branch'); assert.equal(choice.props.value, '');
-  choice.props.onSelect('develop'); await f.field('baseDir', '/repos'); await f.press('setup'); await f.press('confirm-action');
+  choice = f.find(await f.pane(), 'repository-branch'); assert.equal(choice.props.value, 'develop');
+  choice.props.onSelect('develop'); await f.press('setup'); await f.press('confirm-action');
   assert.equal(f.calls.find(c => c.request?.request.action === 'setup').request.request.branch, 'develop');
 });
 
@@ -174,28 +158,63 @@ test('SDK update is unavailable unless fresh status explicitly supports and offe
   assert.equal(f.find(await f.pane(), 'update-sdk'), undefined);
 });
 
-test('account cards, configuration and sign-in-all use structured dispatch and preserve nonsecret metadata', async () => {
-  const { register } = await load();
-  const data = { accounts: [{ id: 'a', label: 'Work', health: 'login-needed', organizationName: 'Example Org', plan: 'Team', expiresAt: 1000000,
-    usage: { fiveHour: { percentUsed: 40, resetsAt: '2026-10-14T20:00:00Z' }, checkedAt: 1000 } }, { id: 'b', health: 'login-needed' }],
-    config: { mode: 'manual', fiveHourThreshold: 90, weeklyThreshold: 95, sameOrganizationOnly: true, display: { session: 'bars', week: 'none' } }, leases: [] };
-  const f = fixture({ respond: domain => success(domain.request.action, data) });
-  register(f.on); await f.emit('session.start'); await f.press('tab-Accounts'); await f.press('account-list');
-  let tree = await f.pane(); assert.match(JSON.stringify(tree), /Example Org|Team|40% used/);
-  f.find(tree, 'account-five-hour-threshold').props.onInput('82');
-  f.find(await f.pane(), 'account-session-style').props.onSelect('pie');
-  await f.press('eligible-a'); await f.press('account-save-settings'); await f.press('confirm-action');
-  const saved = f.calls.find(c => c.request?.request.action === 'configure').request.request.config;
-  assert.equal(saved.fiveHourThreshold, 82); assert.equal(saved.display.session, 'pie'); assert.deepEqual(saved.eligibleAccountIds, ['b']);
-  await f.press('account-login-all'); await f.press('confirm-action');
-  assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'login').map(c => c.request.request.accountId), ['a', 'b']);
+
+test('MainSequence login, renewal and logout remain available without touching Claude credentials or provider config', async () => {
+  const { register } = await load(); let signedIn = false;
+  const original = { CLAUDE_CODE_OAUTH_TOKEN: 'fixture-claude', ANTHROPIC_API_KEY: 'fixture-api', ANTHROPIC_BASE_URL: 'https://provider.example', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/existing' };
+  const saved = { backend: 'https://backend.example', baseDir: '/repos', provider: { url: 'https://provider.example' }, claudeExecutable: '/old/unused' };
+  const f = fixture({ env: original, saved, respond: domain => {
+    if (domain.request.action === 'login') signedIn = true;
+    if (domain.request.action === 'logout') signedIn = false;
+    return success(domain.request.action, domain.request.action === 'auth-status' ? { authenticated: signedIn, username: 'fixture@example.test' } : {});
+  } });
+  f.$.env.get = f.$.env.set = f.$.fs.read = f.$.process.run = async () => assert.fail('Claude credential APIs must never be used');
+  register(f.on); await f.emit('session.start');
+  await f.press('login'); assert.match(JSON.stringify(await f.pane()), /fixture@example.test/);
+  await f.press('toggle-connection-actions'); await f.press('refresh-token');
+  await f.press('logout'); await f.press('confirm-action'); assert.ok(f.find(await f.pane(), 'login'));
+  await f.press('save-settings'); const stored = f.calls.find(c => c.store).value;
+  assert.deepEqual(stored.provider, saved.provider); assert.equal(stored.claudeExecutable, saved.claudeExecutable);
+  for (const event of ['prompt.submit','turn.start','turn.step','turn.complete','session.measure','classic.StopFailure']) assert.equal(f.hooks.some(h => h.event === event), false, event);
+  await f.emit('session.end'); assert.deepEqual(Object.fromEntries(f.env), original);
+  assert.ok(f.calls.filter(c => c.request).every(c => c.request.scope !== 'accounts'));
+  assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'login').map(c => c.request.scope), ['devtools']);
 });
 
-test('host-managed Desktop sessions never automatically recover or refresh account identity', async () => {
-  const { register } = await load(); const f = fixture({ respond: domain => success(domain.request.action, { accounts: [], config: { mode: 'automatic' } }) });
-  register(f.on); await f.emit('session.start'); await f.press('tab-Accounts'); await f.press('account-list');
-  await f.emit('session.measure', { changed: ['rateLimits'] });
-  await f.emit('classic.StopFailure', { error: 'authentication_failed' });
-  for (const timer of f.timers) timer.callback(); await flush();
-  assert.equal(f.calls.filter(c => c.request?.request.action === 'refresh' || c.request?.request.action === 'recover').length, 0);
+test('Activity has useful empty state navigation, real operation results and collapsed details', async () => {
+  const { register } = await load(); const f=fixture(); register(f.on); await f.emit('session.start');
+  await f.press('tab-Activity'); assert.match(JSON.stringify(await f.pane()), /No activity yet/);
+  await f.press('activity-mcp'); assert.ok(f.find(await f.pane(),'mcp-discover'));
+  await f.press('tab-General'); await f.press('auth-status'); await f.press('tab-Activity');
+  let tree=await f.pane(); assert.match(JSON.stringify(tree),/Check MainSequence connection/); assert.match(JSON.stringify(tree),/Completed/);
+  assert.doesNotMatch(JSON.stringify(tree),/"type":"Code"/);
+  await f.press('toggle-activity-session-1-1'); assert.match(JSON.stringify(await f.pane()),/"type":"Code"/);
+});
+
+test('startup reads existing MainSequence session without saving or rotating credentials', async () => {
+  const {register}=await load(); const f=fixture({ respond: domain => success(domain.request.action, domain.request.action==='workspace-preferences' ? {baseDir:'/existing/repos'} : {backend:'https://saved.example',authenticated:true,username:'saved@example.test'}) });
+  register(f.on); await f.emit('session.start',{surface:'desktop'});
+  for(const timer of f.timers.filter(t=>t.ms===0))timer.callback(); await flush();
+  const tree=await f.pane(); assert.match(JSON.stringify(tree),/saved@example.test/);
+  assert.equal(f.find(tree,'field-backend').props.value,'https://saved.example');
+  assert.equal(f.find(tree,'field-baseDir').props.value,'/existing/repos');
+  assert.equal(f.calls.some(c=>c.store),false);
+  assert.deepEqual(f.calls.filter(c=>c.request).map(c=>c.request.request.action),['workspace-preferences','auth-status']);
+  assert.equal(f.calls.find(c=>c.request?.request.action==='auth-status').request.request.check,false);
+});
+
+test('late repository results cannot restore a previous backend selection', async () => {
+  const {register}=await load();const f=fixture();register(f.on);await f.emit('session.start');
+  await f.field('backend','https://old.example');
+  const originalSpawn=f.$.process.spawn;let finish;
+  f.$.process.spawn=input=>{
+    const envelope=JSON.parse(input.input);
+    if(envelope.request.request.action!=='repositories')return originalSpawn(input);
+    const gate=new Promise(resolve=>{finish=resolve});
+    const stream=(async function*(){await gate;yield{stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:success('repositories',[{uid:'old',code_repository_name:'Old backend repository',branches:[]}])})+'\n'};})();
+    stream.result=Promise.resolve({code:0});return stream;
+  };
+  await f.press('tab-Projects');await f.press('tab-General');await f.field('backend','https://new.example');finish();await flush();
+  f.$.process.spawn=originalSpawn;await f.press('tab-Projects');
+  assert.doesNotMatch(JSON.stringify(await f.pane()),/Old backend repository/);
 });

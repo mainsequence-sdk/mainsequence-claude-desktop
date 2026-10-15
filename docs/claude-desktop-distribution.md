@@ -20,18 +20,19 @@ For manual installation or rollback, download a release ZIP and checksum and use
 **Add plugin → Upload plugin**. Uploading uses Claude's plugin service. Release
 assets are immutable; the previous 0.3.0 preview remains available.
 
-Restore Desktop-managed sign-in before disabling account integration. Account
-profiles and shared MainSequence credentials are retained; explicitly remove
-profiles through Accounts if desired. Closed/crashed sessions can leave durable
-reservations requiring acknowledged release. External-provider settings are untouched.
+For upgrades from 0.3.x, close existing Code sessions and start new ones so old
+account-switching hooks are unloaded. Version 0.4.0 leaves Claude accounts,
+credentials, old profile metadata and external-provider settings intact and unused.
+There is no account migration or cleanup. MainSequence login remains available.
+Downgrading to 0.3.x restores that older version's account feature; it is not a way
+to retain the 0.4.0 authentication boundary.
 
 ## Build and verify
 
 Run `npm ci`, then `npm run release:check`. This builds and tests this repository,
 bundles the pinned shared package, checks docs, packs the ZIP, and verifies it in
 an isolated directory. Set `MS_CLAUDE_DESKTOP_BINARY` to additionally validate and
-run native simulator tests with the actual installed engine. Test credentials are
-synthetic; live account behavior remains tracked in [verification](claude-desktop-verification.md).
+run native simulator tests with the actual installed engine. Tests use synthetic MainSequence responses; live GUI acceptance remains tracked in [verification](claude-desktop-verification.md).
 
 Artifacts contain the plugin's version and bundled devtools name/version/integrity.
 Builds resolve the installed npm dependency, never a sibling directory. Before a
@@ -60,8 +61,7 @@ be resumed only while a release is a draft; published bytes are never replaced.
 The catalog update is a separate generated commit, preserving all source files.
 
 Before stable release, complete the live installation/update/rollback and
-multi-account acceptance checklist. Automatic fixtures cannot establish live
-request ownership or Desktop host-refresh behavior.
+GUI and MainSequence operation acceptance checklist. Automated fixtures do not establish final native window rendering or live backend operation success.
 
 After publication, set `MS_CLAUDE_DESKTOP_BINARY` and run
 `npm run verify:published` from the matching source version. It anonymously checks

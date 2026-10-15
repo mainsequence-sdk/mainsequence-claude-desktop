@@ -1,54 +1,33 @@
-import { PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue } from './model.mjs';
-import { renderPane, renderBand } from './view.mjs';
+import { TABS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue } from './model.mjs';
+import { renderPane } from './view.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
-const activeTurn = state => Boolean(state.mainTurnId || state.agentTurns?.size);
+
+function operationTitle(action) {
+  return ({ 'auth-status': 'Check MainSequence connection', login: 'Sign in to MainSequence', logout: 'Sign out of MainSequence',
+    'refresh-token': 'Renew MainSequence session', repositories: 'Refresh code repositories', setup: 'Set up repository',
+    status: 'Check project status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
+    'mcp-discover': 'Find project MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect project MCP',
+    'mcp-remove': 'Disconnect project MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool',
+    'local-repositories': 'Discover local repositories' })[action] || action.replaceAll('-', ' ');
+}
 
 async function execute($, state, domain, quiet = false) {
   const action = domain.request.action;
+  const contextRevision = state.contextRevision;
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
   if (state.running.size >= 8) return fail(action, 'Wait for a running operation to finish.', 'PROJECT_BUSY');
   const id = `${state.sessionId}-${++state.sequence}`;
-  const op = { id, label: `${domain.scope} · ${action}`, status: 'running', progress: 'Starting…', cancelled: false };
+  const op = { id, title: operationTitle(action), context: domain.scope === 'devtools' && !sessionActions.has(action) ? domain.request.root || 'MainSequence' : 'MainSequence', label: `${domain.scope} · ${action}`, status: 'running', progress: 'Starting…', cancelled: false };
   state.running.set(id, op);
   if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); update($); }
   const envelope = { protocolVersion: 1, id, request: domain };
   let result = await runWorker($, state, envelope, op, message => { op.progress = message; if (!quiet) update($); });
-  if (domain.scope === 'accounts' && result.status === 'success') {
-    const data = record(result.data);
-    state.accountData = publicValue(data);
-    if (data.projection) {
-      const prior = { reference: state.accountReference, selection: state.accountSelection, originalAuth: state.originalAuth,
-        token: await $.env.get('CLAUDE_CODE_OAUTH_TOKEN'), slot: await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR') };
-      try {
-        await projectAccount($, state, data.projection);
-        const confirmation = await runWorker($, state, { protocolVersion: 1, id: `${id}-confirm`, request: request('accounts', 'confirm', {
-          sessionId: state.sessionId, generation: data.projection.generation,
-        }) }, {}, () => {});
-        if (confirmation.status !== 'success') throw new Error('Could not confirm account lease');
-        state.accountData = publicValue(confirmation.data);
-      } catch {
-        // Transitions are serialized. Restore precisely the prior account, never a newer choice.
-        try {
-          await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', prior.slot);
-          await $.env.set('CLAUDE_CODE_OAUTH_TOKEN', prior.token);
-        } catch { state.accountBlocked = true; }
-        state.accountReference = prior.reference; state.accountSelection = prior.selection;
-        state.originalAuth = prior.originalAuth || (state.accountBlocked ? { token: prior.token, slot: prior.slot } : null);
-        const rolledBack = await runWorker($, state, { protocolVersion: 1, id: `${id}-rollback`, request: request('accounts', 'cancel-switch', {
-          sessionId: state.sessionId, generation: data.projection.generation,
-        }) }, {}, () => {}).catch(() => {});
-        if (rolledBack?.status === 'success') state.accountData = publicValue(rolledBack.data);
-        result = fail(action, 'The stored login could not be applied to this session. Sign in again or restore Desktop sign-in.', 'AUTH_REJECTED');
-      }
-    }
-  }
-  // A projection is a private reference, and never part of transcript, activity, or tool results.
   const publicResult = publicValue(result);
   op.status = publicResult.status; op.progress = publicResult.summary; op.result = publicResult;
   state.running.delete(id);
-  state.results[`${domain.scope}.${action}`] = publicResult;
+  if (contextRevision === state.contextRevision && !state.closed) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
 }
@@ -74,16 +53,22 @@ function devRequest(state, action, extra = {}) {
 }
 
 async function runDev($, state, action, extra = {}) {
+  const revision = state.contextRevision;
   let domain;
   try { domain = devRequest(state, action, extra); }
   catch { $.ui.toast('Enter valid JSON object arguments before calling the tool.'); return; }
   if (action === 'mcp-discover') state.mcpOffset = domain.request.offset;
   const result = await execute($, state, domain);
+  if (state.closed || revision !== state.contextRevision) return result;
   if (result.status === 'success' && ['mcp-add', 'mcp-remove'].includes(action)) await refreshTools($, state);
   if (result.status === 'success' && ['login', 'logout', 'refresh-token'].includes(action)) await execute($, state, devRequest(state, 'auth-status', { check: true }), true);
   if (result.status === 'success' && !extra.dryRun && ['sync', 'install', 'update-sdk', 'update-agents', 'install-skills', 'skills-sync', 'env-cleanup'].includes(action)) {
     await execute($, state, devRequest(state, 'status'), true);
     if (action === 'update-sdk' || action === 'install') await execute($, state, devRequest(state, 'sdk-status'), true);
+  }
+  if (result.status === 'success' && action === 'logout') {
+    state.mcpTools = {}; state.selectedMcp = ''; state.selectedLocal = ''; state.fields.repositoryUid = ''; state.fields.branch = '';
+    for (const key of ['devtools.repositories', 'projects.local-repositories', 'devtools.mcp-list', 'devtools.mcp-discover', 'devtools.mcp-tools']) delete state.results[key];
   }
   if (result.status === 'success' && action === 'setup') await runProject($, state, 'local-repositories');
   update($);
@@ -91,6 +76,7 @@ async function runDev($, state, action, extra = {}) {
 }
 
 async function runProject($, state, action, extra = {}) {
+  const revision = state.contextRevision;
   const f = state.fields;
   const values = { root: action.startsWith('delete-local') ? state.selectedLocal : f.root || state.cwd,
     baseDir: f.baseDir, organization: f.organization, ...(f.image ? { image: f.image } : {}), ...(f.platform ? { platform: f.platform } : {}), ...extra };
@@ -98,11 +84,13 @@ async function runProject($, state, action, extra = {}) {
   if (action === 'pick-folder') values.initialPath = f[destination] || state.cwd;
   if (action === 'local-repositories') values.repositories = rows(state.results['devtools.repositories']?.data).map(row => ({ uid: row.uid, name: row.code_repository_name || row.name }));
   const result = await execute($, state, request('projects', action, values));
-  if (result.status !== 'success') return result;
+  if (state.closed || result.status !== 'success' || revision !== state.contextRevision) return result;
   const data = record(result.data);
+  if (action === 'workspace-profile' && typeof data.organization === 'string') state.fields.organization = data.organization;
   if (action === 'pick-folder' && typeof data.path === 'string' && ['root', 'baseDir'].includes(destination)) {
     state.fields[destination] = data.path;
-    if (destination === 'root') { delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
+    if (destination === 'baseDir') { state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
+    if (destination === 'root') { state.contextRevision++; state.confirmation = null; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
   }
   if (action === 'delete-local-preview') state.confirmation = { title: 'Permanently delete local repository', detail: `${data.root}\n${data.warning || ''}`,
     callback: () => runProject($, state, 'delete-local', { ...values, confirmation: data.confirmation }) };
@@ -115,90 +103,6 @@ async function runProject($, state, action, extra = {}) {
   return result;
 }
 
-async function runAccount($, state, action, extra = {}, quiet = false) {
-  if (!state.accountsReady) return fail(action, 'Account APIs are unavailable in this session.', 'UNSUPPORTED_ACTION');
-  const values = { sessionId: state.sessionId,
-    ...(!['list', 'add', 'rotate', 'configure', 'refresh', 'release'].includes(action) && state.selectedAccount ? { accountId: state.selectedAccount } : {}),
-    ...(action === 'add' && state.fields.accountLabel ? { label: state.fields.accountLabel } : {}), ...extra };
-  const changesIdentity = ['select', 'rotate', 'refresh', 'release', 'recover'].includes(action);
-  const work = async () => {
-    if (changesIdentity && activeTurn(state)) {
-      const result = fail(action, 'Wait for the current Claude turn to finish before changing its request account.', 'PROJECT_BUSY');
-      state.results[`accounts.${action}`] = result; $.ui.toast(result.summary); return result;
-    }
-    if (!changesIdentity) return execute($, state, request('accounts', action, values), quiet);
-    state.accountTransition = true;
-    try { return await execute($, state, request('accounts', action, values), quiet); }
-    finally { state.accountTransition = false; }
-  };
-  const result = await (changesIdentity ? queueAccount(state, work) : work());
-  if (result.status === 'success' && action === 'configure') state.accountDraft = null;
-  if (result.status === 'success' && action === 'add') {
-    const added = rows(record(result.data).accounts).at(-1);
-    if (added) state.selectedAccount = added.id;
-  }
-  update($);
-  return result;
-}
-
-async function signInAll($, state) {
-  if (state.signingInAll) return;
-  state.signingInAll = true; update($);
-  try {
-    for (const account of rows(state.accountData?.accounts).filter(row => row.health === 'login-needed')) {
-      const result = await runAccount($, state, 'login', { accountId: account.id });
-      if (result.status !== 'success' || state.closed) break;
-    }
-  } finally { state.signingInAll = false; update($); }
-}
-
-function accountDraft(state) {
-  if (!state.accountDraft) state.accountDraft = { ...record(state.accountData?.config), display: { ...record(state.accountData?.config?.display) } };
-  return state.accountDraft;
-}
-
-async function saveAccountSettings($, state) {
-  const config = accountDraft(state);
-  const fiveHourThreshold = Number(config.fiveHourThreshold ?? 90), weeklyThreshold = Number(config.weeklyThreshold ?? 95);
-  if (![fiveHourThreshold, weeklyThreshold].every(value => Number.isFinite(value) && value > 0 && value <= 100)) {
-    $.ui.toast('Usage thresholds must be greater than 0 and no more than 100.'); return;
-  }
-  await runAccount($, state, 'configure', { config: { ...config, fiveHourThreshold, weeklyThreshold } });
-}
-
-function queueAccount(state, work) {
-  const pending = state.accountQueue.then(work, work);
-  state.accountQueue = pending.catch(() => undefined);
-  return pending;
-}
-
-async function releaseAccount($, state) {
-  return queueAccount(state, async () => {
-    if (activeTurn(state)) { $.ui.toast('Wait for the current Claude turn to finish before restoring Desktop sign-in.'); return; }
-    state.accountTransition = true;
-    try {
-      await restoreAccount($, state);
-      await execute($, state, request('accounts', 'release', { sessionId: state.sessionId }));
-    } finally { state.accountTransition = false; }
-    update($);
-  });
-}
-
-async function drainAutomaticAccountWork($, state) {
-  if (activeTurn(state) || state.closed || !state.accountReference || state.accountData?.config?.mode !== 'automatic') return;
-  const failure = state.pendingAccountFailure;
-  const refresh = state.pendingAccountRefresh;
-  state.pendingAccountFailure = null; state.pendingAccountRefresh = false;
-  if (!failure && !refresh) return;
-  const result = await runAccount($, state, failure ? 'recover' : 'refresh', failure ? { failure } : {}, !failure);
-  if (result.error?.code === 'PROJECT_BUSY') {
-    if (failure) state.pendingAccountFailure = failure; else state.pendingAccountRefresh = true;
-  } else if (failure) $.ui.toast(result.status === 'success'
-    ? 'An eligible account was prepared for your next request. Review the session state before submitting again; nothing was replayed.'
-    : 'Automatic account recovery could not complete. Review Accounts and Activity.');
-  update($);
-}
-
 function toolName(release, name) {
   const value = `${release}:${name}`;
   let hash = 2166136261;
@@ -207,7 +111,9 @@ function toolName(release, name) {
 }
 
 async function refreshTools($, state) {
+  const revision = state.contextRevision;
   const listed = await execute($, state, devRequest(state, 'mcp-list'), true);
+  if (state.closed || revision !== state.contextRevision) return;
   if (listed.status !== 'success') { state.results['mcp.registration'] = publicValue(listed); update($); return; }
   const next = {};
   const unavailable = [];
@@ -215,6 +121,7 @@ async function refreshTools($, state) {
     const releaseUid = connection.resource_release_uid;
     const backend = connection.backend;
     const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, releaseUid }), true);
+    if (state.closed || revision !== state.contextRevision) return;
     if (answer.status !== 'success') { unavailable.push(clean(connection.name)); continue; }
     for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
       const name = toolName(releaseUid, tool.name);
@@ -224,6 +131,7 @@ async function refreshTools($, state) {
     }
   }
   // Removed servers' previously registered names are refused by the handler below.
+  if (state.closed || revision !== state.contextRevision) return;
   state.mcpTools = next;
   state.results['mcp.registration'] = { schemaVersion: 1, action: 'mcp-registration', status: 'success',
     summary: `${Object.keys(next).length} MainSequence tools available from the next prompt.`, data: { unavailable } };
@@ -234,36 +142,55 @@ function actionsFor($, state) {
   const background = work => { void Promise.resolve(work).catch(() => $.ui.toast('The action could not complete. Check Activity and diagnostics.')); };
   return {
     open: () => background($.ui.open({ id: PANE, title: 'MainSequence', focus: true })),
-    tab: tab => { state.tab = tab; update($); },
+    tab: tab => {
+      if (!TABS.includes(tab)) return;
+      state.tab = tab; state.confirmation = null; update($);
+      if (tab === 'Projects' && !state.results['devtools.repositories']) background(loadProjects($, state));
+      if (tab === 'Current Project' && !state.results['devtools.status']) background(runDev($, state, 'status'));
+    },
+    toggle: key => { state.expanded[key] = !state.expanded[key]; update($); },
+    refreshProjects: () => background(loadProjects($, state)),
+    chooseRepository: uid => {
+      state.fields.repositoryUid = uid;
+      const branches = rows(rows(state.results['devtools.repositories']?.data).find(row => row.uid === uid)?.branches);
+      state.fields.branch = branches.length === 1 ? branches[0].repository_branch : '';
+      update($);
+    },
     field: (key, value) => {
       if (Object.hasOwn(state.fields, key)) {
         state.fields[key] = String(value);
         if (key === 'repositoryUid') state.fields.branch = '';
+        if (key === 'backend') {
+          state.contextRevision++;
+          state.fields.repositoryUid = ''; state.fields.branch = ''; state.fields.organization = ''; state.selectedLocal = '';
+          for (const resultKey of Object.keys(state.results)) delete state.results[resultKey];
+          state.selectedMcp = ''; state.mcpTools = {}; state.confirmation = null;
+        }
+        if (key === 'baseDir') { state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
+        if (key === 'root' || key === 'projectType') { state.contextRevision++; state.confirmation = null; }
         if (key === 'root' || key === 'projectType' || key === 'backend') { delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
       }
       update($);
     },
     selectLocal: value => { state.selectedLocal = value; update($); },
-    selectAccount: value => { state.selectedAccount = value; update($); },
     selectMcp: value => { state.selectedMcp = value; update($); },
-    useLocal: () => { state.fields.root = state.selectedLocal; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; state.tab = 'Current Project'; update($); },
+    useLocal: () => { state.contextRevision++; state.confirmation = null; state.fields.root = state.selectedLocal; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; state.tab = 'Current Project'; update($); },
     dev: (action, extra) => background(runDev($, state, action, extra)),
     project: (action, extra) => background(runProject($, state, action, extra)),
-    account: (action, extra) => background(runAccount($, state, action, extra)),
-    signInAll: () => background(signInAll($, state)),
-    accountSetting: (key, value) => { const draft = accountDraft(state); if (key.startsWith('display.')) draft.display[key.slice(8)] = value; else draft[key] = value; update($); },
-    accountEligibility: id => { const draft = accountDraft(state); const ids = draft.eligibleAccountIds || rows(state.accountData?.accounts).map(row => row.id);
-      draft.eligibleAccountIds = ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id]; update($); },
-    saveAccountSettings: () => background(saveAccountSettings($, state)),
-    releaseAccount: () => background(releaseAccount($, state)),
     refreshTools: () => background(refreshTools($, state)),
     confirm: (title, detail, callback) => { state.confirmation = { title, detail, callback }; update($); },
     dismiss: () => { state.confirmation = null; update($); },
     accept: () => { const confirmation = state.confirmation; state.confirmation = null; update($); if (confirmation) background(confirmation.callback()); },
     cancel: id => { const op = state.operations.find(value => value.id === id); if (op?.cancel) { op.progress = 'Cancelling…'; background(op.cancel()); update($); } },
-    saveSettings: () => background($.store.set('settings', { backend: state.fields.backend, baseDir: state.fields.baseDir,
-      organization: state.fields.organization, nodePath: state.fields.nodePath, claudeExecutable: state.fields.claudeExecutable }).then(() => $.ui.toast('MainSequence settings saved.'))),
+    saveSettings: () => background(saveSettings($, state)),
   };
+}
+
+async function saveSettings($, state) {
+  const saved = record(await $.store.get('settings'));
+  await $.store.set('settings', { ...saved, backend: state.fields.backend, baseDir: state.fields.baseDir,
+    organization: state.fields.organization, nodePath: state.fields.nodePath });
+  $.ui.toast('MainSequence settings saved.');
 }
 
 async function boot($, state, e) {
@@ -274,25 +201,49 @@ async function boot($, state, e) {
   state.version = typeof version === 'string' ? version : version?.version || version?.full || '';
   // The loader validates every named API. Reading an API method as a value is forbidden.
   state.ready = meetsVersion(state.version, [2, 1, 286]);
-  state.accountsReady = state.ready;
   state.problem = state.ready ? '' : 'Update Claude Desktop: this mod needs bundled Claude Code 2.1.286+ and streaming process support.';
   const saved = record(await $.store.get('settings'));
-  for (const key of ['backend', 'baseDir', 'organization', 'nodePath', 'claudeExecutable']) if (typeof saved[key] === 'string') state.fields[key] = saved[key];
+  for (const key of ['backend', 'baseDir', 'organization', 'nodePath']) if (typeof saved[key] === 'string') state.fields[key] = saved[key];
   await $.command.register({ name: 'ms', description: 'Open MainSequence developer tools', immediate: true });
-  state.timers.push($.clock.every(60_000, () => {
-    if (state.accountReference && !state.closed) void runAccount($, state, 'list', {}, true).catch(() => {});
-  }));
+  if (e.surface === 'desktop') {
+    // Register the native pane without stealing focus or adding a composer band.
+    await $.ui.open({ id: PANE, title: 'MainSequence' });
+    state.timers.push($.clock.after(0, () => { void initializeWorkspace($, state).catch(() => { state.initializing = false; update($); }); }));
+  }
   update($);
+}
+
+async function initializeWorkspace($, state) {
+  if (!state.ready || state.closed) return;
+  state.initializing = true; update($);
+  const revision = state.contextRevision;
+  try {
+    const preferences = await execute($, state, request('projects', 'workspace-preferences'), true);
+    if (state.closed || revision !== state.contextRevision) return;
+    if (!state.fields.baseDir && typeof preferences.data?.baseDir === 'string') state.fields.baseDir = preferences.data.baseDir;
+    const session = await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
+    if (state.closed || revision !== state.contextRevision) return;
+    if (!state.fields.backend && typeof session.data?.backend === 'string') state.fields.backend = session.data.backend;
+  } finally { state.initializing = false; update($); }
+}
+
+async function loadProjects($, state) {
+  if (state.projectsLoading) return;
+  state.projectsLoading = true; update($);
+  const revision = state.contextRevision;
+  try {
+    const listed = await runDev($, state, 'repositories');
+    if (state.closed || revision !== state.contextRevision || listed?.status !== 'success') return;
+    if (!state.fields.organization && state.fields.backend) await runProject($, state, 'workspace-profile', { backend: state.fields.backend });
+    if (state.closed || revision !== state.contextRevision) return;
+    if (state.fields.baseDir && state.fields.organization) await runProject($, state, 'local-repositories');
+  } finally { state.projectsLoading = false; update($); }
 }
 
 export function register(on, options = {}) {
   const state = initialState(options);
   on('session.start', async ($, e, next) => { await boot($, state, e); return next(e); });
   on('command.run', { command: 'ms' }, async ($) => { await $.ui.open({ id: PANE, title: 'MainSequence', focus: true }); return {}; });
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e);
-    return renderBand($.ui.resolve(e), state, actionsFor($, state), await next(e));
-  });
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
     return renderPane($.ui.resolve(e), state, actionsFor($, state));
@@ -306,60 +257,10 @@ export function register(on, options = {}) {
     const result = await execute($, state, request('devtools', 'mcp-call', { ...entry, arguments: arguments_ }));
     return { result: publicValue(result), ...(result.status !== 'success' ? { isError: true } : {}) };
   }).catch(() => ({ deny: 'MainSequence could not confirm or run this tool call.' }));
-  on('prompt.submit', async ($, e, next) => {
-    const valid = await queueAccount(state, async () => {
-      if (state.accountBlocked) return false;
-      if (!state.accountReference) return true;
-      try { await projectAccount($, state, state.accountReference, true); return true; }
-      catch { $.ui.toast('The selected Claude login needs renewal. Sign in again or deliberately use Desktop sign-in.'); return false; }
-    });
-    if (!valid) return { drop: 'The selected Claude account could not be renewed. This prompt was not sent.' };
-    return next(e);
-  }).catch(() => ({ drop: 'MainSequence could not verify the selected account. This prompt was not sent.' }));
-  on('turn.start', async ($, e, next) => {
-    state.mainTurnId = e.turnId; update($);
-    return next(e);
-  });
-  on('turn.step', async function* ($, e, next) {
-    if (state.accountTransition || state.accountBlocked) {
-      try { $.ui.toast('The request account is changing or needs attention. No model request was sent; check Accounts before submitting again.'); } catch { /* Keep this boundary closed even when the host cannot display a notice. */ }
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: null, usage: null };
-    }
-    if (e.agentId) state.agentTurns.add(e.turnId);
-    return yield* next(e);
-  });
-  on('turn.complete', async ($, e, next) => {
-    if (e.agentId) state.agentTurns.delete(e.turnId);
-    if (!e.agentId && (!state.mainTurnId || state.mainTurnId === e.turnId)) {
-      state.mainTurnId = null;
-    }
-    void drainAutomaticAccountWork($, state).catch(() => {}); update($);
-    return next(e);
-  });
-  on('session.measure', async ($, e, next) => {
-    if (state.accountReference && state.accountData?.config?.mode === 'automatic' && e.changed?.includes('rateLimits')) {
-      state.pendingAccountRefresh = true;
-      void drainAutomaticAccountWork($, state).catch(() => {});
-    }
-    return next(e);
-  });
-  on('classic.StopFailure', async ($, e, next) => {
-    if (state.accountReference && state.accountData?.config?.mode === 'automatic' && !e.agent_id
-      && ['rate_limit', 'authentication_failed'].includes(e.error)) {
-      state.pendingAccountFailure = e.error;
-      void drainAutomaticAccountWork($, state).catch(() => {});
-    }
-    return next(e);
-  });
   on('session.end', async ($, e, next) => {
-    state.mainTurnId = null;
-    state.agentTurns.clear();
+    state.closed = true;
     for (const op of state.running.values()) if (op.status === 'running' && op.cancel) void op.cancel().catch(() => {});
     for (const timer of state.timers) timer.cancel();
-    await state.accountQueue;
-    await restoreAccount($, state).catch(() => {});
-    if (state.accountsReady) await runAccount($, state, 'release', {}, true).catch(() => {});
-    state.closed = true;
     return next(e);
   });
 }
@@ -377,8 +278,7 @@ export async function runWorker($, state, envelope, operation, onProgress) {
   let invalid = false;
   let timedOut = false;
   try {
-    child = $.process.spawn({ argv: [state.fields.nodePath, `${$.plugin.root}/dist/claudeRunner.js`], cwd: state.cwd, input,
-      ...(state.fields.claudeExecutable ? { env: { MAINSEQUENCE_CLAUDE_EXECUTABLE: state.fields.claudeExecutable } } : {}) });
+    child = $.process.spawn({ argv: [state.fields.nodePath, `${$.plugin.root}/dist/claudeRunner.js`], cwd: state.cwd, input });
     operation.cancel = () => { operation.cancelled = true; return child.return({ code: null, signal: 'SIGTERM' }); };
     timer = $.clock.after(1_800_000, () => { timedOut = true; return child.return({ code: null, signal: 'SIGTERM' }); });
     for await (const chunk of child) {
@@ -408,50 +308,4 @@ export async function runWorker($, state, envelope, operation, onProgress) {
   return operation.cancelled ? fail(action, 'The operation was cancelled.', 'CANCELLED', true)
     : timedOut ? fail(action, 'The operation timed out.', 'PROCESS_TIMEOUT', true)
     : fail(action, 'The MainSequence worker did not report a valid result. Check Node 22+ and the plugin installation.', 'PROCESS_FAILED', true);
-}
-
-/** A credential is read only into this call stack and projected into the engine environment. */
-export async function projectAccount($, state, projection, reassert = false) {
-  const ref = projection?.credential;
-  if (!ref || typeof projection.slot !== 'string' || typeof projection.generation !== 'string') throw new Error('Invalid credential reference');
-  let serialized;
-  if (ref.kind === 'keychain' && typeof ref.service === 'string' && typeof ref.user === 'string') {
-    const response = await $.process.run(['/usr/bin/security', 'find-generic-password', '-a', ref.user, '-w', '-s', ref.service], { timeoutMs: 10_000 });
-    if (response.exitCode !== 0) throw new Error('Stored sign-in is unavailable');
-    serialized = response.stdout;
-  } else if (ref.kind === 'file' && typeof ref.path === 'string') serialized = await $.fs.read(ref.path);
-  else throw new Error('Unsupported credential reference');
-  const parsed = JSON.parse(serialized);
-  const credential = parsed?.claudeAiOauth;
-  if (typeof credential?.accessToken !== 'string' || !credential.accessToken || typeof credential.expiresAt !== 'number'
-    || credential.expiresAt <= await $.clock.now() + 60_000) throw new Error('Stored sign-in needs renewal');
-  if (!state.originalAuth) state.originalAuth = {
-    token: await $.env.get('CLAUDE_CODE_OAUTH_TOKEN'), slot: await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR'),
-  };
-  // Keep both switches in the same callback. Failed projection restores the prior engine values.
-  const beforeToken = await $.env.get('CLAUDE_CODE_OAUTH_TOKEN');
-  const beforeSlot = await $.env.get('CLAUDE_SECURESTORAGE_CONFIG_DIR');
-  if (!reassert && activeTurn(state)) throw new Error('Wait for the active turn to finish');
-  try {
-    await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', projection.slot || undefined);
-    await $.env.set('CLAUDE_CODE_OAUTH_TOKEN', credential.accessToken);
-  } catch {
-    await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', beforeSlot);
-    await $.env.set('CLAUDE_CODE_OAUTH_TOKEN', beforeToken);
-    throw new Error('The engine refused the account change');
-  }
-  state.accountReference = projection;
-  state.accountBlocked = false;
-  state.accountSelection = `${projection.accountId} · request identity unverified`;
-}
-
-export async function restoreAccount($, state) {
-  if (state.originalAuth) {
-    await $.env.set('CLAUDE_SECURESTORAGE_CONFIG_DIR', state.originalAuth.slot);
-    await $.env.set('CLAUDE_CODE_OAUTH_TOKEN', state.originalAuth.token);
-  }
-  state.originalAuth = null;
-  state.accountReference = null;
-  state.accountBlocked = false;
-  state.accountSelection = 'Desktop sign-in';
 }

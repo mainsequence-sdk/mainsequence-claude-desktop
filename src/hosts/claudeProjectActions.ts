@@ -1,15 +1,18 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { ActionResult, HostServices, ToolingError, createProjectOperations,
-  PROJECT_OPERATION_ACTIONS, ProjectOperationRequest } from '@dev-mainsequence/devtools';
+  PROJECT_OPERATION_ACTIONS, ProjectOperationRequest, RepositoryClient, createSessionService, requireBackend, safeSlug } from '@dev-mainsequence/devtools';
 import { claudeFailure } from './claudeProtocol';
 
 export type ClaudeProjectRequest = ProjectOperationRequest
   | { action: 'runtime-diagnostics' }
+  | { action: 'workspace-preferences' }
+  | { action: 'workspace-profile'; backend: string }
   | { action: 'pick-folder'; initialPath?: string }
   | { action: 'open-container'; root: string };
 export const CLAUDE_PROJECT_ACTIONS = new Set([
-  ...PROJECT_OPERATION_ACTIONS, 'runtime-diagnostics', 'pick-folder', 'open-container',
+  ...PROJECT_OPERATION_ACTIONS, 'runtime-diagnostics', 'workspace-preferences', 'workspace-profile', 'pick-folder', 'open-container',
 ]);
 export type ClaudeProjectOptions = {
   host: HostServices; signal?: AbortSignal; env?: NodeJS.ProcessEnv;
@@ -41,7 +44,22 @@ export function createClaudeProjectActions(options: ClaudeProjectOptions) {
     try {
       options.signal?.throwIfAborted();
       let data: unknown;
-      if (request.action === 'runtime-diagnostics') {
+      if (request.action === 'workspace-preferences') {
+        // Read the existing VS Code/CLI preference for this host. Do not rewrite
+        // that file, and never import token.json or credential fields.
+        const env = options.env || process.env;
+        const directory = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support', 'MainSequenceCLI')
+          : process.platform === 'win32' ? path.join(env.APPDATA || os.homedir(), 'MainSequenceCLI') : path.join(os.homedir(), '.config', 'mainsequence');
+        const configPath = options.configPath || path.join(directory, 'config.json');
+        const config = await fs.readFile(configPath, 'utf8').then(text => JSON.parse(text)).catch(() => ({}));
+        const folder = config?.mainsequence_path;
+        data = { baseDir: typeof folder === 'string' && path.isAbsolute(folder) && !/[\0\r\n]/.test(folder)
+          ? folder : path.join(os.homedir(), 'mainsequence') };
+      } else if (request.action === 'workspace-profile') {
+        const session = createSessionService(options.host, { env: options.env, signal: options.signal });
+        const profile = await new RepositoryClient(session, requireBackend(request.backend)).getCurrentUserProfile();
+        data = { organization: safeSlug(profile.organization || 'default') };
+      } else if (request.action === 'runtime-diagnostics') {
         data = { version: options.version ?? 'unknown', nodeVersion: process.version,
           platform: `${process.platform} ${process.arch}`, pluginRoot: options.pluginRoot, configPath: options.configPath,
           bundleHealth: { compiledEntry: await fs.stat(path.join(__dirname, '..', 'claudeRunner.js')).then(item => item.isFile()).catch(() => false),

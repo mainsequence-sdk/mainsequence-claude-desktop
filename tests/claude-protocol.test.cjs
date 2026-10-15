@@ -7,7 +7,7 @@ const { parseClaudeEnvelope, executeClaudeEnvelope } = require('../dist/hosts/cl
 const envelope = (scope, request) => ({ protocolVersion: 1, id: 'test-1', request: { scope, request } });
 test('Desktop worker routes structured actions without interpreting shell or model text', async () => {
   const seen = [];
-  const handlers = Object.fromEntries(['devtools', 'projects', 'accounts'].map(scope => [scope, async request => {
+  const handlers = Object.fromEntries(['devtools', 'projects'].map(scope => [scope, async request => {
     seen.push({ scope, request });
     return { schemaVersion: 1, action: request.action, status: 'success', summary: scope };
   }]));
@@ -19,9 +19,9 @@ test('Desktop worker routes structured actions without interpreting shell or mod
 });
 test('invalid Desktop protocol cannot reach a handler', async () => {
   const dispatch = async () => assert.fail('invalid request dispatched');
-  const handlers = { devtools: dispatch, projects: dispatch, accounts: dispatch };
+  const handlers = { devtools: dispatch, projects: dispatch };
   for (const input of [null, [], {}, { ...envelope('devtools', { action: 'status' }), protocolVersion: 2 },
-    envelope('shell', { action: 'exec' }), envelope('devtools', { action: 'rm -rf' }),
+    envelope('accounts', { action: 'list' }), envelope('shell', { action: 'exec' }), envelope('devtools', { action: 'rm -rf' }),
     { ...envelope('accounts', { action: 'list' }), id: 'line\nbreak' },
     { ...envelope('devtools', { action: 'status' }), env: { TOKEN: 'not-a-supported-field' } }]) {
     assert.throws(() => parseClaudeEnvelope(input));
@@ -47,5 +47,14 @@ test('worker rejects malformed and oversized input without echoing it', () => {
     assert.equal(message.result.status, 'failure');
     assert.equal(message.result.error.code, 'INVALID_REQUEST');
     assert.ok(!result.stdout.includes('secret-malformed-fixture'));
+  }
+});
+
+
+test('legacy account requests are rejected by the packaged worker', () => {
+  for(const action of ['list','select','rotate','login','remove','configure','release']) {
+    const result=spawnSync(process.execPath,[path.resolve(__dirname,'../claude/dist/claudeRunner.js')],{input:JSON.stringify(envelope('accounts',{action})),encoding:'utf8',timeout:10000});
+    assert.equal(result.status,0,result.stderr);const message=JSON.parse(result.stdout.trim());
+    assert.equal(message.result.error.code,'INVALID_REQUEST');
   }
 });

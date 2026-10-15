@@ -1,32 +1,44 @@
 # MainSequence for Claude Desktop Code
 
-This repository owns the Claude Desktop integration: native UI, lifecycle hooks,
-Claude account switching, worker transport, tests, packaging and marketplace.
-Reusable MainSequence functionality comes from the exact version of
-`@dev-mainsequence/devtools` pinned in package.json and package-lock.json.
+MainSequence adds one native developer-tools pane with **General, Projects,
+Current Project, MCP and Activity**. General keeps MainSequence browser login,
+session renewal, connection checks and workspace settings. The pane uses the
+MainSequence emblem and one coordinated section selection; it adds no strip above
+the prompt.
+
+Version **0.4.0** removes Claude account switching, rotation, quota controls,
+credential overrides and account workers. Claude manages its own accounts and model
+providers. Existing credentials, saved profiles and provider configuration are
+retained; this release has no account migration or deletion routine.
 
 ## Install
 
-In Claude Desktop, open **Customize → Plugins → Add marketplace → Add from repository**
-and enter `https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git`.
-Install **MainSequence** from `mainsequence-desktop` and enable it in a local Code session.
-Node 22+ is required. See [installation and features](docs/claude-desktop.md).
+Use the published marketplace in Claude Desktop: **Customize → Plugins → Add
+marketplace → Add from repository**, then enter
+`https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git`.
+Install MainSequence from `mainsequence-desktop` and enable it in a local Code
+session. The marketplace serves the published version; a local build does not
+update it. Node 22+ is required.
 
-This is a preview. Live account request identity/host refresh remain unverified;
-signed terminal, session-folder switching and container launching remain host gaps.
-See [verification](docs/claude-desktop-verification.md).
+For an approved local build, use the ZIP produced by `npm run pack:claude` with
+Claude's **Add plugin → Upload plugin** flow. Restart existing Code sessions after
+upgrading from 0.3.x so the removed hooks cannot remain loaded in an old process.
+See [installation, features and upgrade behavior](docs/claude-desktop.md).
 
-## Develop
+## Architecture and development
 
-Run `npm ci`, `npm test`, then `npm run pack:claude`. The build bundles the pinned
-shared package and this repository's worker into a self-contained plugin ZIP.
-It does not copy shared source from another checkout or require runtime npm access.
-Use `npm run release:check` before creating a release. Set
-`MS_CLAUDE_DESKTOP_BINARY` to run native engine validation and simulator tests.
+This repository owns Claude UI, lifecycle hooks, worker transport, tests and
+releases. Shared functionality is imported from the exact published
+`@dev-mainsequence/devtools` dependency. It is bundled into the ZIP; no sibling
+checkout, backend change or runtime npm download is required.
+
+Run `npm ci` and `npm run release:check`. Set `MS_CLAUDE_DESKTOP_BINARY` to include
+native loader validation and simulator tests against Desktop's bundled engine.
 
 - [Architecture and dependency boundaries](docs/adr/0004-claude-desktop-mod.md)
 - [Distribution, updates and rollback](docs/claude-desktop-distribution.md)
-- [Shared devtools source and API](https://github.com/mainsequence-sdk/mainsequence-devtools)
+- [Verification and remaining host limitations](docs/claude-desktop-verification.md)
+- [Shared devtools source](https://github.com/mainsequence-sdk/mainsequence-devtools)
 
-Plugin and shared-package versions are independent. Release archives have pinned
-checksums; users' account/profile configuration is independent of plugin updates.
+Signed terminal, changing the Code session's root, and container-session launching
+remain host limitations. Native layout chrome/placement is controlled by Claude.

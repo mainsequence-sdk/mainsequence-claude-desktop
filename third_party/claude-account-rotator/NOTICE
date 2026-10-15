@@ -1,9 +1,8 @@
-Account rotation behavior and native Claude credential naming are adapted from:
+Historical attribution for the account integration in releases before 0.4.0:
 https://github.com/ivokund/claude-account-rotator
 Revision: 60d5aed19856d548611472ca85c8836bfaa4bcd3 (2026-10-13)
 Copyright (c) 2026 Ivo Kund. Used under the MIT license in LICENSE.
 
-This implementation replaces shared numeric slots with unique profiles,
-atomic metadata transactions and session leases. It uses a separate Desktop
-credential-reference adapter; tokens are never returned in public action results.
-The reference project's terminal renderer is not included.
+Version 0.4.0 removes Claude account switching and rotation, credential adapters,
+profile management, and all associated runtime hooks. No account-rotator runtime
+or terminal renderer is included. This notice and license retain historical credit.

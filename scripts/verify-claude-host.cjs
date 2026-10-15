@@ -33,4 +33,4 @@ if (process.env.MS_CLAUDE_DESKTOP_BINARY) {
     process.stdout.write(result.stdout || '');
     assert.equal(result.status, 0, result.stderr || result.error?.message || `Native plugin ${command} failed`);
   }
-} else console.log('Native loader/GUI/account checks not run: set MS_CLAUDE_DESKTOP_BINARY for loader validation; follow the live acceptance checklist.');
+} else console.log('Native loader/GUI checks not run: set MS_CLAUDE_DESKTOP_BINARY for loader validation; follow the live acceptance checklist.');

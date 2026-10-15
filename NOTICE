@@ -3,6 +3,9 @@ MainSequence Claude Desktop integration, Copyright MainSequence SDK, MIT.
 Reusable MainSequence developer tooling is bundled from @dev-mainsequence/devtools.
 Its license and attribution are included in dist/vendor/devtools in the plugin ZIP.
 
-Claude account profile, usage and rotation concepts are adapted from
+Earlier releases adapted Claude account profile, usage and rotation concepts from
 ivokund/claude-account-rotator, commit 60d5aed19856d548611472ca85c8836bfaa4bcd3.
 Copyright (c) 2026 Ivo Kund, MIT. See third_party/claude-account-rotator/LICENSE.
+
+Version 0.4.0 removes that account integration. Its historical attribution is retained; no rotator runtime is bundled.
+The MainSequence emblem is supplied by MainSequencePublic.
