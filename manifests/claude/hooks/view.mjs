@@ -67,8 +67,11 @@ export function renderPane(ui, state, actions) {
           ? column(['login', 'refresh-token', 'logout'].map(action => state.results[`devtools.${action}`]).filter(value => value?.status === 'failure').map(value => text(value.summary))) : null,
       ]),
       card('Workspace settings', [
-        input('backend', 'Backend URL', 'https://api.main-sequence.app'),
+        input('backend', 'Backend URL'),
         input('baseDir', 'Code repositories folder'),
+        muted('These values are used now. Save settings keeps your edits for future sessions.'),
+        state.preferencesLoading && muted('Loading workspace settings…'),
+        state.results['projects.workspace-preferences']?.status === 'failure' && muted('Saved workspace preferences could not be read. Check the displayed values before continuing.'),
         buttons([button('pick-base', 'Choose folder', project('pick-folder', { destination: 'baseDir' })), button('save-settings', 'Save settings', actions.saveSettings)]),
       ]),
       card('Advanced', [
@@ -159,26 +162,42 @@ export function renderPane(ui, state, actions) {
     ]);
   }
   if (state.tab === 'MCP') {
-    const discovered = rows(state.results['devtools.mcp-discover']?.data);
-    const connected = rows(state.results['devtools.mcp-list']?.data);
+    const environments = rows(state.results['devtools.mcp-environments']?.data);
+    const environment = environments.find(row => row.uid === f.mcpEnvironment);
+    const matches = row => row.mcp_connection?.organization_environment_uid === f.mcpEnvironment;
+    const label = row => clean(`${row.name} · ${row.mcp_connection?.organization_environment_name || environment?.name || 'Unknown environment'}`);
+    const discovered = rows(state.results['devtools.mcp-discover']?.data).filter(matches);
+    const connected = rows(state.results['devtools.mcp-list']?.data).filter(matches);
     const tools = record(state.results['devtools.mcp-tools']?.data).tools;
     body = column([
-      card('Find project MCPs', [
-      input('mcpSearch', 'Search project MCPs'), buttons([button('mcp-discover', 'Find project MCPs', dev('mcp-discover', { offset: 0 })),
-        button('mcp-next', 'Next page', dev('mcp-discover', { offset: state.mcpOffset + 25 }), discovered.length > 0), button('mcp-list', 'Refresh connections', dev('mcp-list'))]),
-      select('mcp-discovered', 'Discovered MCP', discovered.map(row => ({ value: row.resource_release_uid || row.uid, label: clean(`${row.name} · ${row.mcp_connection?.organization_environment_name || ''}`) })), state.selectedMcp, actions.selectMcp),
-      button('mcp-add', 'Connect selected MCP', mut('Connect project MCP', dev('mcp-add')), !!state.selectedMcp),
+      card('Organization environment', [
+        state.environmentsLoading && muted('Loading organization environments…'),
+        select('mcp-environment', 'Environment', environments.map(row => ({ value: row.uid, label: clean(row.name) + (row.isProduction ? ' · Production' : '') })), f.mcpEnvironment, actions.selectEnvironment),
+        environment ? line('Active environment', environment.name) : muted('Choose an environment to find MCPs and enable its tools.'),
+        muted('Only this environment’s MCPs are shown and available to Claude. Connections in other environments stay saved.'),
+        button('mcp-environments', 'Refresh environments', actions.refreshEnvironments, !state.environmentsLoading),
+        state.results['devtools.mcp-environments']?.status === 'failure' && text(state.results['devtools.mcp-environments'].summary),
+        !state.environmentsLoading && state.results['devtools.mcp-environments']?.status === 'success' && !environments.length && muted('No organization environments are available for this account.'),
       ]),
-      card('Connected MCPs', [
-      select('mcp-connected', 'Connected MCP', connected.map(row => ({ value: row.resource_release_uid, label: clean(`${row.name} · ${row.mcp_connection?.organization_environment_name || ''}`) })), state.selectedMcp, actions.selectMcp),
+      environment && card('Find project MCPs', [
+      input('mcpSearch', 'Search project MCPs'), buttons([button('mcp-discover', 'Find project MCPs', dev('mcp-discover', { offset: 0 })),
+        button('mcp-next', 'Next page', dev('mcp-discover', { offset: state.mcpOffset + 25 }), state.mcpOffset + discovered.length < (state.results['devtools.mcp-discover']?.data?.count || 0)), button('mcp-list', 'Refresh connections', dev('mcp-list'))]),
+      select('mcp-discovered', 'Discovered MCP', discovered.map(row => ({ value: row.resource_release_uid || row.uid, label: label(row) })), state.selectedMcp, actions.selectMcp),
+      button('mcp-add', 'Connect selected MCP', mut('Connect project MCP', dev('mcp-add')), discovered.some(row => row.resource_release_uid === state.selectedMcp)),
+      !discovered.length && state.results['devtools.mcp-discover']?.status === 'success' && muted('No MCPs found in this environment.'),
+      result('devtools.mcp-discover'),
+      ]),
+      environment && card('Connected MCPs', [
+      select('mcp-connected', 'Connected MCP', connected.map(row => ({ value: row.resource_release_uid, label: label(row) })), state.selectedMcp, actions.selectMcp),
       buttons([button('mcp-tools', 'View tools', dev('mcp-tools'), !!state.selectedMcp),
         button('mcp-remove', 'Disconnect selected MCP', mut('Disconnect project MCP', dev('mcp-remove')), !!state.selectedMcp),
         button('mcp-register', 'Refresh Claude tools', actions.refreshTools)]),
       ]),
-      card('Tool explorer', [
+      environment && card('Tool explorer', [
       Array.isArray(tools) && select('mcp-tool', 'MCP tool', tools.map(tool => ({ value: tool.name, label: clean(tool.name) })), f.mcpTool, value => actions.field('mcpTool', value)),
       input('mcpTool', 'Tool name'), input('mcpArguments', 'Arguments (JSON object)'),
       button('mcp-call', 'Review and call tool', mut('Call project MCP tool', dev('mcp-call'), `Call ${f.mcpTool || 'the selected tool'} with the JSON arguments shown. The operation may change remote state.`), !!state.selectedMcp && !!f.mcpTool),
+      state.selectedMcp && line('Environment', environment.name),
       result('devtools.mcp-tools'), result('devtools.mcp-call'), result('mcp.registration'),
       ]),
     ]);

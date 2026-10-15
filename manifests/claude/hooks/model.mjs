@@ -6,10 +6,10 @@ export const rows = value => Array.isArray(value) ? value : Array.isArray(value?
 export const request = (scope, action, values = {}) => ({ scope, request: { action, ...values } });
 export function initialState(options = {}) {
   return { tab: 'General', expanded: {}, contextRevision: 0, initializing: false, projectsLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
-    fields: { backend: '', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
-      image: '', platform: '', mcpSearch: '', mcpTool: '', mcpArguments: '{}',
+    fields: { backend: 'https://api.main-sequence.app', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
+      image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },
-    operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
+    editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };
 }
 export function meetsVersion(value, minimum = [2, 1, 296]) {

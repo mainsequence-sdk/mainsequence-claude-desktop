@@ -31,9 +31,9 @@ test('workspace preferences reuse only the existing folder and never rewrite con
   const {root}=await localProject(t),configPath=path.join(root,'config.json');
   const original=JSON.stringify({mainsequence_path:root,provider:{key:'fixture-only'},accessToken:'fixture-session'});
   await fs.writeFile(configPath,original);
-  const actions=createClaudeProjectActions({host:createNodeHost(),configPath});
+  const actions=createClaudeProjectActions({host:createNodeHost(),configPath,env:{}});
   const result=await actions.dispatch({action:'workspace-preferences'});
-  assert.deepEqual(result.data,{baseDir:root});
+  assert.deepEqual(result.data,{backend:'https://api.main-sequence.app',baseDir:root});
   assert.equal(await fs.readFile(configPath,'utf8'),original);
   assert.doesNotMatch(JSON.stringify(result),/fixture-only|fixture-session/);
   await fs.writeFile(configPath,JSON.stringify({mainsequence_path:'relative-path'}));

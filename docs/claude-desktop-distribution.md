@@ -15,7 +15,12 @@ The catalog pins a versioned ZIP and SHA-256 digest. Node 22+ is required, and t
 [guide](claude-desktop.md) lists project-operation prerequisites. Installation does
 not need this source checkout or runtime npm downloads.
 
-Refresh/update through Claude's plugin manager, then reload local Code sessions.
+Refresh the marketplace and update the installed plugin, then start a fresh Code
+session. `/reload-plugins` only reloads the installed copy; it does not download an
+update. Desktop builds that show only Remove on the local marketplace card need
+Claude's built-in updater (`plugin marketplace update mainsequence-desktop`, then
+`plugin update mainsequence@mainsequence-desktop --scope user`) through the bundled
+engine. Updating is separate from manual ZIP installation.
 For manual installation or rollback, download a release ZIP and checksum and use
 **Add plugin → Upload plugin**. Uploading uses Claude's plugin service. Release
 assets are immutable; the previous 0.3.0 preview remains available.
