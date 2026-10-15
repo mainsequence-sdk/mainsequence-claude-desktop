@@ -64,7 +64,8 @@ checklist from 0.3.x is retired because the feature is removed.
 Claude controls pane placement and native button appearance. A browser mockup is
 not a screenshot of the native application. The API does not expose the custom
 right-toolbar registration used in the original request; the plugin opens its own
-native pane and provides `/ms` to reopen it.
+native pane and adds a `SessionMode` footer launcher to reopen it. `/ms` remains
+an optional fallback. Closing the pane does not unregister the footer hook.
 
 Signed native terminals, changing the Code session's working directory and launching
 container sessions remain unavailable. Shared folder reveal and operation-target
@@ -177,3 +178,50 @@ not stopped, reloaded or restarted. A fresh local Code session is required to lo
 the new hooks. Final live pane styling and live agent conversation acceptance remain
 pending; no live agent messages, task creation, sign-in changes or backend changes
 were performed. Draft onboarding documentation PR #6 was left unchanged.
+
+
+## 0.4.3 persistent launcher
+
+The user approved the footer-button placement preview on 2026-10-15. The launcher
+uses Desktop's `SessionMode` render site independently of the `Pane` site and
+preserves `next(e)` so native footer content remains. The MainSequencePublic emblem
+is reused. Pressing the button only calls `ui.open` for the existing pane ID; no
+command is inserted, model prompt submitted, setting saved or credential accessed.
+Terminal rendering is passed through. There is no `AbovePrompt` strip or application
+patch. Existing accounts, provider configuration and settings require no migration.
+
+Node regression coverage checks footer composition, reopen behavior, terminal
+passthrough, unchanged settings and sanitized open failures. A native simulator
+test mounts the footer, unmounts the pane render site, and presses the surviving
+launcher again.
+Live Desktop evidence is recorded below; simulator results alone do not establish
+that the host displays the footer site in the normal application.
+
+Automated candidate evidence (2026-10-15): all 37 Node tests, typechecking,
+documentation and portable distribution checks passed. Desktop's bundled Code
+2.1.295 validated the plugin and passed all five native simulator tests. Tests use
+disposable configuration and synthetic responses. The native harness validates
+render-site lifecycle and button dispatch; the live window check remains separate.
+
+### Live Desktop candidate verification
+
+On 2026-10-15 the candidate hook was temporarily staged in the installed plugin,
+with the original hook backed up and its source digest checked first. All eight
+protected account/configuration/store snapshots were byte-identical immediately
+after staging. The normal marketplace catalog was still on 0.4.2 during this check.
+
+In a fresh, empty local Code session prepared by the user, Claude's built-in
+`/reload-plugins` command loaded the candidate. The MainSequence button appeared
+at the right of the session footer while its pane was closed. Clicking it opened
+the existing native pane; closing the pane left the button visible. Clicking the
+surviving button reopened the pane. An unsent draft survived both close and reopen,
+and was then cleared. No model prompt, MainSequence operation, sign-in, provider
+change or backend mutation was requested. Other running Code sessions were left
+running. The test session's own layout state changed through normal UI interaction.
+
+The actual Desktop renderer draws a compact native text button. It does not show
+the supplied footer SVG in this build; the existing pane header still displays the
+MainSequencePublic emblem. The approved mockup's exact button styling is therefore
+not claimed. This uses the supported footer hook without patching the app or
+inserting a strip above the chat. The launcher is visible in the tested active
+local Code session, not on the new-session landing page before an engine starts.
