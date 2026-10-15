@@ -6,7 +6,7 @@ session renewal, connection checks and workspace settings. The pane uses the
 MainSequence emblem and one coordinated section selection; it adds no strip above
 the prompt.
 
-Version **0.4.2** adds [environment-scoped agents and direct conversation through
+[Version **0.4.2**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.2) adds [environment-scoped agents and direct conversation through
 Claude](docs/agents.md). MCP and Agents share the selected environment; agent
 introductions and approved follow-ups use the existing MainSequence gateway.
 
