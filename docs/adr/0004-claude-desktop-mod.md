@@ -27,7 +27,9 @@ generated dependency output, not a separately maintained implementation.
 One pane contains General, Projects, Current Project, MCP and Activity. Two aligned
 navigation rows share one selected section. Native Box, Button, Text, Input, Select,
 Svg and Code elements implement the approved grouping without DOM injection. The
-pane opens on Desktop session startup without stealing focus; `/ms` opens it on
+pane opens on Desktop session startup without stealing focus. A `SessionMode`
+footer hook keeps a branded MainSequence launcher available after the pane closes,
+preserving the existing footer tree. `/ms` also opens it on
 request. No AbovePrompt hook is registered. Claude controls native placement and
 widget chrome; there is no supported custom right-toolbar registration in use.
 

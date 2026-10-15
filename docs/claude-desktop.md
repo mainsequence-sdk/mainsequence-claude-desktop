@@ -21,8 +21,14 @@ a pinned SHA-256. A local build remains unpublished until the release workflow r
 You can also upload a built ZIP using **Add plugin → Upload plugin**.
 
 Enable the plugin in a local Code session and start a fresh session. It opens its
-native pane without requesting keyboard focus. `/ms` reopens the same pane if
-closed. Claude controls its final position and native button styling: the plugin
+native pane without requesting keyboard focus. The **MainSequence** button and
+emblem in the session footer remain available when the pane is closed. Click the
+button to reopen and focus the same pane without typing a command or submitting
+a message. `/ms` remains an optional fallback. The launcher preserves existing
+footer controls and does not read or save settings, accounts or credentials.
+It appears in local Code sessions with the plugin loaded, not on Claude's home
+screen or unrelated chat surfaces. Claude controls its final position and native
+button styling: the plugin
 does not patch the Desktop application or register an unsupported toolbar button.
 The approved browser preview defines grouping, navigation and content, not custom
 CSS injected into the Desktop application.

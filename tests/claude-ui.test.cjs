@@ -84,6 +84,31 @@ test('one native pane has six coordinated sections and no above-prompt launcher'
   await f.emit('command.run', { command: 'ms' }); assert.equal(f.calls.at(-1).pane.id, 'mainsequence');
 });
 
+test('Desktop footer launcher survives pane closure and preserves native controls without changing settings', async () => {
+  const saved = { backend: 'https://saved.example', baseDir: '/saved/repos', legacy: { keep: true } };
+  const { register } = await load(); const f = fixture({ saved }); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' });
+  const settingsBefore = JSON.stringify(saved), callsBefore = f.calls.length;
+  const footer = () => f.emit('ui.render', { surface: 'desktop', component: 'SessionMode', props: { modes: [] } });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const tree = await footer();
+    assert.deepEqual(tree.props.children[0], { type: 'engine', ref: 1 });
+    assert.match(JSON.stringify(tree), /MainSequence emblem/);
+    const launcher = f.find(tree, 'mainsequence-launcher'); assert.ok(launcher);
+    launcher.props.onPress(); await flush();
+    assert.deepEqual(f.calls.at(-1).pane, { id: 'mainsequence', title: 'MainSequence', focus: true });
+    await f.emit('ui.close', { id: 'mainsequence', origin: { kind: 'person' } });
+    assert.ok(f.find(await footer(), 'mainsequence-launcher'));
+  }
+  assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'SessionMode', props: { modes: ['focus'] } }), { type: 'engine', ref: 1 });
+  assert.equal(f.calls.slice(callsBefore).every(c => c.pane), true);
+  assert.equal(JSON.stringify(saved), settingsBefore);
+  f.$.ui.open = async () => { throw new Error('private-host-error'); };
+  f.find(await footer(), 'mainsequence-launcher').props.onPress(); await flush();
+  assert.match(f.calls.at(-1).toast, /could not open/);
+  assert.doesNotMatch(f.calls.at(-1).toast, /private-host-error/);
+});
+
 test('native forms run structured actions without model APIs; mutating actions require explicit confirmation', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start');
   await f.field('backend', 'https://backend.example'); await f.press('auth-status');

@@ -145,3 +145,25 @@ test('Agents queues a visible Claude prompt and returns a real tool result from 
   expect(requests.find(r=>r.action==='agent-send').environmentUid).toBe(env);
   await ui.unmount();
 });
+
+
+test('Desktop footer survives pane unmount and reopens MainSequence while retaining the native footer', async ($, on) => {
+  const opened = [];
+  on('ui.open', ($, e) => { opened.push(e); return { value: undefined }; });
+  on('ui.render', { component: 'SessionMode' }, ($, e) => {
+    const { Text } = $.ui.resolve(e); return Text({ children: ['Existing session controls'] });
+  });
+  const footer = await $.ui.mount({ plugin: 'mainsequence', surface: 'desktop', component: 'SessionMode', props: { modes: [] } });
+  expect(await footer.find({ type: 'Text', text: 'Existing session controls' })).toBeDefined();
+  expect(await footer.find({ key: 'mainsequence-launcher' })).toBeDefined();
+  await footer.press({ key: 'mainsequence-launcher' });
+  expect(opened[0].id).toBe('mainsequence'); expect(opened[0].focus).toBe(true);
+  const pane = await $.ui.mount({ plugin: 'mainsequence', surface: 'desktop', component: 'Pane', requestId: 'mainsequence', props: {} });
+  // Desktop drops this render site when the user closes the pane.
+  await pane.unmount();
+  await footer.redraw({ modes: ['focus'] });
+  expect(await footer.find({ key: 'mainsequence-launcher' })).toBeDefined();
+  await footer.press({ key: 'mainsequence-launcher' });
+  expect(opened).toHaveLength(2); expect(opened[1].id).toBe('mainsequence');
+  await footer.unmount();
+});

@@ -1,5 +1,6 @@
 import { TABS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue } from './model.mjs';
 import { renderPane } from './view.mjs';
+import { EMBLEM } from './branding.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
@@ -314,6 +315,21 @@ export function register(on, options = {}) {
   const state = initialState(options);
   on('session.start', async ($, e, next) => { await boot($, state, e); return next(e); });
   on('command.run', { command: 'ms' }, async ($) => { await $.ui.open({ id: PANE, title: 'MainSequence', focus: true }); return {}; });
+  // This site belongs to the session footer, so closing our pane does not remove it.
+  // Keep the engine/other plugins' footer content and leave terminal rendering alone.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (e.surface !== 'desktop') return next(e);
+    const existing = await next(e);
+    const { Box, Button, Svg } = $.ui.resolve(e);
+    return Box({ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 1,
+      children: [existing, Box({ key: 'mainsequence-launcher-group', flexDirection: 'row', alignItems: 'center', gap: 1,
+        children: [Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 18, height: 18 }),
+          Button({ key: 'mainsequence-launcher', label: 'MainSequence', onPress: () => {
+            void $.ui.open({ id: PANE, title: 'MainSequence', focus: true }).catch(() => {
+              $.ui.toast('MainSequence could not open. Try /ms or reload the plugin.');
+            });
+          } })] })].filter(Boolean) });
+  });
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
     return renderPane($.ui.resolve(e), state, actionsFor($, state));

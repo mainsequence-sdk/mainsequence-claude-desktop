@@ -64,7 +64,8 @@ checklist from 0.3.x is retired because the feature is removed.
 Claude controls pane placement and native button appearance. A browser mockup is
 not a screenshot of the native application. The API does not expose the custom
 right-toolbar registration used in the original request; the plugin opens its own
-native pane and provides `/ms` to reopen it.
+native pane and adds a `SessionMode` footer launcher to reopen it. `/ms` remains
+an optional fallback. Closing the pane does not unregister the footer hook.
 
 Signed native terminals, changing the Code session's working directory and launching
 container sessions remain unavailable. Shared folder reveal and operation-target
@@ -177,3 +178,28 @@ not stopped, reloaded or restarted. A fresh local Code session is required to lo
 the new hooks. Final live pane styling and live agent conversation acceptance remain
 pending; no live agent messages, task creation, sign-in changes or backend changes
 were performed. Draft onboarding documentation PR #6 was left unchanged.
+
+
+## 0.4.3 persistent launcher
+
+The user approved the footer-button placement preview on 2026-10-15. The launcher
+uses Desktop's `SessionMode` render site independently of the `Pane` site and
+preserves `next(e)` so native footer content remains. The MainSequencePublic emblem
+is reused. Pressing the button only calls `ui.open` for the existing pane ID; no
+command is inserted, model prompt submitted, setting saved or credential accessed.
+Terminal rendering is passed through. There is no `AbovePrompt` strip or application
+patch. Existing accounts, provider configuration and settings require no migration.
+
+Node regression coverage checks footer composition, reopen behavior, terminal
+passthrough, unchanged settings and sanitized open failures. A native simulator
+test mounts the footer, unmounts the pane render site, and presses the surviving
+launcher again.
+Live Desktop close/reopen verification and publication evidence will be recorded
+below after those checks are completed; simulator results alone do not establish
+that the host displays the footer site in the normal application.
+
+Automated candidate evidence (2026-10-15): all 37 Node tests, typechecking,
+documentation and portable distribution checks passed. Desktop's bundled Code
+2.1.295 validated the plugin and passed all five native simulator tests. Tests use
+disposable configuration and synthetic responses. The native harness validates
+render-site lifecycle and button dispatch; the live window check remains separate.

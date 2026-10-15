@@ -6,6 +6,12 @@ session renewal, connection checks and workspace settings. The pane uses the
 MainSequence emblem and one coordinated section selection; it adds no strip above
 the prompt.
 
+Version **0.4.3** adds a persistent **MainSequence** button with the MainSequence
+emblem in the Code session footer. It reopens the existing pane after it is closed;
+`/ms` remains an optional fallback. Opening the pane does not submit a chat prompt
+or save settings. See [verification](docs/claude-desktop-verification.md) for native
+and live Desktop evidence.
+
 [Version **0.4.2**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.2) adds [environment-scoped agents and direct conversation through
 Claude](docs/agents.md). MCP and Agents share the selected environment; agent
 introductions and approved follow-ups use the existing MainSequence gateway.

@@ -16,7 +16,8 @@ The catalog pins a versioned ZIP and SHA-256 digest. Node 22+ is required, and t
 not need this source checkout or runtime npm downloads.
 
 Refresh the marketplace and update the installed plugin, then start a fresh Code
-session. `/reload-plugins` only reloads the installed copy; it does not download an
+session. The MainSequence footer button is available once the new session has
+loaded the plugin; closing its pane leaves the launcher in place. `/reload-plugins` only reloads the installed copy; it does not download an
 update. Desktop builds that show only Remove on the local marketplace card need
 Claude's built-in updater (`plugin marketplace update mainsequence-desktop`, then
 `plugin update mainsequence@mainsequence-desktop --scope user`) through the bundled
