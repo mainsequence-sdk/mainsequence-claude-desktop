@@ -2,6 +2,11 @@
 
 Status: revised for the approved 0.4.0 layout and removal of Claude account switching.
 
+Amended 2026-10-15: [ADR 0005](0005-user-authored-agent-interactions.md)
+records the approved replacement for the Agents-specific automatic introduction
+flow described below. That replacement is pending implementation and Desktop
+verification; authentication, ownership and launcher placement are unchanged.
+
 ## Ownership and dependency direction
 
 All Claude UI, hooks, worker transport, native host adapters, tests, packaging and

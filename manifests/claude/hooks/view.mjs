@@ -2,7 +2,7 @@ import { TABS, clean, record, rows, resultText } from './model.mjs';
 import { renderAgents } from './agentView.mjs';
 import { EMBLEM } from './branding.mjs';
 
-/** Native Desktop controls, grouped into compact cards. No model calls or DOM. */
+/** Host-themed Desktop primitives in unframed sections. No custom palette or DOM. */
 export function renderPane(ui, state, actions) {
   const { Box, Text, Button, Input, Select, Code, Svg } = ui;
   const text = (value, props = {}) => Text({ ...props, children: [clean(value)] });
@@ -11,7 +11,7 @@ export function renderPane(ui, state, actions) {
   const column = children => Box({ flexDirection: 'column', gap: 1, children: children.filter(Boolean) });
   const buttons = children => Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 1, children: children.filter(Boolean) });
   const line = (label, value) => Box({ flexDirection: 'row', justifyContent: 'space-between', gap: 2, children: [muted(label), text(value, { wrap: 'wrap' })] });
-  const card = (heading, children, control) => Box({ flexDirection: 'column', gap: 1, padding: 2, borderStyle: 'round', borderDimColor: true,
+  const card = (heading, children, control) => Box({ flexDirection: 'column', gap: 1, paddingY: 1,
     children: [Box({ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [title(heading), control].filter(Boolean) }), ...children.filter(Boolean)] });
   const button = (key, label, callback, available = true) => available ? Button({ key, label, onPress: callback }) : null;
   const toggle = (key, label) => Button({ key: `toggle-${key}`, label: `${state.expanded[key] ? '▾' : '▸'} ${label}`, onPress: () => actions.toggle(key) });
@@ -33,29 +33,31 @@ export function renderPane(ui, state, actions) {
   const busy = (scope, action) => state.operations.some(op => op.status === 'running' && op.label === `${scope} · ${action}`);
   const section = state.tab;
   const headerEnvironments = rows(state.results['devtools.mcp-environments']?.data);
-  const headerEnvironment = headerEnvironments.find(row => row.uid === f.mcpEnvironment);
-  const sharedEnvironment = ['MCP', 'Agents'].includes(section) ? card('Organization environment', [
-        state.environmentsLoading && muted('Loading organization environments…'),
-        select('mcp-environment', 'Environment', headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) + (row.isProduction ? ' · Production' : '') })), f.mcpEnvironment, actions.selectEnvironment),
-        headerEnvironment ? line('Active environment', headerEnvironment.name) : muted('Choose an environment to find MCPs and agents.'),
-        muted('Applies to MCP tools and agents. Connections in other environments stay saved.'),
-        button('mcp-environments', 'Refresh environments', actions.refreshEnvironments, !state.environmentsLoading),
-        state.results['devtools.mcp-environments']?.status === 'failure' && text(state.results['devtools.mcp-environments'].summary),
-        !state.environmentsLoading && state.results['devtools.mcp-environments']?.status === 'success' && !headerEnvironments.length && muted('No organization environments are available for this account.'),
-      ]) : null;
-  const header = column([
-    Box({ flexDirection: 'row', alignItems: 'center', gap: 2, paddingY: 1, children: [Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 36, height: 36 }), column([title('MainSequence'), muted(section)])] }),
-    Box({ key: 'section-navigation', flexDirection: 'column', gap: 1, padding: 1, borderStyle: 'round', borderDimColor: true,
-      children: [TABS.slice(0, 3), TABS.slice(3)].map(group => Box({ flexDirection: 'row', gap: 1, children: group.map(tab => Box({
-        key: `nav-${tab.replaceAll(' ', '-')}`, width: group.length === 3 ? '33%' : '50%', flexGrow: 1, flexShrink: 1, flexDirection: 'column',
-        borderStyle: 'round', borderColor: tab === state.tab ? '#bda27f' : '#303030',
-        backgroundColor: tab === state.tab ? '#35312c' : '#181818',
-        children: [Button({ key: `tab-${tab.replaceAll(' ', '-')}`, label: tab, dimColor: tab !== state.tab, onPress: () => actions.tab(tab) })],
-      })) })),
+  const sharedEnvironment = ['MCP', 'Agents'].includes(section) ? column([
+    Box({ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
+      text('Organization environment'), button('mcp-environments', 'Refresh', actions.refreshEnvironments, !state.environmentsLoading),
+    ].filter(Boolean) }),
+    state.environmentsLoading && muted('Loading organization environments…'),
+    headerEnvironments.length && Select({ key: 'mcp-environment',
+      options: headerEnvironments.some(row => row.uid === f.mcpEnvironment)
+        ? headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) }))
+        : [{ value: '', label: 'Choose environment' }, ...headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) }))],
+      value: headerEnvironments.some(row => row.uid === f.mcpEnvironment) ? f.mcpEnvironment : '', onSelect: actions.selectEnvironment }),
+    muted('Used by MCP tools and agents.'),
+    state.results['devtools.mcp-environments']?.status === 'failure' && text(state.results['devtools.mcp-environments'].summary),
+    !state.environmentsLoading && state.results['devtools.mcp-environments']?.status === 'success' && !headerEnvironments.length && muted('No organization environments are available for this account.'),
+  ]) : null;
+  const header = Box({ flexDirection: 'column', gap: 2, children: [
+    Box({ flexDirection: 'row', alignItems: 'center', gap: 1, paddingY: 1, children: [Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 28, height: 28 }), title('MainSequence')] }),
+    Box({ key: 'section-navigation', flexDirection: 'column', gap: 1,
+      children: [TABS.slice(0, 3), TABS.slice(3)].map(group => buttons(group.map(tab =>
+        Button({ key: `tab-${tab.replaceAll(' ', '-')}`, label: `${tab === state.tab ? '✓ ' : ''}${tab === 'Current Project' ? 'Current project' : tab}`,
+          dimColor: tab !== state.tab, onPress: () => actions.tab(tab) })
+      ))),
     }),
     sharedEnvironment,
     state.problem && text(state.problem),
-  ]);
+  ].filter(Boolean) });
   const page = body => Box({ flexDirection: 'column', gap: 2, padding: 1, children: [header, ...body.filter(Boolean)] });
   if (state.confirmation) return page([card(state.confirmation.title, [text(state.confirmation.detail), buttons([button('dismiss-confirmation', 'Cancel', actions.dismiss), button('confirm-action', 'Confirm', actions.accept)])])]);
   if (!state.ready) return page([card('Update required', [text('Update Claude Desktop to use MainSequence in a local Code session.')])]);

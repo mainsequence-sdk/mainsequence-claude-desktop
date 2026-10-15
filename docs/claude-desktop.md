@@ -138,7 +138,7 @@ conversation through Claude, task polling, local continuity and uncertain reques
 | Devcontainer configuration | Preview and digest-checked JSONC edit; preserves comments and custom fields. Existing Compose/build-based configurations are refused rather than rewritten into incompatible image-based ones. |
 | Reopen in container | Current mod APIs do not provide an implemented Desktop container-session launcher. The action reports unavailable; it never opens VS Code as an implicit substitute. |
 | Diagnostics/errors/previews | Bundle/runtime checks, actionable errors, Activity results/cancellation, explicit mutation confirmations, and previews for supported SDK/skills operations, Docker, container configuration and local deletion. Cancellation can leave partial effects, which are reported. |
-| Agent discovery and conversations | Shared environment selector, public card details, visible Claude introduction prompt, approved follow-ups, Task status/wait/cancel and local conversation continuity. |
+| Agent discovery and conversations | Shared environment selector, public card details, session preparation without sending, editable native command drafts, separate per-agent status and approved follow-ups, Task status/wait/cancel and local conversation continuity. |
 | MCP discovery/connections/tools | Search/paginate project MCPs, connect/disconnect exact releases, inspect/call tools and register them for Claude. Tool calls request approval and disconnected tools are refused. |
 
 The signed-terminal, session-navigation and container-launch limitations are explicit
