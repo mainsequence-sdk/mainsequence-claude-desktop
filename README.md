@@ -6,8 +6,9 @@ session renewal, connection checks and workspace settings. The pane uses the
 MainSequence emblem and one coordinated section selection; it adds no strip above
 the prompt.
 
-The **0.4.2 implementation candidate** adds [environment-scoped agents and direct
-conversation through Claude](docs/agents.md). It is not yet in the public marketplace.
+Version **0.4.2** adds [environment-scoped agents and direct conversation through
+Claude](docs/agents.md). MCP and Agents share the selected environment; agent
+introductions and approved follow-ups use the existing MainSequence gateway.
 
 Version **0.4.1** adds editable workspace defaults and an organization-environment
 selector that scopes MCP discovery and tool use. Saved settings take precedence,
@@ -36,7 +37,7 @@ See [installation, features and upgrade behavior](docs/claude-desktop.md).
 
 This repository owns Claude UI, lifecycle hooks, worker transport, tests and
 releases. Shared functionality is imported from the exact
-`@dev-mainsequence/devtools` dependency. The Agents candidate pins the published
+`@dev-mainsequence/devtools` dependency. The Agents integration pins the published
 0.2.4 npm archive, verified by a clean install and exact lockfile integrity.
 It is bundled into the ZIP; no sibling
 checkout, backend change or runtime npm download is required.

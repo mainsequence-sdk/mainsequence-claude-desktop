@@ -85,11 +85,12 @@ VS Code and other adapters are unchanged.
 Claude **0.4.2** pins the published shared devtools **0.2.4** npm archive. Devtools
 was published on 2026-10-15 through its
 [existing release workflow](https://github.com/mainsequence-sdk/mainsequence-devtools/actions/runs/38732377231),
-and Claude's lockfile records the registry integrity. The Claude candidate is not yet
-published; the checked-in public marketplace stays on 0.4.1. Run `npm ci --ignore-scripts`
+and Claude's lockfile records the registry integrity. Run `npm ci --ignore-scripts`
 and `npm run release:check` against the public registry before publishing the Claude
-archive through the existing release workflow. No new repository, marketplace or
-runtime dependency download is needed.
+archive through the existing release workflow. The checked-in marketplace and
+`mainsequence-distribution.json` identify the published version; source and docs can
+advance before publication. No new repository, marketplace or runtime dependency
+download is needed.
 
 The original local verification before producer publication used these steps:
 
