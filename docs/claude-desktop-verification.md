@@ -259,3 +259,137 @@ remained visible after a second close. The pane was left closed and the test pro
 empty. The existing unrelated Code sessions were not stopped or reloaded. Runtime
 diagnostics is a local read-only operation; no live backend operation was invoked
 for this final check.
+
+
+## 0.4.4 user-authored agent interactions
+
+On 2026-10-15, ADR 0005 was updated before implementation to approve opening or
+resolving an AgentSession on Talk, keyed to Claude's stable session ID, without
+sending. At that initial verification, Claude 0.4.4 and shared devtools 0.2.5
+were unpublished candidates, and the public marketplace and installed release
+were 0.4.3. The subsequent compact-layout release is recorded below.
+
+### Automated evidence
+
+- Shared devtools: 101 passing Node tests, typechecking, release metadata checks,
+  portable package checks and an isolated ESM consumer. Session allocation/resolution
+  uses the existing gateway and never sends a message or requests runtime access.
+  Tests validate agent/environment/session/handle identity and public projection.
+- Claude: 41 passing Node tests, typechecking, documentation links, ZIP inventory,
+  generated catalog checksum and standalone packaged-worker checks.
+- Desktop's actual bundled Code 2.1.295: loader validation and all five native
+  simulator tests passed using disposable configuration. The agent fixture opens
+  a session, preserves/fills the native draft, submits only an explicit test command
+  and verifies the exact text and resolved session UID. Process responses are
+  synthetic; no model or live agent is called by these tests.
+- Race/error coverage: per-agent opening/waiting, returning to a still-opening agent,
+  independent simultaneous operations, serialized store writes, host/environment
+  changes, same-chat reload, explicit new handle, late replies, uncertain sends,
+  duplicate/empty/invalid submissions, and exact multiline/whitespace preservation.
+- Timeout tests cover advertised metadata and a real local HTTP fixture accepting
+  the 145-second send deadline while rejecting requests beyond the 300-second cap.
+
+### Live Desktop evidence
+
+The owner authorized the dedicated local “Reload plugins” test chat. The conversation
+sidebar was hidden. The 0.4.4 candidate hooks and bundled worker were temporarily
+staged over the installed plugin files after a full backup; the installed-plugin
+registry and saved settings were not edited. The actual native reload command
+activated the candidate only in that test chat.
+
+Observed in the normal Desktop window:
+
+1. Directory descriptions are hidden, and the CRM card's ⓘ shows its description
+   and public capability information. The approved footer launcher stays unchanged.
+2. Talk on CRM opens a remote session and fills the existing input with its agent
+   command plus the already-typed test draft. No introduction or model turn appears.
+3. Talk on Alpaca changes only its preparation/selection state and the command's
+   recipient. The draft message is preserved; CRM retains its own session/status.
+4. The local plugin store contains two distinct remote session UIDs under the
+   current Code session ID, with separate stable handles, no tasks and no uncertain
+   sends. Desktop's visible route ID differs from this host-provided Code ID.
+5. After reloading, Talk on CRM resolves its saved session and fills a second unsent
+   draft. The complete two-binding snapshot is identical before and after reload:
+   both original handles and remote session UIDs are preserved.
+
+Only two empty agent sessions were opened; no agent message, Task request, inference,
+backend code/configuration change or provider change was performed. Actual message
+exchange and Task execution were tested synthetically, not against live providers.
+Live rename/fork/compaction were not exercised.
+
+Afterward, the exact original 0.4.3 plugin files were restored and their full inventory
+matched the backup. The installed registry was unchanged. The user returned to
+another Claude chat before cleanup could reload the test chat; UI control stopped.
+The test chat retains the candidate in memory and an unsent test draft until its
+next reload. No unrelated session was reloaded or interrupted.
+
+### Preservation and release boundary
+
+Before/after file and JSON-field fingerprints were recorded without printing secrets.
+Claude settings, local settings, credential files where present, Desktop configuration
+and MainSequence CLI configuration were unchanged. Existing plugin settings,
+environment selection and earlier conversation records were unchanged. The only
+plugin-store additions are the two authorized test conversation bindings. Claude's
+running process refreshed its feature cache and cache timestamp in `.claude.json`;
+this is not claimed to be byte-for-byte unchanged. No account/provider field was
+modified, and no credential was read or written by the hooks.
+
+During that initial candidate verification, public marketplace metadata was not
+advanced and no source push, npm publication or GitHub release was performed.
+The coordinated publication below follows the required shared-dependency-first order.
+
+
+### Directory card refinement
+
+The owner requested removal of the repeated environment/branch line from cards.
+The 0.4.4 candidate now keeps that metadata and deployment status behind ⓘ;
+the directory and selected-conversation heading no longer repeat the environment.
+The deployment detail reads “Deployment up to date” instead of “Runtime current”.
+This is a presentation-only refinement; session handling, settings and the launcher
+are unchanged. The existing UI suite and documentation checks cover this revision;
+it has not been reinstalled, published or checked again in the live Desktop window.
+
+
+### Approved compact native layout
+
+On 2026-10-15 the owner approved the compact preview and authorized publication.
+The implementation uses Claude's Box, Text, Button, Input, Select and Svg primitives.
+Native control defaults and dimColor provide host theming; the browser preview's
+copied CSS values are not shipped in the plugin. The MainSequence emblem is retained.
+
+Navigation is two wrapping rows of direct native buttons with a checkmark for the
+active section. There are no surrounding navigation cards, fixed percentage widths,
+or raw palette overrides. Section content is unframed. Environment names appear once
+in their picker; the existing refresh action remains beside its label. Search has a
+label above the input, with its Search action beside it.
+
+Each agent row keeps its name, information button and speech-bubble Talk button
+aligned. The name can wrap while the action group does not shrink. No initials,
+inline description, environment/branch, deployment status or duplicated selected
+conversation card is rendered. Preparation, task, delivery uncertainty and errors
+remain visible only under the relevant agent. Details retains its labeled Talk and
+new-conversation actions. The API's native Button accepts a text/glyph label;
+it does not export a CSS theme import or arbitrary HTML for the pane.
+
+The browser approval preview verifies the composition and interactions. The native
+loader/simulator verifies accepted elements and event routing, not final pixels.
+The earlier live session/draft evidence above remains applicable to the unchanged
+interaction logic; final compact pixel rendering has not been checked in a live
+Desktop window. No normal Desktop installation, settings or accounts are modified
+by release verification, which uses disposable configuration.
+
+
+The final compact implementation passed all 41 Node tests, typechecking, documentation
+checks, portable archive verification and all five simulator tests in the installed
+Claude Code 2.1.295 engine using disposable configuration. The existing per-agent
+concurrency checks now inspect the row status rather than a changing button label.
+The icon button does not change meaning while a session opens; only that agent's
+status reports preparation. MainSequence login and saved-setting tests passed.
+
+The shared 0.2.5 package was published by the existing
+[trusted-publisher workflow](https://github.com/mainsequence-sdk/mainsequence-devtools/actions/runs/38793518629).
+Its public npm tarball matched the checked CI artifact byte for byte. The consumer
+lockfile now pins that public archive with integrity
+`sha512-3R100Zcp8409bjBpFnoJIvgzOQum2O5LCaEz7q6oRBVSVggCnJLxjl/fukjfj0HIZPM9TjBuSVNrUnCAawuiRw==`.
+The release was rebuilt from a clean registry installation, without a local package
+override. Marketplace publication uses the existing immutable-archive workflow.

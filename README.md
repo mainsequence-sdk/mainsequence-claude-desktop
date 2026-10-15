@@ -6,6 +6,12 @@ session renewal, connection checks and workspace settings. The pane uses the
 MainSequence emblem and one coordinated section selection; it adds no strip above
 the prompt.
 
+[Version **0.4.4**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.4)
+uses Claude's native theme and compact agent rows: name, **ⓘ** information and **💬**
+Talk on the same row. Section buttons have no surrounding cards or custom colors.
+Talk opens or resumes the selected agent's session using Claude's session ID and
+prefills the existing input without sending. Each agent keeps its own status.
+
 [Version **0.4.3**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.3) adds a persistent **MainSequence** button in the Code session
 footer. It reopens the existing pane after it is closed;
 `/ms` remains an optional fallback. Opening the pane does not submit a chat prompt
@@ -42,16 +48,20 @@ See [installation, features and upgrade behavior](docs/claude-desktop.md).
 ## Architecture and development
 
 This repository owns Claude UI, lifecycle hooks, worker transport, tests and
-releases. Shared functionality is imported from the exact
-`@dev-mainsequence/devtools` dependency. The Agents integration pins the published
-0.2.4 npm archive, verified by a clean install and exact lockfile integrity.
-It is bundled into the ZIP; no sibling
-checkout, backend change or runtime npm download is required.
+releases. Shared functionality comes from the exact `@dev-mainsequence/devtools`
+package API and is bundled into the portable ZIP. Desktop needs no sibling checkout
+or runtime npm download.
 
-Run `npm ci` and `npm run release:check`. Set `MS_CLAUDE_DESKTOP_BINARY` to include
-native loader validation and simulator tests against Desktop's bundled engine.
+Version **0.4.4** pins the public devtools **0.2.5** archive and implements
+[ADR 0005](docs/adr/0005-user-authored-agent-interactions.md). The lockfile records
+the registry URL and integrity. Use `npm ci --ignore-scripts` and the
+[coordinated release procedure](docs/agents.md#verification-and-coordinated-release).
+
+Run `npm run release:check` after installing the exact dependency. Set
+`MS_CLAUDE_DESKTOP_BINARY` for native loader validation and simulator tests.
 
 - [Architecture and dependency boundaries](docs/adr/0004-claude-desktop-mod.md)
+- [Agent interaction decision and verification requirements](docs/adr/0005-user-authored-agent-interactions.md)
 - [Distribution, updates and rollback](docs/claude-desktop-distribution.md)
 - [Verification and remaining host limitations](docs/claude-desktop-verification.md)
 - [Shared devtools source](https://github.com/mainsequence-sdk/mainsequence-devtools)

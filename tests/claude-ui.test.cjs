@@ -15,7 +15,7 @@ function fixture(options = {}) {
     if (type === 'Select') assert.ok(props.options.length);
     return { type, props };
   }]));
-  let nextCalls = 0;
+  let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1';
   const on = (event, matcher, hook) => {
     if (typeof matcher === 'function') { hook = matcher; matcher = {}; }
     const item = { event, matcher, hook }; hooks.push(item);
@@ -23,9 +23,9 @@ function fixture(options = {}) {
   };
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
-    session: { cwd: async () => '/work/repo', id: async () => 'session-1', version: async () => ({ version: options.version || '2.1.295' }) },
+    session: { cwd: async () => '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }) },
     store: { get: async key => stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined, set: async (key, value) => { stores.set(key, value); calls.push({ store: key, value }); } },
-    prompt: { submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
+    prompt: { read: async () => ({ text: draft, cursor: draft.length }), fill: async value => { calls.push({ filled: value }); if (options.refuseFill) return { isFilled: false }; draft = value.text; return { isFilled: true, text: draft, cursor: draft.length }; }, submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
     command: { register: async spec => { calls.push({ command: spec }); } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool' },
@@ -66,7 +66,7 @@ function fixture(options = {}) {
     for (const child of tree.props?.children || []) { const found = find(child, key); if (found) return found; } };
   const press = async key => { const node = find(await pane(), key); assert.ok(node, `Missing ${key}`); node.props.onPress(); await flush(); };
   const field = async (key, value) => { const node = find(await pane(), `field-${key}`); assert.ok(node, `Missing field ${key}`); node.props.onInput(value); await flush(); };
-  return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, stores, find, get nextCalls() { return nextCalls; } };
+  return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; } };
 }
 
 test('one native pane has six coordinated sections and no above-prompt launcher', async () => {
@@ -203,7 +203,7 @@ test('MainSequence login, renewal and logout remain available without touching C
   await f.press('logout'); await f.press('confirm-action'); assert.ok(f.find(await f.pane(), 'login'));
   await f.press('save-settings'); const stored = f.calls.find(c => c.store).value;
   assert.deepEqual(stored.provider, saved.provider); assert.equal(stored.claudeExecutable, saved.claudeExecutable);
-  for (const event of ['prompt.submit','turn.start','turn.step','turn.complete','session.measure','classic.StopFailure']) assert.equal(f.hooks.some(h => h.event === event), false, event);
+  for (const event of ['turn.start','turn.step','turn.complete','session.measure','classic.StopFailure']) assert.equal(f.hooks.some(h => h.event === event), false, event);
   await f.emit('session.end'); assert.deepEqual(Object.fromEntries(f.env), {HOME:'/fixture/home',...original});
   assert.ok(f.calls.filter(c => c.request).every(c => c.request.scope !== 'accounts'));
   assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'login').map(c => c.request.scope), ['devtools']);
@@ -339,99 +339,136 @@ test('late tool registration cannot replace the current environment tool map', a
 });
 
 const agentId = n => `00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
-const agentEnvironment=agentId(1), agentUid=agentId(2), agentSession=agentId(3), agentTask=agentId(4);
+const agentEnvironment=agentId(1), agentUid=agentId(2), agentSession=agentId(3), agentTask=agentId(4), secondUid=agentId(6), secondSession=agentId(7);
 async function agentFixture(options={}) {
   const account='agent-user@example.test';
   const agent={uid:agentUid,name:'Research assistant',description:'Explain portfolio risk',environmentUid:agentEnvironment,environmentName:'Research',repositoryBranch:'develop',runtimeState:'current',runtimeReleaseUid:agentId(5),responseKinds:['message','task'],skills:[{name:'Risk',description:'Explain exposure',examples:['Explain exposure']}],...options.agent};
+  const agents=[agent,...(options.twoAgents?[{...agent,uid:secondUid,name:'CRM assistant',description:'Private CRM description'}]:[])];
   const f=fixture({...options,ask:options.ask||'Send',respond:domain=>{
-    const r=domain.request;
+    const r=domain.request, selected=agents.find(a=>a.uid===r.agentUid)||agent;
     const override=options.respond?.(r); if(override)return override;
     if(r.action==='workspace-preferences')return success(r.action,{backend:'https://platform.example',baseDir:'/repos'});
     if(r.action==='auth-status')return success(r.action,{authenticated:true,username:account});
     if(r.action==='mcp-environments')return success(r.action,[{uid:agentEnvironment,name:'Research'},{uid:agentId(9),name:'Production'}]);
     if(r.action==='mcp-list'||r.action==='mcp-discover')return success(r.action,[]);
-    if(r.action==='agents-list')return success(r.action,{account,results:r.environmentUid===agentEnvironment?[agent]:[],count:r.environmentUid===agentEnvironment?1:0});
-    if(r.action==='agent-get')return success(r.action,{account,agent});
-    if(r.action==='agent-send')return success(r.action,{account,agent,sessionUid:agentSession,responseKind:r.responseKind,...(r.responseKind==='task'?{taskUid:agentTask,status:'working',terminal:false}:{message:'I explain risk. Supply a portfolio identifier.'})});
-    if(r.action.startsWith('agent-task-'))return success(r.action,{account,agent,sessionUid:agentSession,responseKind:'task',taskUid:agentTask,status:'working',terminal:false});
+    if(r.action==='agents-list')return success(r.action,{account,results:r.environmentUid===agentEnvironment?agents:[],count:r.environmentUid===agentEnvironment?agents.length:0});
+    if(r.action==='agent-get')return success(r.action,{account,agent:selected});
+    if(r.action==='agent-session')return success(r.action,{account,agent:selected,sessionUid:r.sessionUid|| (r.agentUid===secondUid?secondSession:agentSession)});
+    if(r.action==='agent-send')return success(r.action,{account,agent:selected,sessionUid:r.sessionUid,responseKind:r.responseKind,...(r.responseKind==='task'?{taskUid:agentTask,status:'working',terminal:false}:{message:`Reply from ${selected.name}`})});
+    if(r.action.startsWith('agent-task-'))return success(r.action,{account,agent:selected,sessionUid:agentSession,responseKind:'task',taskUid:agentTask,status:'working',terminal:false});
     return success(r.action,{});
   }});
   const {register}=await load();register(f.on);await f.emit('session.start',{surface:'desktop'});
   f.timers.find(t=>t.ms===0).callback();await flush();await f.press('tab-Agents');
   f.find(await f.pane(),'mcp-environment').props.onSelect(agentEnvironment);await flush();
-  f.agent=agent; f.tool=kind=>'mcp__mainsequence__'+f.tools.find(t=>t.name.startsWith(`ms_agent_${kind}_`)).name;
-  f.startTalk=async()=>{await f.press(`agent-talk-${agentUid}`);f.timers.filter(t=>t.ms===0).at(-1).callback();await flush();};
+  f.agent=agent; f.tool=kind=>'mcp__mainsequence__'+f.tools.findLast(t=>t.name.startsWith(`ms_agent_${kind}_`)).name;
+  f.startTalk=async(uid=agentUid)=>{await f.press(`agent-talk-${uid}`);await flush();};
+  f.send=(message='My own question',uid=agentUid)=>f.emit('command.run',{command:'ms',args:`agent ${uid} ${message}`,origin:{kind:'composer'}});
   return f;
 }
-test('Agents is additive and uses the shared environment; Talk queues a real prompt before any send',async()=>{
- const f=await agentFixture();let tree=await f.pane();assert.match(JSON.stringify(tree),/Research assistant/);
- assert.equal(f.find(tree,'mcp-environment').props.value,agentEnvironment);
- await f.press('tab-MCP');assert.equal(f.find(await f.pane(),'mcp-environment').props.value,agentEnvironment);await f.press('tab-Agents');
- await f.startTalk();assert.equal(f.calls.filter(c=>c.submitted).length,1);assert.match(f.calls.find(c=>c.submitted).submitted.text,/Research assistant.*Research/);
- assert.ok(f.calls.find(c=>c.submitted).submitted.text.includes(f.tool('introduce')));
+function delayRequest(f,action,uid) {
+ const original=f.$.process.spawn;let release;
+ f.$.process.spawn=input=>{
+  const envelope=JSON.parse(input.input),r=envelope.request.request;
+  if(r.action!==action || (uid&&r.agentUid!==uid))return original(input);
+  const gate=new Promise(resolve=>{release=resolve}), child=original(input);
+  const stream=(async function*(){await gate;for await(const chunk of child)yield chunk;})();stream.result=child.result;return stream;
+ };
+ return ()=>{assert.ok(release,'request started');release();};
+}
+test('Talk resolves a session and prefills an editable draft with no auto-send or introduction',async()=>{
+ const f=await agentFixture({draft:'What is the exposure?'});
+ assert.doesNotMatch(JSON.stringify(await f.pane()),/Explain portfolio risk/);
+ await f.press(`agent-details-${agentUid}`);assert.match(JSON.stringify(await f.pane()),/Explain portfolio risk/);await f.press('agents-back');
+ await f.startTalk();assert.equal(f.draft,`/ms agent ${agentUid} What is the exposure?`);
+ assert.equal(f.calls.filter(c=>c.submitted||c.suggested).length,0);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
- const result=await f.emit('tool.call',{tool:f.tool('introduce')});assert.match(result.result.data.message,/Supply a portfolio/);
+ const opened=f.calls.find(c=>c.request?.request.action==='agent-session').request.request;
+ assert.match(opened.handleId,/^claude_[a-f0-9]+_.*_default$/);assert.equal(opened.expectedAccount,'agent-user@example.test');assert.equal(opened.parentSessionUid,undefined);
+ await f.startTalk();assert.equal(f.draft,`/ms agent ${agentUid} What is the exposure?`);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session').length,1);
+ f.$.ui.ask=async()=>{throw new Error('Explicit user submission must not ask twice')};
+ assert.match((await f.send('Only my message')).text,/Reply from Research/);
  const sent=f.calls.find(c=>c.request?.request.action==='agent-send').request.request;
- assert.equal(sent.environmentUid,agentEnvironment);assert.equal(sent.expectedAccount,'agent-user@example.test');assert.ok(sent.handleId);assert.match(sent.message,/Do not run an analysis/);
- assert.match((await f.emit('tool.call',{tool:f.tool('introduce')})).deny,/already requested/);
- await f.press(`agent-talk-${agentUid}`);assert.equal(f.calls.filter(c=>c.submitted).length,1);assert.equal(f.calls.filter(c=>c.suggested).length,1);
- assert.equal(f.calls.some(c=>c.request?.scope==='accounts'),false);
+ assert.equal(sent.message,'Only my message');assert.equal(sent.sessionUid,agentSession);assert.equal(sent.handleId,undefined);
+ assert.equal(f.tools.some(t=>t.name.includes('introduce')),false);
 });
-test('agent follow-ups require approval, reuse session identity, and only accept tasks from this conversation',async()=>{
- const f=await agentFixture();await f.startTalk();await f.emit('tool.call',{tool:f.tool('introduce')});
- const send=f.tool('send');f.$.ui.ask=async()=> 'Go back';const before=f.calls.filter(c=>c.request?.request.action==='agent-send').length;
- assert.match((await f.emit('tool.call',{tool:send,message:'Analyze A',responseKind:'task'})).deny,/cancelled/);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,before);
+test('draft retargeting keeps its text; unrelated slash commands and refused filling are preserved',async()=>{
+ const f=await agentFixture({twoAgents:true,draft:'Keep\nall my text'});await f.startTalk();await f.startTalk(secondUid);
+ assert.equal(f.draft,`/ms agent ${secondUid} Keep\nall my text`);
+ f.draft='/review something';await f.startTalk();assert.equal(f.draft,'/review something');
+ const blocked=await agentFixture({refuseFill:true,draft:'Keep this'});await blocked.startTalk();assert.equal(blocked.draft,'Keep this');assert.match(blocked.calls.at(-1).toast,/could not fill/);
+ assert.equal(blocked.calls.some(c=>c.submitted),false);
+});
+test('preparation and waiting affect only the correct card; changing selection keeps the original request valid',async()=>{
+ const f=await agentFixture({twoAgents:true});const finishOpen=delayRequest(f,'agent-session',agentUid);
+ await f.startTalk();let tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-status-${agentUid}`)),/Opening session/);assert.equal(f.find(tree,`agent-status-${secondUid}`),undefined);assert.equal(f.find(tree,`agent-talk-${agentUid}`).props.label,'💬');assert.equal(f.find(tree,`agent-talk-${secondUid}`).props.label,'💬');
+ await f.startTalk(secondUid);finishOpen();await flush();assert.equal(f.draft,`/ms agent ${secondUid} `);
+ await f.startTalk(agentUid);const finish=delayRequest(f,'agent-send',agentUid);const pending=f.send('Wait for this');await flush();
+ await f.startTalk(secondUid);tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-${agentUid}`)),/Waiting for agent/);assert.doesNotMatch(JSON.stringify(f.find(tree,`agent-${secondUid}`)),/Waiting for agent/);
+ assert.match((await f.send('Other agent',secondUid)).text,/CRM assistant/);finish();assert.match((await pending).text,/Research assistant/);
+ const saved=Object.values(f.stores.get('agent-conversations-session-1'));assert.equal(saved.length,2);assert.deepEqual(new Set(saved.map(x=>x.sessionUid)),new Set([agentSession,secondSession]));
+});
+test('model tools still require approval and keep task operations scoped to their own conversation',async()=>{
+ const f=await agentFixture({twoAgents:true});await f.startTalk();const send=f.tool('send'),wait=f.tool('wait');
+ f.$.ui.ask=async()=> 'Go back';assert.match((await f.emit('tool.call',{tool:send,message:'Analyze A',responseKind:'task'})).deny,/cancelled/);
  f.$.ui.ask=async()=> 'Send';await f.emit('tool.call',{tool:send,message:'Analyze A',responseKind:'task'});
- const sent=f.calls.filter(c=>c.request?.request.action==='agent-send').at(-1).request.request;assert.equal(sent.sessionUid,agentSession);assert.equal(sent.handleId,undefined);
- assert.match((await f.emit('tool.call',{tool:f.tool('get'),taskUid:agentId(99)})).deny,/this conversation/);
- await f.emit('tool.call',{tool:f.tool('wait'),taskUid:agentTask,afterSequence:2});assert.equal(f.calls.filter(c=>c.request).at(-1).request.request.afterSequence,2);
- await f.press('tab-Activity');assert.match(JSON.stringify(await f.pane()),/Talk to agent/);
+ await f.startTalk(secondUid);
+ assert.match((await f.emit('tool.call',{tool:wait,taskUid:agentId(99)})).deny,/this conversation/);
+ await f.emit('tool.call',{tool:wait,taskUid:agentTask,afterSequence:2});assert.equal(f.calls.filter(c=>c.request).at(-1).request.request.agentUid,agentUid);
 });
-test('environment changes invalidate old agent tools, including while a send approval is open',async()=>{
+test('environment and host-session changes invalidate old prepared commands and tool approvals',async()=>{
  const f=await agentFixture();await f.startTalk();const tool=f.tool('send');let approve;
  f.$.ui.ask=()=>new Promise(resolve=>{approve=resolve});const pending=f.emit('tool.call',{tool,message:'Hello',responseKind:'message'});await flush();
- f.find(await f.pane(),'mcp-environment').props.onSelect(agentId(9));await flush();approve('Send');
- assert.match((await pending).deny,/changed/);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
- assert.match((await f.emit('tool.call',{tool,message:'Hello',responseKind:'message'})).deny,/no longer active/);
- assert.doesNotMatch(JSON.stringify(await f.pane()),/Research assistant/);
+ f.find(await f.pane(),'mcp-environment').props.onSelect(agentId(9));await flush();approve('Send');assert.match((await pending).deny,/changed/);
+ assert.match((await f.send()).text,/no longer active/);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
+ const other=await agentFixture();await other.startTalk();other.hostSessionId='new-host-chat';assert.match((await other.send()).text,/no longer active/);
 });
-test('uncertain sends are not replayed, including after reopening the same Claude session',async()=>{
- const stores=new Map();const respond=r=>r.action==='agent-send'?{schemaVersion:1,action:r.action,status:'failure',summary:'Connection interrupted',effects:{state:'partial-or-uncertain'}}:null;
- const f=await agentFixture({stores,respond});await f.startTalk();await f.emit('tool.call',{tool:f.tool('introduce')});
- assert.match((await f.emit('tool.call',{tool:f.tool('send'),message:'Retry',responseKind:'message'})).deny,/uncertain/);
- assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,1);
- const reopened=await agentFixture({stores,respond});await reopened.press(`agent-talk-${agentUid}`);assert.equal(reopened.calls.filter(c=>c.submitted).length,0);
- assert.ok(reopened.find(await reopened.pane(),'agent-new-conversation'));assert.match(reopened.calls.filter(c=>c.toast).at(-1).toast,/uncertain/);
- assert.doesNotMatch(JSON.stringify([...stores]),/Explain your purpose|accessToken|refreshToken/);
+test('uncertain sends survive reload and never replay, but the existing session can be resolved',async()=>{
+ const stores=new Map(),respond=r=>r.action==='agent-send'?{schemaVersion:1,action:r.action,status:'failure',summary:'Connection interrupted',effects:{state:'partial-or-uncertain'}}:null;
+ const f=await agentFixture({stores,respond});await f.startTalk();await f.send();assert.match((await f.send('Retry')).text,/uncertain/);
+ const reopened=await agentFixture({stores,respond});await reopened.startTalk();assert.match((await reopened.send('Again')).text,/uncertain/);
+ assert.equal(reopened.calls.filter(c=>c.request?.request.action==='agent-send').length,0);assert.equal(reopened.calls.filter(c=>c.request?.request.action==='agent-session').length,1);
+ assert.doesNotMatch(JSON.stringify([...stores]),/My own question|accessToken|refreshToken/);
 });
-test('a successful agent session can be resumed without creating a new platform conversation',async()=>{
- const stores=new Map();const first=await agentFixture({stores});await first.startTalk();await first.emit('tool.call',{tool:first.tool('introduce')});
- const reopened=await agentFixture({stores});await reopened.startTalk();await reopened.emit('tool.call',{tool:reopened.tool('introduce')});
- const sent=reopened.calls.find(c=>c.request?.request.action==='agent-send').request.request;assert.equal(sent.sessionUid,agentSession);assert.equal(sent.handleId,undefined);
+test('reload resumes each agent session and deterministic handles recover the original default mapping',async()=>{
+ const stores=new Map(),first=await agentFixture({stores,twoAgents:true,hostSessionId:agentId(80)});await first.startTalk();await first.startTalk(secondUid);
+ const reopened=await agentFixture({stores,twoAgents:true,hostSessionId:agentId(80)});await reopened.startTalk();await reopened.startTalk(secondUid);
+ assert.deepEqual(reopened.calls.filter(c=>c.request?.request.action==='agent-session').map(c=>c.request.request.sessionUid),[agentSession,secondSession]);
+ const recovered=await agentFixture({hostSessionId:agentId(80)});await recovered.startTalk();
+ const handle=f=>f.calls.find(c=>c.request?.request.action==='agent-session').request.request.handleId;
+ assert.equal(handle(first),handle(recovered));assert.ok(handle(first).includes(agentId(80)));
+ const another=await agentFixture({hostSessionId:agentId(81)});await another.startTalk();assert.notEqual(handle(first),handle(another));
 });
-test('agent details show real card capabilities; unavailable agents cannot start a conversation',async()=>{
- const f=await agentFixture({agent:{runtimeState:'not_deployed',runtimeReleaseUid:null}});
- assert.equal(f.find(await f.pane(),`agent-talk-${agentUid}`),undefined);await f.press(`agent-details-${agentUid}`);
- assert.match(JSON.stringify(await f.pane()),/Explain exposure/);assert.match(JSON.stringify(await f.pane()),/Not deployed/);
- await f.press('agents-back');assert.ok(f.find(await f.pane(),'agents-search'));
-});
-
 test('a late response cannot overwrite an explicitly restarted agent conversation',async()=>{
- const f=await agentFixture();await f.startTalk();
- const original=f.$.process.spawn;let finish;
- f.$.process.spawn=input=>{
-  const envelope=JSON.parse(input.input);if(envelope.request.request.action!=='agent-send')return original(input);
-  const gate=new Promise(resolve=>{finish=resolve});
-  const stream=(async function*(){await gate;yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:success('agent-send',{sessionUid:agentSession,responseKind:'message',message:'Old reply'})})+'\n'};})();stream.result=Promise.resolve({code:0});return stream;
- };
- const pending=f.emit('tool.call',{tool:f.tool('introduce')});await flush();
- await f.press('agent-active-details');await f.press('agent-new-conversation');await f.press('confirm-action');
- const key='agent-conversations-session-1';const replacement=JSON.stringify(f.stores.get(key));
- finish();await pending;assert.equal(JSON.stringify(f.stores.get(key)),replacement);assert.doesNotMatch(replacement,new RegExp(agentSession));
+ const f=await agentFixture();await f.startTalk();const finish=delayRequest(f,'agent-send',agentUid);const pending=f.send();await flush();
+ await f.press(`agent-details-${agentUid}`);await f.press('agent-new-conversation');await f.press('confirm-action');
+ const replacement=JSON.stringify(f.stores.get('agent-conversations-session-1'));finish();await pending;assert.equal(JSON.stringify(f.stores.get('agent-conversations-session-1')),replacement);
+ const handles=f.calls.filter(c=>c.request?.request.action==='agent-session').map(c=>c.request.request.handleId);assert.notEqual(handles[0],handles[1]);
+});
+test('empty, invalid and non-text commands never send; direct plugin commands require confirmation',async()=>{
+ const f=await agentFixture();await f.startTalk();await f.send('');await f.emit('command.run',{command:'ms',args:'agent wrong text'});
+ assert.match((await f.emit('prompt.submit',{text:`/ms agent ${agentUid} question`,attachments:[{type:'image'}]})).drop,/text only/);
+ f.$.ui.ask=async()=> 'Go back';assert.match((await f.emit('command.run',{command:'ms',args:`agent ${agentUid} text`,origin:{kind:'plugin',name:'other'}})).text,/cancelled/);
+ assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
+});
+test('duplicate submissions to the same agent are refused while its request is pending',async()=>{
+ const f=await agentFixture();await f.startTalk();const finish=delayRequest(f,'agent-send');const pending=f.send();await flush();
+ assert.match((await f.send()).text,/already running/);finish();await pending;assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,1);
+});
+test('failed resolution and tool registration can retry without any message or introduction',async()=>{
+ const f=await agentFixture();const register=f.$.tool.register;f.$.tool.register=async()=>{throw new Error('host not ready')};await f.startTalk();assert.match(JSON.stringify(await f.pane()),/needs attention/);
+ f.$.tool.register=register;await f.startTalk();assert.equal(f.draft,`/ms agent ${agentUid} `);assert.equal(f.calls.filter(c=>c.submitted||c.request?.request.action==='agent-send').length,0);
+ const unavailable=await agentFixture({respond:r=>r.action==='agent-session'?{schemaVersion:1,action:r.action,status:'failure',summary:'Model configuration required'}:null});await unavailable.startTalk();
+ assert.equal(unavailable.draft,'');assert.match(unavailable.calls.at(-1).toast,/Model configuration/);
 });
 
-test('failed native tool registration can be retried without sending an agent message',async()=>{
- const f=await agentFixture();const original=f.$.tool.register;f.$.tool.register=async()=>{throw new Error('host not ready')};
- await f.press(`agent-talk-${agentUid}`);assert.match(JSON.stringify(await f.pane()),/Conversation needs attention/);assert.equal(f.calls.filter(c=>c.submitted).length,0);
- f.$.tool.register=original;await f.startTalk();assert.equal(f.calls.filter(c=>c.submitted).length,1);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
+
+test('returning to an agent that is still opening makes it the final selection without duplicate allocation', async () => {
+ const f=await agentFixture({twoAgents:true}); const finish=delayRequest(f,'agent-session',agentUid);
+ await f.startTalk(); await f.startTalk(secondUid); await f.startTalk(agentUid); finish(); await flush();
+ assert.equal(f.draft,`/ms agent ${agentUid} `);
+ assert.match(JSON.stringify(f.find(await f.pane(),`agent-status-${agentUid}`)),/Session ready/);
+ assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session'&&c.request.request.agentUid===agentUid).length,1);
+ const message='  Keep leading spaces\nand a second line  '; await f.send(message);
+ assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').at(-1).request.request.message,message);
 });
