@@ -4,7 +4,21 @@ const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const source = path.resolve(__dirname, '../manifests/claude/hooks/register.mjs');
 const load = () => import(pathToFileURL(source).href);
-const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
+// WebCrypto completes on a worker thread in supported Node 22. Drain the real
+// digest promises as well as microtasks; a fixed number of immediates can race them.
+const pendingDigests = new Set();
+const digest = crypto.subtle.digest.bind(crypto.subtle);
+test.mock.method(crypto.subtle, 'digest', (...args) => {
+  const promise = digest(...args); pendingDigests.add(promise);
+  promise.then(() => pendingDigests.delete(promise), () => pendingDigests.delete(promise));
+  return promise;
+});
+const flush = async () => {
+  for (let i = 0; i < 8; i++) {
+    await new Promise(resolve => setImmediate(resolve));
+    if (pendingDigests.size) await Promise.all([...pendingDigests]);
+  }
+};
 const success = (action, data) => ({ schemaVersion: 1, action, status: 'success', summary: `${action} completed.`, data });
 
 function fixture(options = {}) {
