@@ -445,3 +445,24 @@ The [devtools 0.2.6 release workflow](https://github.com/mainsequence-sdk/mainse
 succeeded. The public npm archive’s integrity was verified and all 54 compiled
 shared files matched the tested candidate. A clean install from that public
 archive passed the complete Claude release checks and all five native tests.
+
+### Published 0.4.5 and normal Desktop update
+
+The [0.4.5 marketplace release](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.5)
+was published by the [release workflow](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/actions/runs/38872887074)
+on 2026-10-16. Anonymous download verification matched the catalog and checksum
+asset: `4e35110c7e001cb9818d38c0b2c83b3a4c555f5a18ebc8ba7775ad901689910c`.
+An isolated normal marketplace installation passed native validation, all five
+native simulator tests, the pinned devtools 0.2.6 check and standalone diagnostics.
+
+The temporary Desktop test cache was restored exactly from its backup before
+running the official marketplace refresh and plugin updater. The normal user
+installation updated from 0.4.3 to 0.4.5. Other installed plugin records were
+unchanged. Only the authorized test chat ran the local reload command; General's
+live diagnostics then reported Plugin 0.4.5 and Plugin files Ready.
+
+Post-update checks preserved the existing MainSequence settings, environment
+selection, account/provider configuration and credential files. The only detected
+change in Claude's main configuration was its own cached feature timestamp, as
+noted above. No backend code or configuration changed and no agent message was
+submitted during verification.
