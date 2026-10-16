@@ -164,6 +164,34 @@ test('MCP tools refresh from exact releases, use flattened hook arguments, and c
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__missing' })).deny, /no longer connected/);
 });
 
+test('MCP labels and tool descriptions use the release UID when display names are missing', async () => {
+  const { register } = await load();
+  for (const name of [undefined, '', '   ', null, 17, 'Named project']) {
+    const connection = { resource_release_uid: 'release-1', name, backend: 'https://backend.example',
+      mcp_connection: { organization_environment_uid: 'env-1' } };
+    const f = fixture({ respond: domain => {
+      const action = domain.request.action;
+      if (action === 'mcp-environments') return success(action, [{ uid: 'env-1', name: 'Research' }]);
+      if (action === 'mcp-discover') return success(action, { count: 1, results: [{ ...connection, name: 'Discovered project' }] });
+      if (action === 'mcp-list') return success(action, [connection]);
+      if (action === 'mcp-tools') return success(action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
+      return success(action, {});
+    } });
+    register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
+    f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+    const display = name === 'Named project' ? name : 'release-1';
+    const tree = await f.pane();
+    assert.equal(f.find(tree, 'mcp-connected').props.options.find(option => option.value === 'release-1').label, `${display} · Research`);
+    assert.equal(f.find(tree, 'mcp-discovered').props.options.find(option => option.value === 'release-1').label, 'Discovered project · Research');
+    assert.equal(f.tools.length, 1);
+    assert.equal(f.tools[0].description, `MainSequence ${display} [Research]: lookup`);
+    const tool = 'mcp__mainsequence__' + f.tools[0].name;
+    assert.equal((await f.emit('tool.call', { tool, tool_use_id: 'call-1', query: 'value' })).isError, undefined);
+    const request = f.calls.filter(call => call.request?.request.action === 'mcp-call').at(-1).request.request;
+    assert.equal(request.releaseUid, 'release-1'); assert.deepEqual(request.arguments, { query: 'value' });
+  }
+});
+
 test('worker protocol rejects malformed result and cancellation closes the real stream', async () => {
   const { runWorker } = await load(); let closed = 0;
   const child = (async function* () { yield { stream: 'stdout', text: '{wrong}\n' }; return { code: 0 }; })();

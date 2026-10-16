@@ -78,3 +78,10 @@ Each agent also shows its default provider, model and thinking setting beneath i
 The shared implementation is devtools 0.2.6. MainSequence session renewal remains
 under General → MainSequence account → Manage account. Accounts, provider choices,
 saved settings and backend contracts require no migration.
+
+### 0.4.6 — MCP release connections
+
+Claude bundles devtools 0.2.7 so releases whose detail responses omit `name` can
+connect, register tools and receive tool calls. Saved connections without a display
+name use the release UID in selectors, tool descriptions and availability errors.
+Connection identity, environment scoping and tool-call confirmations remain intact.

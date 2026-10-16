@@ -1,4 +1,4 @@
-import { TABS, clean, record, rows, resultText } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName } from './model.mjs';
 import { renderAgents } from './agentView.mjs';
 import { EMBLEM } from './branding.mjs';
 
@@ -180,7 +180,7 @@ export function renderPane(ui, state, actions) {
     const environments = rows(state.results['devtools.mcp-environments']?.data);
     const environment = environments.find(row => row.uid === f.mcpEnvironment);
     const matches = row => row.mcp_connection?.organization_environment_uid === f.mcpEnvironment;
-    const label = row => clean(`${row.name} · ${row.mcp_connection?.organization_environment_name || environment?.name || 'Unknown environment'}`);
+    const label = row => clean(`${mcpDisplayName(row)} · ${row.mcp_connection?.organization_environment_name || environment?.name || 'Unknown environment'}`);
     const discovered = rows(state.results['devtools.mcp-discover']?.data).filter(matches);
     const connected = rows(state.results['devtools.mcp-list']?.data).filter(matches);
     const tools = record(state.results['devtools.mcp-tools']?.data).tools;

@@ -4,6 +4,10 @@ export const clean = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\
 export const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 export const rows = value => Array.isArray(value) ? value : Array.isArray(value?.results) ? value.results : Array.isArray(value?.items) ? value.items : [];
 export const request = (scope, action, values = {}) => ({ scope, request: { action, ...values } });
+export function mcpDisplayName(value) {
+  const name = typeof value?.name === 'string' ? clean(value.name).trim() : '';
+  return name || clean(value?.resource_release_uid || value?.uid || 'Project MCP');
+}
 export function initialState(options = {}) {
   return { tab: 'General', expanded: {}, contextRevision: 0, initializing: false, projectsLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
     fields: { backend: 'https://api.main-sequence.app', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
