@@ -43,7 +43,16 @@ try {
   else if (!/release not found/i.test(lookup.stderr || '')) throw new Error('Could not inspect the release.');
   if (!release) {
     const notes = path.join(temporary, 'notes.md');
-    fs.writeFileSync(notes, `MainSequence for Claude Desktop Code ${pkg.version} preview.\n\nFix MCP connections for FastAPI release details that omit the discovery-only name. Bundles @dev-mainsequence/devtools@${lock.version}, allowing discovery, add, tool listing and tool calls with nameless release details and saved connections. Missing display labels use the release UID in the MCP selectors, registered tool descriptions and availability errors. Existing environment scoping, confirmations, credential isolation and access checks remain in place.\n\nValidation: all 49 Node tests passed, including a real packaged-worker HTTP integration test with synthetic credentials and temporary connection storage. Five native Desktop simulator tests, native loader validation and portable ZIP/marketplace checks passed. These checks do not claim live GUI or live backend acceptance.\n\nInstall through this repository's marketplace or upload the attached ZIP. Node 22+ required. Reload the plugin or start a fresh Code session to load updated hooks.\n\nSource revision: ${revision}. Archive SHA-256: ${catalog.plugins[0].source.sha256}.\n`);
+    fs.writeFileSync(notes, `MainSequence for Claude Desktop Code ${pkg.version} preview.
+
+Fix MCP connections for FastAPI release details that omit the discovery-only name. Bundles @dev-mainsequence/devtools@${lock.version}, allowing discovery, add, tool listing and tool calls with nameless release details and saved connections. Missing display labels use the release UID in the MCP selectors, registered tool descriptions and availability errors. Existing environment scoping, confirmations, credential isolation and access checks remain in place.
+
+Validation: all 49 Node tests passed, including a real packaged-worker HTTP integration test with synthetic credentials and temporary connection storage. Five native Desktop simulator tests, native loader validation and portable ZIP/marketplace checks passed. These checks do not claim live GUI or live backend acceptance.
+
+Install through this repository's marketplace or upload the attached ZIP. Node 22+ required. Reload the plugin or start a fresh Code session to load updated hooks.
+
+Source revision: ${revision}. Archive SHA-256: ${catalog.plugins[0].source.sha256}.
+`);
     run('gh', ['release', 'create', tag, '--repo', repository, '--target', revision, '--draft', '--prerelease', '--title', `MainSequence Desktop ${pkg.version} preview`, '--notes-file', notes]);
     release = JSON.parse(run('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft,assets,tagName'], root, true));
   }
