@@ -107,6 +107,11 @@ test('MainSequence login uses shared auth while native Claude credentials remain
 });
 
 test('Agents opens a bound session and fills the native draft without submitting', async ($, on) => {
+  on('ui.render',{component:'SessionMode'},($,e)=>$.ui.resolve(e).Text({children:['Existing footer']}));
+  on('ui.render',{component:'AbovePrompt'},($,e)=>$.ui.resolve(e).Text({children:['Existing composer content']}));
+  on('ui.render',{component:'CommandOutput'},($,e)=>$.ui.resolve(e).Text({children:[e.props.text]}));
+  for(const component of ['ToolUse','ToolResult']) on('ui.render',{component},($,e)=>$.ui.resolve(e).Text({children:['Existing tool content']}));
+  const nativeIcon={"source":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><style>image{image-rendering:pixelated}.still{display:none}@media(prefers-reduced-motion:reduce){.moving{display:none}.still{display:inline}}</style><image class=\"moving\" width=\"32\" height=\"32\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACGFjVEwAAAACAAAAAPONk3AAAAAaZmNUTAAAAAAAAAAgAAAAIAAAAAAAAAAAAAEABQAAkXtk1wAAACtJREFUeJztziEBAAAMBKHrX3qL8QaBp6tbSkBAQEBAQEBAQEBAQEBAYB14VA34akRQ3d4AAAAaZmNUTAAAAAEAAAAgAAAAIAAAAAAAAAAAAAEABQAACgiOAwAAAC5mZEFUAAAAAnic7c4xDQAAAAIg+5fWGD6MAiQ9ExAQEBAQEBAQEBAQEBAQeAcGV9H4atnNfE4AAAAASUVORK5CYII=\"/><image class=\"still\" width=\"32\" height=\"32\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAK0lEQVR4nO3OIQEAAAwEoetfeovxBoGnq1tKQEBAQEBAQEBAQEBAQEBgHXhUDfhqRFDd3gAAAABJRU5ErkJggg==\"/></svg>","stillSource":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\"><style>image{image-rendering:pixelated}</style><image class=\"\" width=\"32\" height=\"32\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAK0lEQVR4nO3OIQEAAAwEoetfeovxBoGnq1tKQEBAQEBAQEBAQEBAQEBgHXhUDfhqRFDd3gAAAABJRU5ErkJggg==\"/></svg>","animated":true};
   const clock=mock.clock(on,{now:1000});mock.store(on);mock.env(on,{HOME:'/fixture/user'});
   const id=n=>`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
   const env=id(1),uid=id(2),requests=[],prompts=[],toasts=[],tools=[]; let draft='My question'; let releaseReadiness; let preparationPending=true;
@@ -128,6 +133,7 @@ test('Agents opens a bound session and fills the native draft without submitting
     if(r.action==='mcp-environments')data=[{uid:env,name:'Research'}];
     if(r.action==='agents-list')data={account:'fixture@example.test',results:[agent],count:1};
     if(r.action==='agent-get')data={account:'fixture@example.test',agent};
+    if(r.action==='agent-icons')data={account:'fixture@example.test',environmentUid:env,icons:{[uid]:{images:{idle:nativeIcon,thinking:nativeIcon},toolPoses:{},posesLoaded:r.includePoses}}};
     if(r.action==='agent-session')data={account:'fixture@example.test',agent,sessionUid:id(3)};
     if(r.action==='agent-readiness'&&preparationPending){
       yield {stream:'stdout',text:JSON.stringify({type:'progress',id:envelope.id,message:'Starting agent…'})+'\n'};
@@ -143,6 +149,10 @@ test('Agents opens a bound session and fills the native draft without submitting
   await ui.press({key:'tab-Agents'});await clock.settle();
   await ui.select({key:'mcp-environment',value:env});await clock.settle();
   expect(await ui.find({key:`agent-${uid}`})).toBeDefined();
+  expect(await ui.find({key:`agent-icon-${uid}-20`})).toBeDefined();
+  await ui.press({key:`agent-details-${uid}`});await clock.settle();
+  expect(await ui.find({key:`agent-icon-${uid}-32`})).toBeDefined();
+  await ui.press({key:'agents-back'});
   await ui.press({key:`agent-talk-${uid}`});await clock.settle();
   expect(draft).toBe('My question');
   expect(requests.filter(r=>r.action==='agent-readiness')).toHaveLength(1);
@@ -156,6 +166,18 @@ test('Agents opens a bound session and fills the native draft without submitting
   expect(tools.filter(t=>t.name.includes('introduce'))).toHaveLength(0);
   const reply=await $.command.run({command:'ms',args:`agent ${uid} Explain my portfolio risk`});
   expect(JSON.stringify(reply)).toContain('I explain portfolio risk');
+  const footer=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});
+  expect(await footer.find({type:'Text',text:'Existing composer content'})).toBeDefined();
+  expect(await footer.find({key:'agent-chat-activity'})).toBeDefined();
+  expect(await footer.find({key:`agent-icon-${uid}-24`})).toBeDefined();
+  const output=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'CommandOutput',props:{command:'ms',text:`mainsequence: ${reply.text}`}});
+  expect(await output.find({key:`agent-icon-${uid}-20`})).toBeDefined();
+  const tool=`mcp__mainsequence__${tools.find(t=>t.name.startsWith('ms_agent_send_')).name}`;
+  for(const component of ['ToolUse','ToolResult']) {
+    const row=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component,props:{tool,tool_use_id:'fixture-call',isRunning:component==='ToolUse'}});
+    expect(await row.find({key:`agent-icon-${uid}-20`})).toBeDefined();await row.unmount();
+  }
+  await output.unmount();await footer.unmount();
   expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(1);
   expect(requests.find(r=>r.action==='agent-send').waitForReady).toBe(true);
   expect(requests.find(r=>r.action==='agent-send').sessionUid).toBe(id(3));

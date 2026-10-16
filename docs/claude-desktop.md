@@ -41,6 +41,9 @@ If Desktop cannot locate Node, configure its absolute path through the plugin's
 Node executable setting or **General → Advanced → Runtime & diagnostics →
 Executable overrides**.
 
+Agent icons now appear in the directory, details, composer activity band and
+attributed command/tool rows. See [animation behavior and limits](agent-icons.md).
+
 ## General: MainSequence login and settings
 
 The pane reads the existing MainSequence session on startup without initiating a

@@ -79,3 +79,20 @@ checksums, documentation and standalone execution.
 Signed native terminals, changing Claude's session root and launching container
 sessions remain unsupported. The [verification record](../claude-desktop-verification.md)
 distinguishes these limitations and live GUI checks from automated fixture results.
+
+
+## Agent icon media adapter (2026-10-16)
+
+The approved icon integration uses the platform’s existing environment projection
+and authenticated icon/pose routes. `src/hosts/claudeAgentIcons.ts` adapts binary
+responses through the public session service’s injected fetch transport; token
+selection, rotation and persistence remain in devtools. It neither imports private
+devtools modules nor adds a chat-package dependency. This desktop-specific adapter
+is needed because the pinned session service exposes a JSON request method while
+the native renderer needs embedded media.
+
+The hooks retain media only in account/environment-scoped memory. Native Svg
+widgets draw isolated, non-executable image content. The native AbovePrompt,
+CommandOutput and ToolUse/ToolResult render sites carry the icons while preserving
+the engine’s content. No backend route, worker protocol version, stored settings
+or conversation-binding format changes. See [agent icon behavior and limits](../agent-icons.md).

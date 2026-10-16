@@ -487,3 +487,41 @@ standalone-worker checks. Desktop's bundled Code 2.1.295 validated the extracted
 plugin and passed all five native simulator tests with disposable configuration.
 These checks establish code and packaging behavior; they do not claim live GUI or
 live backend acceptance for this Claude release.
+
+
+## Agent icons 0.4.8 — 2026-10-17
+
+The release keeps published devtools 0.2.7. Native capability was checked against
+Desktop's bundled Code 2.1.299 before implementation. Live signed-in testing found
+that interactive SVG frames were blank and that SessionMode flattened its content
+into a narrow text slot. The final implementation uses native SVG image mode and
+the AbovePrompt band for the selected agent's activity.
+
+In the existing Claude installation, the Production directory showed six agents.
+The five without custom icons had no placeholder or reserved slot. The Tutorial
+agent's real icon appeared in its list row and detail heading. Eight native detail
+screenshots contained two distinct icon frames. Its composer activity showed idle,
+then thinking during a harmless test request; eight screenshots contained four
+distinct thinking frames. The backend returned an ambiguous A2A transport outcome;
+the UI showed the error pose and delivery-review notice. The message was not
+replayed. A successful live reply and remote internal-tool events are not claimed.
+
+The icon tests cover first-frame extraction, native markup limits, canonical
+authenticated delivery, foreign/query-bearing URL refusal, account mismatch,
+optional asset failures, no-placeholder rendering and Command Center pose priority.
+Hook tests cover list, detail, composer, running tool and attributed command output
+(including Desktop's plugin prefix), cache reuse, failed refresh retention,
+non-persistence and late environment responses. Native simulator tests exercise
+the widgets in list/detail/composer, tool rows and attributed command output.
+
+All 60 Node tests, typechecking, documentation validation, portable distribution
+checks, native loader validation and all five native simulator tests passed.
+Fixtures use synthetic credentials. A separate Chromium image probe confirmed
+APNG frame changes; process-level reduced motion kept six samples on frame zero.
+Page-only emulation did not reach nested SVG images. Live OS motion/theme
+preferences are not claimed as verified.
+
+Live testing temporarily overlaid the backed-up existing plugin cache without
+editing its registry, account, provider settings or credentials. The official
+release is installed through the normal marketplace updater after publication.
+There are no backend or dependency changes in this release.

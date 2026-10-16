@@ -6,10 +6,12 @@ Claude accounts or provider configuration are changed.
 
 ## Choose an agent and write a message
 
-Compact rows show the agent name, **ⓘ** and **💬** Talk on one aligned row.
-Conversation progress appears only beneath the agent it belongs to. The controls
+Compact rows show the agent’s custom icon, name, **ⓘ** and **💬** Talk on one aligned row.
+Conversation progress appears beneath the agent it belongs to and in the selected
+conversation’s composer activity band. The controls
 inherit Claude’s theme; there are no custom gold colors, initial badges or nested
-button frames. The environment
+button frames. [Agent icons](agent-icons.md) use the platform’s colour or mask
+assets; animated icons respect the operating system’s reduced-motion preference. The environment
 is already selected above; environment/branch and deployment metadata are shown
 only in **ⓘ**, alongside the description, public skills and examples. “Deployment
 up to date” means the active deployed commit matches the backend's latest recorded

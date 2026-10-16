@@ -6,6 +6,7 @@ import { createNodeHost } from '@dev-mainsequence/devtools';
 import { ToolingError } from '@dev-mainsequence/devtools';
 import { CLAUDE_INPUT_LIMIT, claudeFailure, executeClaudeEnvelope, parseClaudeEnvelope } from './hosts/claudeProtocol';
 import { createClaudeProjectActions } from './hosts/claudeProjectActions';
+import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
 
 export async function main(): Promise<void> {
   const controller = new AbortController();
@@ -40,7 +41,9 @@ export async function main(): Promise<void> {
         const result = await host.runProcess({ executable: '/usr/bin/osascript', args: ['-e', 'POSIX path of (choose folder with prompt "Choose a MainSequence projects folder")'], cwd: process.cwd(), signal: controller.signal, timeoutMs: 120_000 });
         return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
       } : undefined });
-    const result = await executeClaudeEnvelope(envelope, { devtools: tooling.dispatch, projects: projects.dispatch });
+    const result = await executeClaudeEnvelope(envelope, { devtools: tooling.dispatch,
+      projects: request => request.action === 'agent-icons'
+        ? createClaudeAgentIcons({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
     process.stdout.write(JSON.stringify({ type: 'result', id, result }) + '\n');
   } catch (error) {
     process.stdout.write(JSON.stringify({ type: 'result', id, result: claudeFailure(action, error, controller.signal.aborted) }) + '\n');
