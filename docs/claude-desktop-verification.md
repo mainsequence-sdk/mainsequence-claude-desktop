@@ -466,3 +466,24 @@ selection, account/provider configuration and credential files. The only detecte
 change in Claude's main configuration was its own cached feature timestamp, as
 noted above. No backend code or configuration changed and no agent message was
 submitted during verification.
+
+## 0.4.6 MCP release-detail compatibility
+
+On 2026-10-16 the candidate bundles the public devtools 0.2.7 archive with its
+registry integrity pin. Missing release display names no longer block MCP add,
+tool listing or calls. Claude selectors, registered tool descriptions and
+availability errors use the release UID when no display name is available.
+
+Both new regressions failed against 0.4.5 before the fix. All 49 Node tests now
+pass. The packaged-worker integration starts real platform/project HTTP fixtures
+and a fresh bundled worker process for discovery, add, saved-connection listing,
+tool listing and a tool call. Only the public factory's metadata-storage path is
+injected to isolate the test. Release details and saved records have no `name`;
+credentials are synthetic. Access denial, endpoint changes, missing capability
+and a mismatched release UID fail before credential exchange or project execution.
+
+The exact ZIP passed portable inventory, checksum, marketplace, documentation and
+standalone-worker checks. Desktop's bundled Code 2.1.295 validated the extracted
+plugin and passed all five native simulator tests with disposable configuration.
+These checks establish code and packaging behavior; they do not claim live GUI or
+live backend acceptance for this Claude release.

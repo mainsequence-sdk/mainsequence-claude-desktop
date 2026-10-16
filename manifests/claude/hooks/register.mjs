@@ -1,4 +1,4 @@
-import { TABS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue } from './model.mjs';
+import { TABS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName } from './model.mjs';
 import { renderPane } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 
@@ -134,12 +134,12 @@ async function refreshTools($, state) {
     const backend = connection.backend;
     const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, environmentUid, releaseUid }), true);
     if (state.closed || revision !== state.contextRevision) return;
-    if (answer.status !== 'success') { unavailable.push(clean(connection.name)); continue; }
+    if (answer.status !== 'success') { unavailable.push(mcpDisplayName(connection)); continue; }
     for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
       const name = toolName(backend, environmentUid, releaseUid, tool.name);
       const full = `mcp__${$.plugin.name}__${name}`;
       next[full] = { backend, environmentUid, releaseUid, tool: tool.name };
-      await $.tool.register({ name, description: clean(`MainSequence ${connection.name} [${environmentLabel(state)}]: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
+      await $.tool.register({ name, description: clean(`MainSequence ${mcpDisplayName(connection)} [${environmentLabel(state)}]: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
       if (state.closed || revision !== state.contextRevision) return;
     }
   }
