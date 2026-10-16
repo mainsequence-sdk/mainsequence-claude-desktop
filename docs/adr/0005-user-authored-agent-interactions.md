@@ -7,6 +7,11 @@ composer prefilling and reload/resume were verified in Desktop the same day.
 See the [verification record](../claude-desktop-verification.md#044-user-authored-agent-interactions)
 for the tested scope and remaining live-message boundary.
 
+Amended 2026-10-16: the owner approved readiness preparation on Talk. The
+0.4.5 / devtools 0.2.6 amendment was recorded before implementation. Readiness
+and draft preservation were verified in Desktop on 2026-10-16; see the
+[0.4.5 verification record](../claude-desktop-verification.md#045-readiness-and-agent-defaults).
+
 ## Context
 
 The published Agents flow submits a generated introduction when a person clicks
@@ -68,8 +73,9 @@ caller-session provenance. It acts as the authenticated MainSequence user.
    `agent.get_or_create_session` through shared devtools. A new binding derives
    `claude_<claude-session-id>_<agent-uid>_default`; a previously saved compatible
    handle/session takes precedence. Store the returned session UID before enabling
-   a send. Session allocation makes no runtime-access or message request.
-3. Fill Claude's existing composer with `/ms agent <agent-uid> ` using the native
+   a send. Session allocation itself makes no runtime-access or message request.
+   Talk then follows the readiness preparation below before touching the composer.
+3. Only after the selected agent is ready, fill Claude's existing composer with `/ms agent <agent-uid> ` using the native
    draft API. The UID is populated by the plugin. The person writes their own text.
    Example: `/ms agent <agent-uid> Show opportunities without a follow-up this week.`
 4. Preserve existing draft text. Re-selecting the same recipient must not duplicate
@@ -95,6 +101,48 @@ Native draft reading/filling and command handlers exist in the inspected mod API
 Actual Desktop behavior must be verified before claiming the flow works. If the
 Desktop surface refuses draft filling, report that capability gap; never substitute
 an automatic submission, UI injection or a different composer without approval.
+
+## Readiness preparation (2026-10-16 amendment)
+
+Talk prepares both the conversation and its remote availability. Shared devtools
+owns readiness resolution and bounded waiting through the existing
+`agent_session.resolve_runtime_access` MCP operation. The Claude adapter owns
+per-conversation progress, cancellation and the native composer. No backend change,
+new deployment, provider change or Command Center chat-engine dependency is needed.
+
+After session resolution, validate its Agent, account and Environment and request
+runtime access for that exact session. Only `runtime_interaction.can_submit` is
+submission admission; `is_ready`, deployment currency, a session UID and locally
+registered tools are not evidence of an awake agent. Current platform activation
+starts/reuses a wake operation and checks the application before granting admission.
+Validate the live deployment contract during Desktop verification; do not silently
+substitute a legacy readiness heuristic or a model-generated introduction.
+
+The shared action exposes only allowlisted readiness state, safe progress, retry
+and deadline metadata. Runtime access tokens, URLs and other raw access fields
+stay inside the local worker, are discarded, and never enter Claude tools, Activity,
+logs, saved settings or conversation mappings. A malformed/absent decision fails
+closed. Terminal refusal is not polled. Transient decisions follow server retry
+intervals under one bounded wait, with cancellation and no overlapping checks.
+No polling continues indefinitely after ready, failure, host-session/context change
+or plugin shutdown. Cancelling a local wait does not cancel a backend wake.
+
+The selected row progresses through Opening session, Checking agent, Starting agent
+and Agent ready. Preserve the current draft until readiness succeeds. Only the
+latest selected conversation may prefill; late readiness from another selection
+cannot overwrite it. Repeated Talk revalidates availability, including restored
+bindings; readiness is transient and is never persisted as a permanent ready flag.
+Ordinary Claude input stays usable. This prepares no message and schedules no send.
+
+Before an explicit agent submission, revalidate availability through the shared
+client. While waiting, preserve exact recipient and message identity; send only
+once after admission. A readiness failure is a known unsent outcome; a timeout or
+transport failure after dispatch is uncertain and must not automatically replay.
+Task completion waiting remains distinct from startup readiness.
+
+Failures keep the existing session and draft and offer an explicit retry. Do not
+silently switch sessions, change provider defaults, redeploy an agent or renew a
+Claude account. Keep all wait state scoped to the existing conversation binding.
 
 ## Conversation continuity and ownership
 
@@ -145,7 +193,7 @@ original identity, without displaying one account's data under another account.
 ## Per-agent state and concurrency
 
 Selection, local preparation, request progress and runtime deployment state are
-separate facts. One row may show Session ready while another agent has work
+separate facts. One row may show Agent ready while another agent has work
 in progress. A single global preparation flag must not drive every card.
 
 Each binding owns its busy state, error, session UID, Task UIDs and uncertain-send
@@ -153,7 +201,8 @@ marker. Preparation results carry a selection generation so an older lookup cann
 replace a more recently selected agent. Responses update their original binding
 regardless of which card is selected when they arrive.
 
-Show Preparing only for the recipient being prepared, Selected before any send,
+Show Opening/Checking/Starting only for the recipient being prepared, Agent ready
+only after admission succeeds,
 Sending/Waiting only while its operation runs, and the returned result or error
 when it finishes. Show Task status only from actual task results. “Deployment up
 to date” in the information view means the active deployed commit matches the
@@ -215,7 +264,7 @@ Before completion, verify and document:
 
 1. The information control reveals the selected description; directory cards do not
    show every description. Preparing one agent changes only that card.
-2. Talk to agent fills the existing Desktop composer, preserves a typed draft and
+2. Talk waits for runtime admission before filling the existing Desktop composer, preserves a typed draft and
    does not submit, start inference or call `agent-send`. Repeated clicks do not
    duplicate prefixes. Unsupported draft filling is reported accurately.
 3. An explicitly submitted command sends only the user's message to its exact
@@ -227,7 +276,10 @@ Before completion, verify and document:
    replies. New conversation cannot be overwritten by an older completion.
 5. Account/environment changes, cancellation and uncertain delivery remain safe;
    no automatic retry occurs. Task operations retain original task attribution.
-6. Timeout metadata and shared-client bounds are tested with synthetic transport;
+6. Readiness tests cover waking-to-ready, already-ready, absent/malformed admission,
+   terminal refusal, retry/deadline bounds, cancellation, resumed sessions, per-agent
+   races, stale selection, credential redaction and revalidation before sending.
+   Timeout metadata and shared-client bounds are tested with synthetic transport;
    backend changes and real provider execution are not needed for those tests.
 7. Node contract tests, native loader/simulator checks and actual Desktop composer
    verification are reported separately. Synthetic results are not presented as

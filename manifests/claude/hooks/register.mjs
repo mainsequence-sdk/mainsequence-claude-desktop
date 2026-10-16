@@ -11,22 +11,22 @@ function operationTitle(action) {
     status: 'Check project status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
     'mcp-discover': 'Find project MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect project MCP',
     'mcp-remove': 'Disconnect project MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool',
-    'agents-list': 'Find agents', 'agent-get': 'Read agent details', 'agent-session': 'Open agent conversation', 'agent-send': 'Send agent message',
+    'agents-list': 'Find agents', 'agent-get': 'Read agent details', 'agent-session': 'Open agent conversation', 'agent-readiness': 'Prepare agent', 'agent-send': 'Send agent message',
     'agent-task-get': 'Check agent task', 'agent-task-wait': 'Wait for agent task', 'agent-task-cancel': 'Cancel agent task',
     'local-repositories': 'Discover local repositories' })[action] || action.replaceAll('-', ' ');
 }
 
-async function execute($, state, domain, quiet = false) {
+async function execute($, state, domain, quiet = false, observer = {}) {
   const action = domain.request.action;
   const contextRevision = state.contextRevision;
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
   if (state.running.size >= 8) return fail(action, 'Wait for a running operation to finish.', 'PROJECT_BUSY');
   const id = `${state.sessionId}-${++state.sequence}`;
   const op = { id, title: operationTitle(action), context: domain.request.environmentUid ? `Environment: ${environmentLabel(state)}` : domain.scope === 'devtools' && !sessionActions.has(action) ? domain.request.root || 'MainSequence' : 'MainSequence', label: `${domain.scope} · ${action}`, status: 'running', progress: 'Starting…', cancelled: false };
-  state.running.set(id, op);
+  state.running.set(id, op); observer.started?.(op);
   if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); update($); }
   const envelope = { protocolVersion: 1, id, request: domain };
-  let result = await runWorker($, state, envelope, op, message => { op.progress = message; if (!quiet) update($); });
+  let result = await runWorker($, state, envelope, op, message => { op.progress = message; observer.progress?.(message); if (!quiet) update($); });
   const publicResult = publicValue(result);
   op.status = publicResult.status; op.progress = publicResult.summary; op.result = publicResult;
   state.running.delete(id);
@@ -208,6 +208,11 @@ function actionsFor($, state) {
     agentDetails: uid => background(getAgent($, state, uid).then(result => { if (result) { state.agentDetail = result.agent; update($); } })),
     closeAgentDetails: () => { state.agentDetail = null; update($); },
     talkToAgent: uid => background(talkToAgent($, state, uid)),
+    cancelAgentPreparation: uid => {
+      const preparation = state.agentPreparing[uid];
+      if (preparation) { preparation.cancelled = true; if (preparation.operation?.cancel) background(preparation.operation.cancel()); }
+      refresh($);
+    },
     newAgentConversation: uid => { state.confirmation = { title: 'Start a new agent conversation', detail: 'The agent starts a separate conversation. An earlier request may still be running; this does not cancel it.', callback: () => talkToAgent($, state, uid, true) }; update($); },
     selectEnvironment: uid => background(selectEnvironment($, state, uid)),
     toggle: key => { state.expanded[key] = !state.expanded[key]; update($); },
@@ -413,6 +418,7 @@ const refresh = $ => $.ui.invalidate('ui.render');
 function suffix(value) { let hash = 2166136261; for (const char of value) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0; return hash.toString(16); }
 
 function clearAgents($, state) {
+  for (const op of state.running.values()) if (['devtools · agent-readiness', 'devtools · agent-send'].includes(op.label) && op.cancel) void op.cancel().catch(() => {});
   state.agentRevision++; state.agentListRevision++; state.agentSelection++; state.agentTools = {}; state.agentBindings = {}; state.agentPreparing = {}; state.agentDrafts = {};
   state.agentDetail = null; state.agentsLoading = false; state.agentOffset = 0; state.fields.agentSearch = ''; state.agentAccount = ''; state.activeAgent = null;
   delete state.results['devtools.agents-list']; delete state.results['devtools.agent-get'];
@@ -466,25 +472,50 @@ async function saveBinding($, state, binding, replace = false) {
   const queued = state.agentSave.then(write); state.agentSave = queued.catch(() => {}); await queued;
 }
 
-async function fillAgentDraft($, state, binding, ticket) {
-  if (!current(state, binding) || ticket !== state.agentSelection) return;
+async function fillAgentDraft($, state, binding, ticket, preparation) {
+  if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   const draft = await $.prompt.read();
-  if (!current(state, binding) || ticket !== state.agentSelection) return;
+  if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   const match = /^\/ms\s+(agent|task)\s+([-a-fA-F0-9]{36})(?:[ \t]|$)/.exec(draft.text);
   if (draft.text.trimStart().startsWith('/') && !match) { $.ui.toast('Your existing slash command was kept. Clear it before choosing an agent message.'); return; }
   const mode = match?.[1] === 'task' && binding.agent.responseKinds.includes('task') ? 'task' : binding.agent.responseKinds.includes('message') ? 'agent' : 'task';
   const message = match ? draft.text.slice(match[0].length) : draft.text;
   const filled = await $.prompt.fill({ text: `/ms ${mode} ${binding.agent.uid} ${message}`, mode: 'replace' });
-  if (!current(state, binding) || ticket !== state.agentSelection) return;
+  if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   if (!filled?.isFilled) { $.ui.toast('Claude Desktop could not fill its chat input. No message was sent.'); return; }
   state.agentDrafts[binding.agent.uid] = binding;
-  $.ui.toast(`Write your message to ${binding.agent.name} in Claude’s input, then send it.`);
+  $.ui.toast(`${binding.agent.name} is ready. Write your message in Claude’s input, then send it.`);
+}
+
+async function prepareAgent($, state, binding, preparation) {
+  if (!current(state, binding)) return false;
+  if (preparation.cancelled) { binding.status = 'failed'; binding.error = 'Agent preparation cancelled. No message was sent.'; return false; }
+  preparation.phase = 'Checking agent…'; binding.error = ''; refresh($);
+  const result = await execute($, state, request('devtools', 'agent-readiness', {
+    backend: binding.backend, environmentUid: binding.environmentUid, expectedAccount: binding.account,
+    agentUid: binding.agent.uid, sessionUid: binding.sessionUid,
+  }), true, {
+    started: op => { preparation.operation = op; },
+    progress: message => { if (current(state, binding) && !preparation.cancelled) { preparation.phase = message; refresh($); } },
+  });
+  preparation.operation = null;
+  if (!current(state, binding)) return false;
+  if (preparation.cancelled || result.status !== 'success' || result.data?.ready !== true
+    || result.data.sessionUid !== binding.sessionUid || result.data.agentUid !== binding.agent.uid || result.data.account !== binding.account) {
+    binding.status = 'failed';
+    binding.error = preparation.cancelled ? 'Agent preparation cancelled. No message was sent.'
+      : result.status !== 'success' ? result.summary : 'Could not confirm that this agent is ready. No message was sent.';
+    if (preparation.ticket === state.agentSelection) $.ui.toast(binding.error);
+    return false;
+  }
+  binding.status = binding.uncertain ? 'uncertain' : 'selected';
+  return true;
 }
 
 async function talkToAgent($, state, uid, fresh = false) {
   if (!await ensureAgentHost($, state) || !uuid(uid)) return;
   if (state.agentPreparing[uid]) { state.agentPreparing[uid].ticket = ++state.agentSelection; return; }
-  const preparation = { ticket: ++state.agentSelection }, revision = state.agentRevision, hostSessionId = state.sessionId;
+  const preparation = { ticket: ++state.agentSelection, phase: 'Opening session…', cancelled: false }, revision = state.agentRevision, hostSessionId = state.sessionId;
   const selection = context(state), valid = () => revision === state.agentRevision && hostSessionId === state.sessionId && selection === context(state) && !state.closed;
   state.agentPreparing[uid] = preparation; refresh($);
   let binding;
@@ -496,7 +527,7 @@ async function talkToAgent($, state, uid, fresh = false) {
     const existing = state.agentBindings[key];
     if (!fresh && existing && current(state, existing) && existing.sessionUid && existing.toolsReady) {
       if (preparation.ticket === state.agentSelection) { state.activeAgent = existing; state.agentDetail = null; }
-      await fillAgentDraft($, state, existing, preparation.ticket); return;
+      if (await prepareAgent($, state, existing, preparation)) await fillAgentDraft($, state, existing, preparation.ticket, preparation); return;
     }
     await state.agentSave;
     const saved = record(record(await $.store.get(`agent-conversations-${hostSessionId}`))[key]);
@@ -536,7 +567,7 @@ async function talkToAgent($, state, uid, fresh = false) {
     }
     binding.toolsReady = true;
     if (preparation.ticket === state.agentSelection) { state.activeAgent = binding; state.agentDetail = null; }
-    await fillAgentDraft($, state, binding, preparation.ticket);
+    if (await prepareAgent($, state, binding, preparation)) await fillAgentDraft($, state, binding, preparation.ticket, preparation);
   } catch {
     if (binding) { binding.status = 'failed'; binding.error = 'Claude could not prepare this conversation.'; }
     if (valid()) $.ui.toast('Claude could not prepare this conversation. No message was sent.');
@@ -545,6 +576,7 @@ async function talkToAgent($, state, uid, fresh = false) {
 
 async function runAgentOperation($, state, binding, kind, input, approved = false) {
   if (!await ensureAgentHost($, state) || !current(state, binding) || !binding.sessionUid) return { deny: 'This agent conversation is no longer active. Choose an agent in the current environment.' };
+  if (state.agentPreparing[binding.agent.uid]) return { deny: 'This agent is still being prepared. Wait until it is ready.' };
   if (binding.busy) return { deny: 'An operation for this agent is already running. Wait for its result.' };
   if (binding.uncertain && kind === 'send') return { deny: 'The previous send has an uncertain outcome. Do not resend automatically; review Activity or the existing task.' };
   if (['get', 'wait', 'cancel'].includes(kind) && !binding.taskUids.includes(input.taskUid)) return { deny: 'Choose a task returned by this conversation.' };
@@ -560,7 +592,7 @@ async function runAgentOperation($, state, binding, kind, input, approved = fals
     if (!current(state, binding)) return { deny: 'The environment or account changed before this operation was approved.' };
     let values = { backend: binding.backend, environmentUid: binding.environmentUid, expectedAccount: binding.account, agentUid: binding.agent.uid };
     if (kind === 'send') {
-      values = { ...values, message: input.message, responseKind: input.responseKind,
+      values = { ...values, message: input.message, responseKind: input.responseKind, waitForReady: true,
         ...(input.taskUid ? { taskUid: input.taskUid } : { sessionUid: binding.sessionUid }) };
       binding.uncertain = true; await saveBinding($, state, binding);
     } else values = { ...values, taskUid: input.taskUid, ...(kind === 'wait' && input.afterSequence !== undefined ? { afterSequence: input.afterSequence } : {}) };

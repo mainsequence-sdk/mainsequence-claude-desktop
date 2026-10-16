@@ -68,3 +68,13 @@ Run `npm run release:check` after installing the exact dependency. Set
 
 Signed terminal, changing the Code session's root, and container-session launching
 remain host limitations. Native layout chrome/placement is controlled by Claude.
+
+### 0.4.5 — prepare agents before writing
+
+Talk creates or resumes the same session and waits for the agent to become ready
+before prefilling Claude's existing input. Per-agent progress, cancellation and retry
+preserve drafts; no message is sent automatically. Explicit sends recheck readiness.
+Each agent also shows its default provider, model and thinking setting beneath its name.
+The shared implementation is devtools 0.2.6. MainSequence session renewal remains
+under General → MainSequence account → Manage account. Accounts, provider choices,
+saved settings and backend contracts require no migration.

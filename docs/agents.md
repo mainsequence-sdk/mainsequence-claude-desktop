@@ -16,7 +16,7 @@ up to date” means the active deployed commit matches the backend's latest reco
 branch commit. It is not a connection health check.
 
 **💬 Talk to agent** creates or resumes an empty MainSequence agent conversation and
-fills Claude's existing input with `/ms agent <agent-uid> `. It does not send an
+waits for the agent to be ready, then fills Claude's existing input with `/ms agent <agent-uid> `. It does not send an
 introduction or start a model turn. Write your question after the prefix and submit
 it yourself. The plugin sends your text directly to the selected agent and shows
 the reply with its agent/environment label in Claude's command transcript.
@@ -30,7 +30,7 @@ chat and bare `/ms` retain their existing behavior.
 For agents advertising Task support, `/ms task <agent-uid> <message>` starts longer
 work. Task-only agents use that prefix automatically. Task tools offer status,
 bounded waiting and cancellation for tasks returned by that conversation. There is
-no background polling loop or promise that completion wakes Claude. Cancellation
+no idle or task-completion background polling loop or promise that completion wakes Claude. Cancellation
 is requested until the platform confirms it. Cancelling a local worker in Activity
 does not cancel a remote task.
 
@@ -49,7 +49,13 @@ external association, never Django's `parent_session_uid` foreign key.
 
 Talk calls the existing `agent.get_or_create_session` endpoint through shared
 devtools and saves the returned AgentSession UID before enabling a send. Allocation
-uses no runtime-access request or agent message. Missing provider/model defaults
+itself uses no runtime-access request or agent message. Talk then calls the existing
+`agent_session.resolve_runtime_access` through shared devtools and waits for
+`runtime_interaction.can_submit`. Opening session, Checking agent and Starting agent
+are shown only for that conversation. Only readiness success permits draft prefilling.
+Cancel stops the local wait without cancelling the platform wake. Failure preserves
+the session and draft and offers Try again. Renew session stays in General →
+MainSequence account → Manage account, never in Projects or Current Project. Missing provider/model defaults
 are reported without changing them. A saved session that is unavailable is not
 silently replaced.
 
@@ -83,10 +89,11 @@ Claude Desktop pane / draft / command / tool hooks
     → @dev-mainsequence/devtools public API
       → existing authenticated MainSequence /mcp
         → agent.list / search / get / get_or_create_session
+        → agent_session.resolve_runtime_access (bounded readiness wait)
         → a2a.send_message / get_task / wait_task / cancel_task
 ```
 
-Shared devtools owns validation, session allocation, messaging, public projections
+Shared devtools owns validation, session allocation, readiness waiting, messaging, public projections
 and bounded platform timeout handling. This repository owns Claude UI, draft and
 command handling, per-Claude-session mappings, confirmations and Activity. Host API
 functions stay in `hooks/register.mjs` because Claude's effect analysis follows
@@ -98,7 +105,7 @@ contract tests, native simulator checks and actual Desktop acceptance.
 
 ## Verification and coordinated release
 
-Claude **0.4.4** pins the exact public **@dev-mainsequence/devtools@0.2.5**
+Claude **0.4.5** pins the exact public **@dev-mainsequence/devtools@0.2.6**
 archive with its registry URL and integrity. The shared library remains in
 mainsequence-devtools; no backend or other adapter changes are required.
 
@@ -112,3 +119,12 @@ release checks, then publish Claude through its existing workflow. Update the pu
 catalog only after its release archive exists and its checksum is verified. Do not
 publish a rebuilt archive under an already released version. Desktop needs no npm
 install, source checkout or runtime dependency download.
+
+Readiness is transient: selecting a saved conversation checks again and every explicit
+send opts into shared readiness revalidation. No message is queued by Talk. A known
+pre-dispatch readiness failure is unsent; a failed request after dispatch remains
+uncertain and is never automatically replayed. Tokens and runtime URLs from the access
+response stay private to the worker and are discarded. The wait follows platform
+retry guidance and stops at its deadline, cancellation or a terminal decision.
+
+The compact line beneath each agent name shows only the values of its default provider, model and thinking setting, in that order, separated by middle dots (for example `openai-codex · gpt-5.6-luna · medium`). It wraps at the pane width, uses Claude’s muted theme text and labels absent defaults “Not configured.” These are agent defaults, not overrides or the resolved configuration of an existing session. Displaying them does not change credentials, providers, settings or the backend.
