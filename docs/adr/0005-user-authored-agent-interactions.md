@@ -8,8 +8,9 @@ See the [verification record](../claude-desktop-verification.md#044-user-authore
 for the tested scope and remaining live-message boundary.
 
 Amended 2026-10-16: the owner approved readiness preparation on Talk. The
-0.4.5 / devtools 0.2.6 amendment is recorded before implementation; verification
-and publication evidence will be added after the checks complete.
+0.4.5 / devtools 0.2.6 amendment was recorded before implementation. Readiness
+and draft preservation were verified in Desktop on 2026-10-16; see the
+[0.4.5 verification record](../claude-desktop-verification.md#045-readiness-and-agent-defaults).
 
 ## Context
 

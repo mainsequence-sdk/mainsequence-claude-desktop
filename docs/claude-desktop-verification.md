@@ -393,3 +393,55 @@ lockfile now pins that public archive with integrity
 `sha512-3R100Zcp8409bjBpFnoJIvgzOQum2O5LCaEz7q6oRBVSVggCnJLxjl/fukjfj0HIZPM9TjBuSVNrUnCAawuiRw==`.
 The release was rebuilt from a clean registry installation, without a local package
 override. Marketplace publication uses the existing immutable-archive workflow.
+
+## 0.4.5 readiness and agent defaults
+
+ADR 0005 was amended before implementation on 2026-10-16. The candidate uses
+shared devtools 0.2.6. Its 108 tests cover explicit submission admission, retry
+intervals, timeouts, cancellation, credential-free output, session/account validation,
+opt-in send gating and public agent defaults. The 47 Claude tests cover pending
+readiness, preserving edits made during the wait, stale responses, cancellation,
+independent agent status, default labels and General-only session renewal. Full
+release checks and all five native Desktop simulator tests passed against Code
+2.1.295 with disposable configuration.
+
+In the authorized empty “Reload plugins” Desktop chat, the candidate was staged
+with an exact backup of the existing installed plugin and no registry change.
+CRM Talk initially encountered a backend connection failure; the input stayed
+unchanged and offered a retry. An explicit retry opened/resumed the existing
+session, displayed Checking agent, and only after runtime admission displayed
+“Agent ready · no message sent” and prefixed the existing draft with that agent's
+`/ms agent <uid>` command. Other agents did not inherit its status. The draft was
+not submitted and no live agent message or model turn was requested. The final
+readiness wait uses the deployed `runtime_interaction.can_submit` contract, not
+routing-only `is_ready`.
+
+General → MainSequence account → Manage account exposes Renew session. It was
+inspected without invoking renewal or sign-out. The saved backend and repository
+folder remained the actual editable values. Before/after hashes matched for
+Claude settings, credentials, Desktop preferences, MainSequence CLI configuration
+and the plugin’s saved settings. Claude’s main configuration later updated only
+its `cachedGrowthBookFeaturesAt` timestamp; its account/provider fields remained
+unchanged. No app-generated cache timestamp was restored. Only the authorized local test
+chat was reloaded; no backend file or provider configuration was changed.
+
+A live cold-start cycle was not forced: no agent was stopped or redeployed for
+this test. Starting/waking-to-ready behavior and cancellation are covered by the
+shared tests and the native simulator. Live message delivery is outside this
+verification because the user requested no automatic send.
+
+The live directory displayed provider, model and thinking defaults beneath all
+five agent names from the existing backend fields. Example: CRM assistant returned
+`openai-codex`, `gpt-5.6-luna`, `medium`. The model name is displayed verbatim;
+no provider selection or session override is made. The information and Talk controls
+retain the approved name-row alignment, with metadata below that row.
+
+The owner’s values-only refinement was verified in the real Desktop pane:
+`openai-codex · gpt-5.6-luna · medium`, without Defaults/Provider/Model/Thinking
+labels. Information and Talk icons are aligned with the name, with this metadata
+on the next line.
+
+The [devtools 0.2.6 release workflow](https://github.com/mainsequence-sdk/mainsequence-devtools/actions/runs/38872007376)
+succeeded. The public npm archive’s integrity was verified and all 54 compiled
+shared files matched the tested candidate. A clean install from that public
+archive passed the complete Claude release checks and all five native tests.

@@ -368,6 +368,7 @@ async function agentFixture(options={}) {
     if(r.action==='agents-list')return success(r.action,{account,results:r.environmentUid===agentEnvironment?agents:[],count:r.environmentUid===agentEnvironment?agents.length:0});
     if(r.action==='agent-get')return success(r.action,{account,agent:selected});
     if(r.action==='agent-session')return success(r.action,{account,agent:selected,sessionUid:r.sessionUid|| (r.agentUid===secondUid?secondSession:agentSession)});
+    if(r.action==='agent-readiness')return success(r.action,{account,agentUid:r.agentUid,sessionUid:r.sessionUid,ready:true});
     if(r.action==='agent-send')return success(r.action,{account,agent:selected,sessionUid:r.sessionUid,responseKind:r.responseKind,...(r.responseKind==='task'?{taskUid:agentTask,status:'working',terminal:false}:{message:`Reply from ${selected.name}`})});
     if(r.action.startsWith('agent-task-'))return success(r.action,{account,agent:selected,sessionUid:agentSession,responseKind:'task',taskUid:agentTask,status:'working',terminal:false});
     return success(r.action,{});
@@ -481,8 +482,59 @@ test('returning to an agent that is still opening makes it the final selection w
  const f=await agentFixture({twoAgents:true}); const finish=delayRequest(f,'agent-session',agentUid);
  await f.startTalk(); await f.startTalk(secondUid); await f.startTalk(agentUid); finish(); await flush();
  assert.equal(f.draft,`/ms agent ${agentUid} `);
- assert.match(JSON.stringify(f.find(await f.pane(),`agent-status-${agentUid}`)),/Session ready/);
+ assert.match(JSON.stringify(f.find(await f.pane(),`agent-status-${agentUid}`)),/Agent ready/);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session'&&c.request.request.agentUid===agentUid).length,1);
  const message='  Keep leading spaces\nand a second line  '; await f.send(message);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').at(-1).request.request.message,message);
+});
+
+test('Talk preserves the current draft while readiness waits, then fills once without submission',async()=>{
+ const f=await agentFixture({draft:'Keep my question',twoAgents:true});const finish=delayRequest(f,'agent-readiness',agentUid);
+ await f.startTalk();assert.equal(f.draft,'Keep my question');
+ assert.match(JSON.stringify(f.find(await f.pane(),`agent-status-${agentUid}`)),/Checking agent/);
+ assert.equal(f.find(await f.pane(),`agent-status-${secondUid}`),undefined);
+ assert.equal(f.calls.some(c=>c.filled||c.submitted||c.request?.request.action==='agent-send'),false);
+ assert.match((await f.send()).text,/still being prepared|no longer active/);
+ f.draft='Keep my edited question';finish();await flush();
+ assert.equal(f.draft,`/ms agent ${agentUid} Keep my edited question`);
+ assert.equal(f.calls.filter(c=>c.filled).length,1);assert.equal(f.calls.some(c=>c.submitted),false);
+});
+test('late ready cannot replace another selected agent; resumed Talk checks again',async()=>{
+ const f=await agentFixture({twoAgents:true});const finish=delayRequest(f,'agent-readiness',agentUid);
+ await f.startTalk();await f.startTalk(secondUid);finish();await flush();
+ assert.equal(f.draft,`/ms agent ${secondUid} `);
+ await f.startTalk(secondUid);
+ assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-readiness'&&c.request.request.agentUid===secondUid).length,2);
+ await f.send('Only my text',secondUid);
+ assert.equal(f.calls.findLast(c=>c.request?.request.action==='agent-send').request.request.waitForReady,true);
+});
+test('readiness failure and cancellation preserve drafts and never make them sendable',async()=>{
+ const failure=await agentFixture({draft:'Untouched',respond:r=>r.action==='agent-readiness'?{schemaVersion:1,action:r.action,status:'failure',summary:'Agent unavailable. No message was sent.'}:null});
+ await failure.startTalk();assert.equal(failure.draft,'Untouched');assert.ok(failure.find(await failure.pane(),`agent-prepare-retry-${agentUid}`));
+ assert.equal(failure.calls.some(c=>c.filled||c.submitted),false);
+ const f=await agentFixture({draft:'Keep cancelled draft'});const finish=delayRequest(f,'agent-readiness');await f.startTalk();
+ await f.press(`agent-prepare-cancel-${agentUid}`);finish();await flush();
+ assert.equal(f.draft,'Keep cancelled draft');assert.equal(f.calls.some(c=>c.filled||c.submitted),false);
+ assert.match(JSON.stringify(await f.pane()),/preparation cancelled/);
+});
+test('environment change during readiness never fills a stale draft',async()=>{
+ const f=await agentFixture({draft:'Unchanged'});const finish=delayRequest(f,'agent-readiness');await f.startTalk();
+ f.find(await f.pane(),'mcp-environment').props.onSelect(agentId(9));await flush();finish();await flush();
+ assert.equal(f.draft,'Unchanged');assert.equal(f.calls.some(c=>c.filled||c.submitted),false);
+});
+
+test('session renewal belongs to General and never appears in either project section',async()=>{
+ const f=await agentFixture();await f.press('tab-General');
+ await f.press('toggle-connection-actions');assert.ok(f.find(await f.pane(),'refresh-token'));
+ for(const tab of ['Projects','Current-Project']){await f.press(`tab-${tab}`);assert.equal(f.find(await f.pane(),'refresh-token'),undefined);}
+ await f.press('tab-General');assert.ok(f.find(await f.pane(),'refresh-token'));
+});
+
+test('agent defaults appear beneath the name without exposing or changing provider configuration',async()=>{
+ const f=await agentFixture({agent:{defaults:{provider:'anthropic',model:'claude-sonnet-test',thinking:'high'}}});
+ assert.match(JSON.stringify(f.find(await f.pane(),`agent-defaults-${agentUid}`)),/anthropic · claude-sonnet-test · high/);
+ await f.press(`agent-details-${agentUid}`);
+ assert.match(JSON.stringify(f.find(await f.pane(),`agent-defaults-${agentUid}`)),/claude-sonnet-test · high/);
+ const missing=await agentFixture();assert.match(JSON.stringify(missing.find(await missing.pane(),`agent-defaults-${agentUid}`)),/Not configured · Not configured · Not configured/);
+ assert.equal(f.calls.some(c=>c.request?.request.action==='agent-send'||c.request?.request.action==='agent-session'),false);
 });

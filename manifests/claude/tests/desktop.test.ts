@@ -109,7 +109,7 @@ test('MainSequence login uses shared auth while native Claude credentials remain
 test('Agents opens a bound session and fills the native draft without submitting', async ($, on) => {
   const clock=mock.clock(on,{now:1000});mock.store(on);mock.env(on,{HOME:'/fixture/user'});
   const id=n=>`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
-  const env=id(1),uid=id(2),requests=[],prompts=[],toasts=[],tools=[]; let draft='My question';
+  const env=id(1),uid=id(2),requests=[],prompts=[],toasts=[],tools=[]; let draft='My question'; let releaseReadiness; let preparationPending=true;
   const agent={uid,name:'Research assistant',description:'Explain risk',environmentUid:env,environmentName:'Research',repositoryBranch:'develop',runtimeState:'current',runtimeReleaseUid:id(5),responseKinds:['message'],skills:[]};
   on('session.cwd',()=>({value:'/fixture/project'}));on('session.id',()=>({value:'native-agent-test'}));
   on('session.version',()=>({value:{version:'2.1.295'}}));on('session.start',($,e)=>({cwd:e.cwd}));
@@ -129,6 +129,11 @@ test('Agents opens a bound session and fills the native draft without submitting
     if(r.action==='agents-list')data={account:'fixture@example.test',results:[agent],count:1};
     if(r.action==='agent-get')data={account:'fixture@example.test',agent};
     if(r.action==='agent-session')data={account:'fixture@example.test',agent,sessionUid:id(3)};
+    if(r.action==='agent-readiness'&&preparationPending){
+      yield {stream:'stdout',text:JSON.stringify({type:'progress',id:envelope.id,message:'Starting agent…'})+'\n'};
+      await new Promise(resolve=>{releaseReadiness=resolve;});
+    }
+    if(r.action==='agent-readiness')data={account:'fixture@example.test',agentUid:r.agentUid,sessionUid:r.sessionUid,ready:true};
     if(r.action==='agent-send')data={account:'fixture@example.test',agent,sessionUid:id(3),responseKind:'message',message:'I explain portfolio risk. Provide a portfolio identifier.'};
     yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:r.action,status:'success',summary:'Fixture complete',data}})+'\n'};
     return {value:{code:0,signal:null}};
@@ -139,6 +144,11 @@ test('Agents opens a bound session and fills the native draft without submitting
   await ui.select({key:'mcp-environment',value:env});await clock.settle();
   expect(await ui.find({key:`agent-${uid}`})).toBeDefined();
   await ui.press({key:`agent-talk-${uid}`});await clock.settle();
+  expect(draft).toBe('My question');
+  expect(requests.filter(r=>r.action==='agent-readiness')).toHaveLength(1);
+  expect(await ui.find({type:'Text',text:'Starting agent…'})).toBeDefined();
+  expect(prompts).toHaveLength(0);
+  preparationPending=false;releaseReadiness();await clock.settle();
   expect(prompts,JSON.stringify({requests,toasts,tools})).toHaveLength(0);
   expect(draft,JSON.stringify({requests,toasts,tools})).toBe(`/ms agent ${uid} My question`);
   expect(requests.filter(r=>r.action==='agent-session')).toHaveLength(1);
@@ -147,6 +157,7 @@ test('Agents opens a bound session and fills the native draft without submitting
   const reply=await $.command.run({command:'ms',args:`agent ${uid} Explain my portfolio risk`});
   expect(JSON.stringify(reply)).toContain('I explain portfolio risk');
   expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(1);
+  expect(requests.find(r=>r.action==='agent-send').waitForReady).toBe(true);
   expect(requests.find(r=>r.action==='agent-send').sessionUid).toBe(id(3));
   expect(requests.find(r=>r.action==='agent-send').message).toBe('Explain my portfolio risk');
   await ui.unmount();
