@@ -1,4 +1,5 @@
 import { clean, record, rows } from './model.mjs';
+import { renderAgentIcon } from './agentIcon.mjs';
 
 export function renderAgents(ui, state, actions) {
   const { Box, Text, Button, Input } = ui;
@@ -11,7 +12,10 @@ export function renderAgents(ui, state, actions) {
   const status = agent => ({ current: 'Deployment up to date', not_deployed: 'Not deployed', updating: 'Updating', update_required: 'Update available', update_failed: 'Update failed', unknown: 'Status unknown' }[agent.runtimeState] || 'Status unknown');
   const defaults = agent => text(`${clean(agent.defaults?.provider) || 'Not configured'} · ${clean(agent.defaults?.model) || 'Not configured'} · ${clean(agent.defaults?.thinking) || 'Not configured'}`, { key: `agent-defaults-${agent.uid}`, dimColor: true, wrap: 'wrap' });
   const identity = (agent, showDetails = false) => column([
-    text(agent.name, { bold: true, wrap: 'wrap' }),
+    Box({ flexDirection: 'row', alignItems: 'center', gap: 1, children: [
+      renderAgentIcon(ui, state, agent.uid, { size: showDetails ? 32 : 20 }),
+      text(agent.name, { bold: true, wrap: 'wrap' }),
+    ].filter(Boolean) }),
     showDetails && defaults(agent),
     showDetails && muted(`${agent.environmentName} · ${agent.repositoryBranch || 'Branch unavailable'}`),
   ]);

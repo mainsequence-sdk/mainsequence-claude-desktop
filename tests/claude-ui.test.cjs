@@ -88,7 +88,7 @@ test('one native pane has six coordinated sections and no above-prompt launcher'
   assert.equal(f.calls[0].command.name, 'ms');
   assert.deepEqual(f.calls.find(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence' });
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
-  assert.equal(band, undefined);
+  assert.deepEqual(band, { type: 'engine', ref: 1 });
   for (const tab of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity', 'General']) {
     await f.press(`tab-${tab}`); const tree = await f.pane();
     for (const name of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity']) assert.equal(f.find(tree, `tab-${name}`).props.dimColor, name !== tab);
@@ -419,6 +419,66 @@ function delayRequest(f,action,uid) {
  };
  return ()=>{assert.ok(release,'request started');release();};
 }
+const iconImage = pose => ({ source: `<svg xmlns="http://www.w3.org/2000/svg"><text>${pose}</text></svg>`, stillSource: `<svg xmlns="http://www.w3.org/2000/svg"><text>${pose}-still</text></svg>`, animated: true });
+const iconResponse = r => r.action === 'agent-icons' ? success(r.action, { environmentUid: r.environmentUid, account: 'agent-user@example.test',
+  icons: Object.fromEntries(r.agentUids.map(uid => [uid, { images: { idle: iconImage('idle'), ...(r.includePoses ? { thinking: iconImage('thinking'), error: iconImage('error') } : {}) }, toolPoses: {}, posesLoaded: r.includePoses }])) }) : undefined;
+const svgNodes = tree => !tree || typeof tree !== 'object' ? [] : [...(tree.type === 'Svg' ? [tree] : []), ...(tree.props?.children || []).flatMap(svgNodes)];
+
+test('agent icons appear in list, details, composer activity and historical command output with shared caching', async () => {
+ const f = await agentFixture({ respond: iconResponse });
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.width === 20 && node.props.source.includes('idle')));
+ await f.press(`agent-details-${agentUid}`);
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.width === 32));
+ await f.press('agents-back'); await f.startTalk();
+ const mediaCalls = f.calls.filter(call => call.request?.request.action === 'agent-icons').length;
+ await f.startTalk(); assert.equal(f.calls.filter(call => call.request?.request.action === 'agent-icons').length, mediaCalls);
+ const finish = delayRequest(f, 'agent-send'), pending = f.send(); await flush();
+ let footer = await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} });
+ assert.ok(svgNodes(footer).some(node => node.props.source.includes('thinking') && node.props.isInteractive === false));
+ const row = await f.emit('ui.render', { component: 'ToolUse', surface: 'desktop', props: { tool: f.tool('send'), isRunning: true } });
+ assert.ok(svgNodes(row).some(node => node.props.source.includes('thinking')));
+ finish(); const reply = await pending;
+ const historical = await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'ms', text: reply.text } });
+ assert.ok(svgNodes(historical).some(node => node.props.source.includes('idle-still') && !node.props.isInteractive));
+ const prefixed = await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'ms', text: `mainsequence: ${reply.text}` } });
+ assert.ok(svgNodes(prefixed).some(node => node.props.source.includes('idle-still')));
+ assert.equal((await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'ms', text: `other-plugin: ${reply.text}` } })).type, 'engine');
+ assert.equal((await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'other', text: reply.text } })).type, 'engine');
+ assert.doesNotMatch(JSON.stringify(await f.emit('ui.render', { component: 'ToolUse', surface: 'terminal', props: { tool: f.tool('send'), isRunning: true } })), /idle|thinking/);
+ await f.press('tab-Activity'); assert.doesNotMatch(JSON.stringify(await f.pane()), /agent-icons|idle-still|thinking-still/);
+});
+
+test('media avoids text truncation, is never persisted and cannot survive an environment change', async () => {
+ const longSource = `<svg xmlns="http://www.w3.org/2000/svg"><!--${'x'.repeat(20000)}--></svg>`;
+ const f = await agentFixture({ respond: r => {
+   const result = iconResponse(r); if (result) for (const icon of Object.values(result.data.icons)) icon.images.idle.source = longSource;
+   return result;
+ } });
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.source === longSource));
+ assert.doesNotMatch(JSON.stringify([...f.stores.values()]), /<svg|data:image/);
+ const finish = delayRequest(f, 'agent-icons'); await f.press('agents-refresh');
+ f.find(await f.pane(), 'mcp-environment').props.onSelect(agentId(9)); await flush(); finish(); await flush();
+ assert.equal(svgNodes(await f.pane()).filter(node => node.props.source === longSource).length, 0);
+ assert.equal(f.find(await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} }), 'agent-chat-activity'), undefined);
+});
+
+test('icon delivery failure leaves Talk and direct messaging available', async () => {
+ const f = await agentFixture({ respond: r => r.action === 'agent-icons' ? { ...success(r.action), status: 'failure', summary: 'Optional media unavailable' } : undefined });
+ await f.startTalk(); assert.match((await f.send()).text, /Reply from Research/);
+ assert.ok(f.find(await f.pane(), `agent-talk-${agentUid}`));
+});
+
+test('failed media revalidation retains a displayed icon', async () => {
+ let unavailable = false;
+ const f = await agentFixture({ respond: r => {
+   const result = iconResponse(r);
+   if (unavailable && result) for (const icon of Object.values(result.data.icons)) icon.images.idle = null;
+   return result;
+ } });
+ unavailable = true; await f.press('agents-refresh');
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.source.includes('<text>idle</text>')));
+});
+
 test('Talk resolves a session and prefills an editable draft with no auto-send or introduction',async()=>{
  const f=await agentFixture({draft:'What is the exposure?'});
  assert.doesNotMatch(JSON.stringify(await f.pane()),/Explain portfolio risk/);

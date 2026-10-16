@@ -1,5 +1,9 @@
 # MainSequence for Claude Desktop Code
 
+Version **0.4.8** adds [animated agent icons](docs/agent-icons.md) to agent lists,
+details and the conversation footer, with still icons on completed command/tool
+rows, reduced-motion support and authenticated delivery through the existing login.
+
 MainSequence adds one native developer-tools pane with **General, Projects,
 Current Project, MCP, Agents and Activity**. General keeps MainSequence browser login,
 session renewal, connection checks and workspace settings. The pane uses the
