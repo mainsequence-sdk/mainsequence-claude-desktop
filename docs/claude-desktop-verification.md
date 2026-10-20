@@ -559,3 +559,21 @@ catalog verification.
 The full 0.4.9 release check passed: 67 Node tests, TypeScript, documentation,
 portable distribution, native loader validation and seven native simulator tests.
 The shared dependency remains devtools 0.2.7.
+
+## MCP names 0.4.10 — 2026-10-20
+
+The user's installed candidate was loaded through the supported plugin updater
+and `/reload-plugins` in the existing test chat. In Production, the actual
+discovered MCP dropdown listed `BackofficeBackend`, `mainsequence-sdk-tutorial`,
+`alpaca-connectors`, `MainSequenceCRMAPI` and `MetaTables`. Selecting Backoffice
+displayed `BackofficeBackend` alone; the environment remained in its own selector.
+The installed worker resolved the existing nameless saved CRM record to
+`MainSequenceCRMAPI`. No connection was added and no remote MCP tool was called.
+
+All 68 Node tests and seven native simulator tests passed, together with native
+loader validation, TypeScript, documentation and portable distribution checks.
+The packaged worker fixture covers two generic `app` releases, paginated metadata,
+exact environment matching, existing nameless saved connections, denied optional
+name lookup, unchanged stored records and exact tool routing. UI tests assert
+name-only labels in both selectors and retain release IDs only as selection values.
+The shared package remains published devtools 0.2.7.

@@ -218,7 +218,7 @@ export function renderPane(ui, state, actions) {
     const environments = rows(state.results['devtools.mcp-environments']?.data);
     const environment = environments.find(row => row.uid === f.mcpEnvironment);
     const matches = row => row.mcp_connection?.organization_environment_uid === f.mcpEnvironment;
-    const label = row => clean(`${mcpDisplayName(row)} · ${row.mcp_connection?.organization_environment_name || environment?.name || 'Unknown environment'}`);
+    const label = mcpDisplayName;
     const discovered = rows(state.results['devtools.mcp-discover']?.data).filter(matches);
     const connected = rows(state.results['devtools.mcp-list']?.data).filter(matches);
     const tools = record(state.results['devtools.mcp-tools']?.data).tools;
@@ -244,7 +244,6 @@ export function renderPane(ui, state, actions) {
       Array.isArray(tools) && !tools.length && muted('This MCP exposes no tools.'),
       input('mcpTool', 'Tool name'), input('mcpArguments', 'Arguments (JSON object)'),
       button('mcp-call', 'Review and call tool', mut('Call project MCP tool', dev('mcp-call'), `Call ${f.mcpTool || 'the selected tool'} with the JSON arguments shown. The operation may change remote state.`), !!state.selectedMcp && !!f.mcpTool),
-      state.selectedMcp && line('Environment', environment.name),
       result('devtools.mcp-tools'), result('devtools.mcp-call'), result('mcp.registration'),
       ]),
     ]);
