@@ -525,3 +525,37 @@ Live testing temporarily overlaid the backed-up existing plugin cache without
 editing its registry, account, provider settings or credentials. The official
 release is installed through the normal marketplace updater after publication.
 There are no backend or dependency changes in this release.
+
+## Pane recovery and setup feedback 0.4.9 — 2026-10-20
+
+The reported blank pane was reproduced in the existing Claude installation on
+bundled Code 2.1.299. The connected MCP returned 70 tools. Claude's native renderer
+rejects an entire tree if a Select has more than 64 entries; the empty selection
+also counts. A new native test failed before the fix with
+`Select "mcp-tool" options must be 1 to 64 entries; the engine drew its own`.
+This rejection happens after the render callback returns, so a JavaScript
+try/catch alone cannot recover it.
+
+All data-driven selectors now page at 63 entries, reserving one slot for a
+placeholder or a selection on another page. The native test passes with 130 tools,
+including selection on the last page, returning to an earlier page, unmount/remount
+and section navigation. MCP catalogs retain entries beyond the generic
+100-element activity-preview limit. Late-response and slow-server regressions
+verify that discovery can finish independently and the selected catalog stays scoped.
+
+In the actual Claude window, the fixed candidate displayed the live catalog as
+`1–63 of 70`, then `64–70 of 70`. The last tool could be selected and its
+description appeared. The pane also remained usable after changing chats and
+returning. The candidate used the supported plugin updater with a temporarily
+staged local catalog; the original marketplace file was restored after each update.
+
+Setup fixtures verify immediate feedback, streamed progress, disabled duplicate
+submissions, context isolation, cancellation, failure, success with folder actions,
+navigation and native remounts. The live repository list was inspected using an
+unsaved temporary destination, but a full real clone was not completed. Authentication
+and provider settings were not edited. No remote MCP tool was called during the
+catalog verification.
+
+The full 0.4.9 release check passed: 67 Node tests, TypeScript, documentation,
+portable distribution, native loader validation and seven native simulator tests.
+The shared dependency remains devtools 0.2.7.

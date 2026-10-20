@@ -4,16 +4,29 @@ export const clean = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\
 export const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 export const rows = value => Array.isArray(value) ? value : Array.isArray(value?.results) ? value.results : Array.isArray(value?.items) ? value.items : [];
 export const request = (scope, action, values = {}) => ({ scope, request: { action, ...values } });
+// Branches share a clone destination, so a second branch cannot run concurrently.
+export const setupKey = values => JSON.stringify([values.backend?.trim() || '', String(values.repositoryUid || ''), values.baseDir]);
+// Claude rejects the entire pane when a Select has more than 64 options.
+// Reserve one slot for the placeholder or the selection on another page.
+export function selectPage(options, value, requestedPage = 0) {
+  const seen = new Set();
+  const entries = options.filter(option => typeof option.value === 'string' && !seen.has(option.value) && seen.add(option.value));
+  const size = 63, count = Math.ceil(entries.length / size);
+  const page = Math.max(0, Math.min(Number.isInteger(requestedPage) ? requestedPage : 0, count - 1));
+  const visible = entries.slice(page * size, (page + 1) * size);
+  const selected = entries.find(option => option.value === value);
+  return { entries: visible, selected, page, count, total: entries.length, start: page * size + 1, end: page * size + visible.length };
+}
 export function mcpDisplayName(value) {
   const name = typeof value?.name === 'string' ? clean(value.name).trim() : '';
   return name || clean(value?.resource_release_uid || value?.uid || 'Project MCP');
 }
 export function initialState(options = {}) {
-  return { tab: 'General', expanded: {}, contextRevision: 0, initializing: false, projectsLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
+  return { tab: 'General', expanded: {}, contextRevision: 0, initializing: false, booting: null, booted: false, paneFault: null, projectsLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
     fields: { backend: 'https://api.main-sequence.app', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
       image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}', agentSearch: '',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },
-    editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
+    editedSettings: new Set(), savedSettings: {}, selectPages: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
     agentRevision: 0, agentListRevision: 0, agentOffset: 0, agentDetail: null, agentAccount: '', agentTools: {}, activeAgent: null, agentsLoading: false, agentSelection: 0, agentPreparing: {}, agentBindings: {}, agentDrafts: {}, agentSave: Promise.resolve(),
     agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentCommandOutputs: new Map(),
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };

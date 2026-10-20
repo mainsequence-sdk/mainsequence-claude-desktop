@@ -32,5 +32,10 @@ if (process.env.MS_CLAUDE_DESKTOP_BINARY) {
     const result = spawnSync(binary, ['plugin', command, artifact], { encoding: 'utf8', timeout: 60_000, cwd: artifact });
     process.stdout.write(result.stdout || '');
     assert.equal(result.status, 0, result.stderr || result.error?.message || `Native plugin ${command} failed`);
+    if (command === 'validate') {
+      // Mount tests bypass Desktop's static render-site discovery. Validate its
+      // routing metadata too: an imported matcher used to become requestId=?.
+      assert.match(result.stdout, /ui\.render\{component=Pane, requestId=mainsequence\}/);
+    }
   }
 } else console.log('Native loader/GUI checks not run: set MS_CLAUDE_DESKTOP_BINARY for loader validation; follow the live acceptance checklist.');

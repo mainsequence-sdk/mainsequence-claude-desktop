@@ -1,6 +1,15 @@
-import { TABS, clean, record, rows, resultText, mcpDisplayName } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName, setupKey, selectPage } from './model.mjs';
 import { renderAgents } from './agentView.mjs';
 import { EMBLEM } from './branding.mjs';
+
+export function renderRecovery(ui, state, actions) {
+  return ui.Box({ flexDirection: 'column', gap: 1, padding: 1, children: [
+    ui.Text({ children: ['MainSequence could not display this screen.'] }),
+    ui.Text({ children: ['Your running operations have not been restarted.'] }),
+    ui.Text({ children: [clean([state.paneFault?.phase, state.paneFault?.element].filter(Boolean).join(' · '))] }),
+    ui.Button({ key: 'retry-pane', label: 'Retry display', onPress: actions.retryPane }),
+  ] });
+}
 
 /** Host-themed Desktop primitives in unframed sections. No custom palette or DOM. */
 export function renderPane(ui, state, actions) {
@@ -17,9 +26,19 @@ export function renderPane(ui, state, actions) {
   const toggle = (key, label) => Button({ key: `toggle-${key}`, label: `${state.expanded[key] ? '▾' : '▸'} ${label}`, onPress: () => actions.toggle(key) });
   const input = (key, label, placeholder = '') => column([muted(label), Input({ key: `field-${key}`, value: state.fields[key] || '', placeholder,
     onInput: value => actions.field(key, value), onSubmit: value => actions.field(key, value) })]);
-  const select = (key, label, options, value, callback) => options.length ? column([muted(label), Select({ key,
-    options: options.some(o => o.value === value) ? options : [{ value: '', label: `Choose ${label.toLowerCase()}` }, ...options],
-    value: options.some(o => o.value === value) ? value : '', onSelect: callback })]) : null;
+  const select = (key, label, options, value, callback, showLabel = true) => {
+    const page = selectPage(options, value, state.selectPages[key]);
+    if (!page.total) return null;
+    const choices = page.entries.some(option => option.value === value) ? page.entries
+      : [page.selected || { value: '', label: `Choose ${label.toLowerCase()}` }, ...page.entries];
+    return column([showLabel && muted(label), Select({ key, options: choices, value: page.selected ? value : '', onSelect: callback }),
+      page.count > 1 && buttons([
+        button(`${key}-previous`, 'Previous', () => actions.selectPage(key, page.page - 1), page.page > 0),
+        muted(`${page.start}–${page.end} of ${page.total}`),
+        button(`${key}-next`, 'Next', () => actions.selectPage(key, page.page + 1), page.page + 1 < page.count),
+      ]),
+    ]);
+  };
   const result = key => {
     const value = state.results[key];
     if (!value) return null;
@@ -32,17 +51,15 @@ export function renderPane(ui, state, actions) {
   const f = state.fields;
   const busy = (scope, action) => state.operations.some(op => op.status === 'running' && op.label === `${scope} · ${action}`);
   const section = state.tab;
+  const runningSetups = state.operations.filter(op => op.setupTarget && op.status === 'running');
   const headerEnvironments = rows(state.results['devtools.mcp-environments']?.data);
   const sharedEnvironment = ['MCP', 'Agents'].includes(section) ? column([
     Box({ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
       text('Organization environment'), button('mcp-environments', 'Refresh', actions.refreshEnvironments, !state.environmentsLoading),
     ].filter(Boolean) }),
     state.environmentsLoading && muted('Loading organization environments…'),
-    headerEnvironments.length && Select({ key: 'mcp-environment',
-      options: headerEnvironments.some(row => row.uid === f.mcpEnvironment)
-        ? headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) }))
-        : [{ value: '', label: 'Choose environment' }, ...headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) }))],
-      value: headerEnvironments.some(row => row.uid === f.mcpEnvironment) ? f.mcpEnvironment : '', onSelect: actions.selectEnvironment }),
+    select('mcp-environment', 'environment', headerEnvironments.map(row => ({ value: row.uid, label: clean(row.name) })),
+      f.mcpEnvironment, actions.selectEnvironment, false),
     muted('Used by MCP tools and agents.'),
     state.results['devtools.mcp-environments']?.status === 'failure' && text(state.results['devtools.mcp-environments'].summary),
     !state.environmentsLoading && state.results['devtools.mcp-environments']?.status === 'success' && !headerEnvironments.length && muted('No organization environments are available for this account.'),
@@ -57,9 +74,14 @@ export function renderPane(ui, state, actions) {
     }),
     sharedEnvironment,
     state.problem && text(state.problem),
+    section !== 'Projects' && section !== 'Activity' && runningSetups.length > 0 && column([
+      ...runningSetups.map(op => text(`Setting up ${op.context}: ${op.progress}`)),
+      button('show-setup-activity', 'View setup progress', () => actions.tab('Activity')),
+    ]),
   ].filter(Boolean) });
   const page = body => Box({ flexDirection: 'column', gap: 2, padding: 1, children: [header, ...body.filter(Boolean)] });
   if (state.confirmation) return page([card(state.confirmation.title, [text(state.confirmation.detail), buttons([button('dismiss-confirmation', 'Cancel', actions.dismiss), button('confirm-action', 'Confirm', actions.accept)])])]);
+  if (!state.booted) return page([text('Loading MainSequence…')]);
   if (!state.ready) return page([card('Update required', [text('Update Claude Desktop to use MainSequence in a local Code session.')])]);
   let body;
   if (state.tab === 'General') {
@@ -112,6 +134,8 @@ export function renderPane(ui, state, actions) {
     const branches = rows(selected?.branches).map(row => ({ value: row.repository_branch, label: row.repository_branch }));
     const locals = rows(state.results['projects.local-repositories']?.data);
     const selectedLocal = locals.find(row => String(row.repositoryUid) === String(f.repositoryUid));
+    const setup = state.operations.findLast(op => op.setupTarget === setupKey(f));
+    const settingUp = setup?.status === 'running';
     body = column([
       card('Code repositories', [
         state.projectsLoading && muted('Loading your repositories…'),
@@ -123,11 +147,25 @@ export function renderPane(ui, state, actions) {
         selected && !branches.length && muted('This repository has no branches available for setup yet.'),
         selected && !selectedLocal && column([
           line('Destination', f.baseDir || 'Choose a folder in General'),
-          buttons([button('setup', 'Set up locally', mut('Set up repository', dev('setup'), `Clone ${selected.code_repository_name || selected.name} into ${f.baseDir}.`), !!f.branch && !!f.baseDir),
-            button('setup-install', 'Set up & install', mut('Set up and install repository', dev('setup', { install: true }), 'Clone the selected repository and install its dependencies.'), !!f.branch && !!f.baseDir)]),
+          buttons([
+            Button({ key: 'setup', label: settingUp ? 'Setting up…' : 'Set up locally', disabled: settingUp || !f.branch || !f.baseDir, onPress: () => actions.setup(false) }),
+            Button({ key: 'setup-install', label: 'Set up & install', disabled: settingUp || !f.branch || !f.baseDir, onPress: () => actions.setup(true) }),
+          ]),
         ]),
         selectedLocal && column([line('Local copy', selectedLocal.path), button('use-repository', 'Manage local project', () => { actions.selectLocal(selectedLocal.path); actions.useLocal(); })]),
-        result('devtools.setup'),
+        setup && column([
+          title(settingUp ? 'Setting up locally…' : setup.status === 'success' ? 'Local setup completed' : setup.status === 'cancelled' ? 'Setup cancelled' : 'Setup failed'),
+          text(setup.context), text(setup.progress),
+          settingUp && button('cancel-setup', setup.cancelled ? 'Cancelling…' : 'Cancel setup', () => actions.cancel(setup.id), !setup.cancelled),
+          setup.result?.effects && text(setup.result.effects.message),
+          setup.result?.data?.root && column([
+            line('Local folder', setup.result.data.root),
+            button('setup-open-folder', 'Open folder', dev('open-folder', { root: setup.result.data.root })),
+            button('setup-manage', 'Manage local project', () => { actions.selectLocal(setup.result.data.root); actions.useLocal(); }),
+          ]),
+          setup.status === 'failure' && text('Review the error and any partial changes before starting setup again.'),
+          button('setup-activity', 'View activity', () => actions.tab('Activity')),
+        ]),
       ], button('list-repositories', 'Refresh', actions.refreshProjects, !state.projectsLoading)),
       card('On this computer', [
         locals.length ? select('local-repository', 'Local project', locals.map(row => ({ value: row.path, label: clean(row.name) })), state.selectedLocal, actions.selectLocal)
@@ -200,7 +238,10 @@ export function renderPane(ui, state, actions) {
         button('mcp-register', 'Refresh Claude tools', actions.refreshTools)]),
       ]),
       environment && card('Tool explorer', [
+      busy('devtools', 'mcp-tools') && muted('Loading MCP tools…'),
       Array.isArray(tools) && select('mcp-tool', 'MCP tool', tools.map(tool => ({ value: tool.name, label: clean(tool.name) })), f.mcpTool, value => actions.field('mcpTool', value)),
+      Array.isArray(tools) && tools.find(tool => tool.name === f.mcpTool)?.description && text(tools.find(tool => tool.name === f.mcpTool).description),
+      Array.isArray(tools) && !tools.length && muted('This MCP exposes no tools.'),
       input('mcpTool', 'Tool name'), input('mcpArguments', 'Arguments (JSON object)'),
       button('mcp-call', 'Review and call tool', mut('Call project MCP tool', dev('mcp-call'), `Call ${f.mcpTool || 'the selected tool'} with the JSON arguments shown. The operation may change remote state.`), !!state.selectedMcp && !!f.mcpTool),
       state.selectedMcp && line('Environment', environment.name),
