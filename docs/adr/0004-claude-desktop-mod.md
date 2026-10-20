@@ -29,7 +29,7 @@ generated dependency output, not a separately maintained implementation.
 
 ## Native UI and transport
 
-As of 0.4.8, one pane has a status header (account, environment, running operations,
+As of 0.4.11, one pane has a status header (account, environment, running operations,
 Settings) and five sections: Home, Code, Projects, Agents and Tools; Activity opens
 from the header. In 0.4.7 the pane contained General, Repositories, Current Repository, Projects,
 MCP, Agents and Activity. Projects contains actual MainSequence organization
@@ -42,7 +42,7 @@ preserving the existing footer tree. `/ms` also opens it on
 request. No AbovePrompt hook is registered. Claude controls native placement and
 widget chrome; there is no supported custom right-toolbar registration in use.
 
-MainSequence login and workspace settings live in Settings (General before 0.4.8). Advanced runtime settings
+MainSequence login and workspace settings live in Settings (General before 0.4.11). Advanced runtime settings
 and technical results are collapsed. Activity uses real progress/results and an
 explicit empty state. Worker progress is textual, so the implementation does not
 invent percentages or reuse fictional preview data.
@@ -106,3 +106,19 @@ widgets draw isolated, non-executable image content. The native AbovePrompt,
 CommandOutput and ToolUse/ToolResult render sites carry the icons while preserving
 the engine’s content. No backend route, worker protocol version, stored settings
 or conversation-binding format changes. See [agent icon behavior and limits](../agent-icons.md).
+
+## MCP name presentation (2026-10-20)
+
+MCP rows show only the repository name, matching the compact Agents labels.
+The environment remains in the header selector. Release names such as `app` and
+environment suffixes are not appended to repository names.
+
+The pinned devtools projection omits repository identity. A Claude
+presentation adapter reads the existing resource-release collection and resolves
+the exact branch with the public RepositoryClient, using the public session
+service for authentication. It attaches transient `display_name` metadata after
+successful discovery/list results. It does not change discovery membership,
+connection storage, endpoint verification or tool routing. Name lookup is optional:
+unavailable repository metadata retains the original name, or `Unnamed MCP` when
+no name exists. Paginated collection reads and exact release/environment matching
+prevent a similarly named or foreign-environment MCP from supplying the label.

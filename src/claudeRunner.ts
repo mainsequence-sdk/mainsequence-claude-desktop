@@ -7,6 +7,7 @@ import { ToolingError } from '@dev-mainsequence/devtools';
 import { CLAUDE_INPUT_LIMIT, claudeFailure, executeClaudeEnvelope, parseClaudeEnvelope } from './hosts/claudeProtocol';
 import { createClaudeProjectActions } from './hosts/claudeProjectActions';
 import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
+import { withClaudeMcpNames } from './hosts/claudeMcpNames';
 
 export async function main(): Promise<void> {
   const controller = new AbortController();
@@ -41,7 +42,8 @@ export async function main(): Promise<void> {
         const result = await host.runProcess({ executable: '/usr/bin/osascript', args: ['-e', 'POSIX path of (choose folder with prompt "Choose a MainSequence repositories folder")'], cwd: process.cwd(), signal: controller.signal, timeoutMs: 120_000 });
         return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
       } : undefined });
-    const result = await executeClaudeEnvelope(envelope, { devtools: tooling.dispatch,
+    const result = await executeClaudeEnvelope(envelope, { devtools: async request =>
+      withClaudeMcpNames(await tooling.dispatch(request), { host, signal: controller.signal }),
       projects: request => request.action === 'agent-icons'
         ? createClaudeAgentIcons({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
     process.stdout.write(JSON.stringify({ type: 'result', id, result }) + '\n');

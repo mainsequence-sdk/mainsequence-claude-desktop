@@ -1,5 +1,80 @@
 import { test, expect, mock } from 'claude-code/testing';
 
+test('large MCP catalogs remain usable within the native Select limit', async ($, on) => {
+  const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'large-mcp-catalog'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  on('tool.register', ($, e) => ({value:{tool:`mcp__mainsequence__${e.name}`}}));
+  on('process.spawn', async function* ($, e) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    const data = q.action === 'mcp-environments' ? [{uid:'env',name:'Production'}]
+      : ['mcp-list','mcp-discover'].includes(q.action) ? [{resource_release_uid:'release',name:'CRM',mcp_connection:{organization_environment_uid:'env'}}]
+      : q.action === 'mcp-tools' ? {tools:Array.from({length:130}, (_, i) => ({name:`crm_tool_${i}`,description:`Tool ${i}`,inputSchema:{type:'object'}}))} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Ready',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  let ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await clock.settle(); await ui.press({key:'tab-Tools'}); await clock.settle();
+  await ui.select({key:'mcp-environment',value:'env'}); await clock.settle();
+  await ui.press({key:'mcp-open-release'}); await clock.settle();
+  expect(await ui.find({key:'tool-crm_tool_129'})).toBeDefined();
+  await ui.press({key:'toggle-tools-advanced'});
+  expect(await ui.find({key:'mcp-tool'})).toBeDefined();
+  await ui.press({key:'mcp-tool-next'}); await ui.press({key:'mcp-tool-next'});
+  await ui.select({key:'mcp-tool',value:'crm_tool_129'});
+  await ui.press({key:'mcp-tool-previous'});
+  expect(await ui.find({key:'mcp-tool'})).toBeDefined();
+  await ui.unmount();
+  ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  expect(await ui.find({key:'mcp-tool'})).toBeDefined();
+  await ui.press({key:'tab-Home'}); await ui.press({key:'tab-Tools'});
+  expect(await ui.find({key:'mcp-tool'})).toBeDefined();
+  await ui.unmount();
+});
+
+test('setup keeps progress beside disabled controls across native pane remounts', async ($, on) => {
+  const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'setup-progress'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  let setups = 0;
+  on('process.spawn', async function* ($, e, next) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    if (q.action === 'setup') {
+      setups++;
+      yield {stream:'stdout',text:JSON.stringify({type:'progress',id:envelope.id,message:'Cloning the registered repository branch…'})+'\n'};
+      await new Promise(resolve => next.signal.addEventListener('abort', resolve, {once:true}));
+      return {value:{code:0,signal:null}};
+    }
+    const data = q.action === 'repositories' ? [{uid:'repo-1',code_repository_name:'Research',branches:[{repository_branch:'main'}]}]
+      : q.action === 'local-repositories' ? [] : q.action === 'workspace-preferences' ? {backend:'https://fixture.example',baseDir:'/fixture/repos'} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Ready',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  let ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await clock.settle(); await ui.press({key:'tab-Code'}); await clock.settle();
+  await ui.press({key:'setup-repository-repo-1'}); await clock.settle();
+  await ui.press({key:'setup'}); await ui.press({key:'confirm-action'}); await clock.settle();
+  expect(await ui.find({type:'Text',text:'Cloning the registered repository branch…'})).toBeDefined();
+  expect(await ui.find({key:'setup'})).toBeDefined();
+  await ui.unmount();
+  ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  expect(await ui.find({type:'Text',text:'Cloning the registered repository branch…'})).toBeDefined();
+  await ui.press({key:'tab-Settings'});
+  expect(await ui.find({type:'Button',text:'View progress'})).toBeDefined();
+  await ui.press({key:'tab-Code'}); await ui.press({key:'cancel-setup'}); await clock.settle();
+  expect(await ui.find({type:'Text',text:'Setup cancelled'})).toBeDefined();
+  expect(setups).toBe(1);
+  await ui.unmount();
+});
+
 test('Projects renders native branch links and confirms local setup before opening Claude', async ($, on) => {
   const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
   const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`, requests=[];

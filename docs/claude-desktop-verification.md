@@ -1,9 +1,10 @@
 # Claude Desktop plugin verification
 
-## 0.4.8 — pane redesign (2026-10-20)
+## 0.4.11 — pane redesign (2026-10-20)
 
 The pane now has a status header and five sections (Home, Code, Projects, Agents,
-Tools) with Settings and Activity opened from the header; see
+Tools) with Settings and Activity opened from the header, on top of the 0.4.9 pane
+recovery, select paging and setup progress and the 0.4.10 MCP names; see
 [the proposal](ux-proposal.md). Views draw lists of rows with inline actions, one
 primary button, status colours and disabled-with-reason controls from the host's own
 elements. Confirmations draw above the view. `/ms <message>` reaches the agent most
@@ -598,3 +599,37 @@ Live testing temporarily overlaid the backed-up existing plugin cache without
 editing its registry, account, provider settings or credentials. The official
 release is installed through the normal marketplace updater after publication.
 There are no backend or dependency changes in this release.
+
+## Pane recovery and setup feedback 0.4.9 — 2026-10-20
+
+The reported blank pane was reproduced in the existing Claude installation on
+bundled Code 2.1.299. The connected MCP returned 70 tools. Claude's native renderer
+rejects an entire tree if a Select has more than 64 entries; the empty selection
+also counts. A new native test failed before the fix with
+`Select "mcp-tool" options must be 1 to 64 entries; the engine drew its own`.
+This rejection happens after the render callback returns, so a JavaScript
+try/catch alone cannot recover it.
+
+All data-driven selectors now page at 63 entries, reserving one slot for a
+placeholder or a selection on another page. The native test passes with 130 tools,
+including selection on the last page, returning to an earlier page, unmount/remount
+and section navigation. MCP catalogs retain entries beyond the generic
+100-element activity-preview limit. Late-response and slow-server regressions
+verify that discovery can finish independently and the selected catalog stays scoped.
+
+Setup fixtures verify immediate feedback, streamed progress, disabled duplicate
+submissions, context isolation, cancellation, failure, success with folder actions,
+navigation and native remounts. Authentication and provider settings were not
+edited. No remote MCP tool was called during the catalog verification.
+
+## MCP names 0.4.10 — 2026-10-20
+
+The user's installed candidate was loaded through the supported plugin updater
+and `/reload-plugins` in the existing test chat. In Production, the discovered MCP
+list showed `BackofficeBackend`, `mainsequence-sdk-tutorial`, `alpaca-connectors`,
+`MainSequenceCRMAPI` and `MetaTables`. The installed worker resolved the existing
+nameless saved CRM record to `MainSequenceCRMAPI`. No connection was added and no
+remote MCP tool was called. The packaged worker fixture covers two generic `app`
+releases, paginated metadata, exact environment matching, existing nameless saved
+connections, denied optional name lookup, unchanged stored records and exact tool
+routing.

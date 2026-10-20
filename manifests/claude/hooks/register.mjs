@@ -1,11 +1,26 @@
-import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName } from './model.mjs';
-import { renderPane } from './view.mjs';
+import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey } from './model.mjs';
+import { renderPane, renderRecovery } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
+
+async function openPane($, state) {
+  await $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true });
+  update($);
+  if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
+}
+
+function ensureBoot($, state, e) {
+  if (state.booting) return state.booting;
+  if (state.booted && !state.closed) return Promise.resolve();
+  state.booting = boot($, state, e).then(() => { state.booted = true; }, () => {
+    state.paneFault = { phase: 'startup', element: '' };
+  }).finally(() => { state.booting = null; update($); });
+  return state.booting;
+}
 
 function operationTitle(action) {
   return ({ 'auth-status': 'Check MainSequence connection', login: 'Sign in to MainSequence', logout: 'Sign out of MainSequence',
@@ -24,18 +39,32 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   const action = domain.request.action;
   const contextRevision = state.contextRevision;
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
+  const setupTarget = action === 'setup' ? setupKey(domain.request) : null;
+  if (setupTarget && [...state.running.values()].some(op => op.setupTarget === setupTarget)) {
+    $.ui.toast('This repository is already being set up. Its progress is shown in Code.');
+    return fail(action, 'This repository is already being set up.', 'PROJECT_BUSY');
+  }
   if (state.running.size >= 8) return fail(action, 'Wait for a running operation to finish.', 'PROJECT_BUSY');
   const id = `${state.sessionId}-${++state.sequence}`;
   const op = { id, title: operationTitle(action), context: domain.request.environmentUid ? `Environment: ${environmentLabel(state)}` : domain.scope === 'devtools' && !sessionActions.has(action) ? domain.request.root || 'MainSequence' : 'MainSequence', label: `${domain.scope} · ${action}`, status: 'running', progress: 'Starting…', cancelled: false };
+  if (setupTarget) {
+    op.setupTarget = setupTarget;
+    op.context = `${rows(state.results['devtools.repositories']?.data).find(row => String(row.uid) === String(domain.request.repositoryUid))?.code_repository_name || domain.request.repositoryUid} · ${domain.request.branch}`;
+    op.destination = domain.request.baseDir;
+    op.progress = 'Checking repository access and preparing the local folder…';
+  }
   state.running.set(id, op); observer.started?.(op);
   if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); statusLine($, state); update($); }
   const envelope = { protocolVersion: 1, id, request: domain };
   let result = await runWorker($, state, envelope, op, message => { op.progress = message; observer.progress?.(message); if (!quiet) update($); });
   const publicResult = publicValue(result);
+  // Catalog paging needs every tool; the generic activity preview caps arrays.
+  if (action === 'mcp-tools' && Array.isArray(result.data?.tools)) publicResult.data.tools = result.data.tools.map(tool => publicValue(tool));
   op.status = publicResult.status; op.progress = publicResult.summary; op.result = publicResult;
   state.running.delete(id);
   if (!quiet) statusLine($, state);
-  if (contextRevision === state.contextRevision && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  const currentMcp = !['mcp-tools', 'mcp-call'].includes(action) || domain.request.releaseUid === state.selectedMcp;
+  if (contextRevision === state.contextRevision && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
 }
@@ -175,6 +204,7 @@ function clearMcp($, state) {
   clearAgents($, state); clearOrganizationProjects($, state);
   state.contextRevision++; state.mcpTools = {}; state.selectedMcp = ''; state.confirmation = null; state.toolsView = 'list';
   state.fields.mcpTool = ''; state.mcpOffset = 0;
+  for (const key of ['mcp-tool', 'mcp-environment']) delete state.selectPages[key];
   for (const key of ['devtools.mcp-discover', 'devtools.mcp-list', 'devtools.mcp-tools', 'devtools.mcp-call', 'mcp.registration']) delete state.results[key];
   for (const op of state.running.values()) if (op.label.startsWith('devtools · mcp-') && op.cancel) void op.cancel().catch(() => {});
   update($);
@@ -189,8 +219,8 @@ async function selectEnvironment($, state, uid, persist = true) {
     if (revision === state.contextRevision && !state.closed) await $.store.set('mcp-environments', { ...previous, [backend]: uid });
   }
   if (!uid || revision !== state.contextRevision || state.closed) return;
-  await refreshTools($, state);
-  if (revision === state.contextRevision) await runDev($, state, 'mcp-discover');
+  // A slow connected server must not hold the directory behind tool registration.
+  await Promise.all([refreshTools($, state), runDev($, state, 'mcp-discover')]);
   if (revision === state.contextRevision && state.tab === 'Agents') await loadAgents($, state);
   if (revision === state.contextRevision && state.tab === 'Projects') await loadOrganizationProjects($, state);
 }
@@ -203,6 +233,7 @@ async function loadEnvironments($, state) {
     if (result.status !== 'success') { clearMcp($, state); state.fields.mcpEnvironment = ''; return; }
     const selected = state.fields.mcpEnvironment || state.environmentSelections[state.fields.backend];
     const uid = rows(result.data).some(row => row.uid === selected) ? selected : '';
+    state.environmentsLoading = false; update($);
     await selectEnvironment($, state, uid, false);
   } finally { state.environmentsLoading = false; update($); }
 }
@@ -210,7 +241,18 @@ async function loadEnvironments($, state) {
 function actionsFor($, state) {
   const background = work => { void Promise.resolve(work).catch(() => $.ui.toast('The action could not complete. Check Activity and diagnostics.')); };
   return {
-    open: () => background($.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true })),
+    open: () => background(openPane($, state)),
+    retryPane: () => { state.paneFault = null; update($); if (!state.booted) background(ensureBoot($, state, { surface: 'desktop' })); },
+    selectPage: (key, page) => { state.selectPages[key] = page; update($); },
+    setup: install => {
+      if ([...state.running.values()].some(op => op.setupTarget === setupKey(state.fields))) return;
+      let input;
+      try { input = devRequest(state, 'setup', { install: !!install }).request; } catch { return; }
+      state.confirmation = { title: install ? 'Set up and install repository' : 'Set up repository',
+        detail: `Set up branch ${input.branch} in ${input.baseDir}${install ? ' and install its dependencies' : ''}.`,
+        callback: () => runDev($, state, 'setup', input) };
+      update($);
+    },
     tab: tab => {
       if (!VIEWS.includes(tab)) return;
       state.tab = tab; state.confirmation = null; update($);
@@ -226,7 +268,7 @@ function actionsFor($, state) {
     showProjectList: () => { state.projectListView = true; update($); },
     openAddMcp: () => { state.toolsView = 'add'; state.confirmation = null; update($); if (!state.results['devtools.mcp-discover']) background(runDev($, state, 'mcp-discover', { offset: 0 })); },
     closeTool: () => { state.toolsView = 'list'; state.confirmation = null; update($); },
-    openTool: uid => { state.selectedMcp = uid; state.toolsView = 'detail'; state.confirmation = null; state.fields.mcpTool = ''; delete state.results['devtools.mcp-tools']; update($); background(runDev($, state, 'mcp-tools')); },
+    openTool: uid => { state.selectedMcp = uid; state.toolsView = 'detail'; state.confirmation = null; state.fields.mcpTool = ''; delete state.selectPages['mcp-tool']; delete state.results['devtools.mcp-tools']; delete state.results['devtools.mcp-call']; update($); background(runDev($, state, 'mcp-tools')); },
     connectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Connect MCP', detail: `Connect ${name} in ${environmentLabel(state)} and register its tools for Claude.`, callback: () => runDev($, state, 'mcp-add') }; update($); },
     disconnectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Disconnect MCP', detail: `Disconnect ${name} from ${environmentLabel(state)}. Its tools stop being available to Claude.`, callback: () => runDev($, state, 'mcp-remove') }; update($); },
     askAgent: (uid, message) => background(talkToAgent($, state, uid, false, message)),
@@ -258,7 +300,9 @@ function actionsFor($, state) {
         state.editedSettings.add(key);
         state.fields[key] = String(value);
         if (key === 'repositoryUid') state.fields.branch = '';
+        if (['branch', 'baseDir'].includes(key)) state.confirmation = null;
         if (key === 'backend') {
+          state.selectPages = {};
           clearMcp($, state); state.fields.mcpEnvironment = '';
           state.contextRevision++; state.codeDetail = null;
           state.fields.repositoryUid = ''; state.fields.branch = ''; state.fields.organization = ''; state.selectedLocal = '';
@@ -333,8 +377,7 @@ async function boot($, state, e) {
   await $.command.register({ name: 'ms', description: 'Open MainSequence or message the selected agent', argumentHint: '[message | agent <uid> <message>]', immediate: true });
   if (e.surface === 'desktop') {
     state.preferencesLoading = true;
-    // Register the native pane without stealing focus or adding a composer band.
-    await $.ui.open({ id: PANE, title: 'MainSequence' });
+    // Only a person opens the pane. Startup/reloads must not reopen a closed pane.
     state.timers.push($.clock.after(0, () => { void initializeWorkspace($, state).catch(() => { state.initializing = false; state.preferencesLoading = false; update($); }); }));
   }
   update($);
@@ -491,7 +534,7 @@ async function attachWorkspace($, state) {
 
 export function register(on, options = {}) {
   const state = initialState(options);
-  on('session.start', async ($, e, next) => { await boot($, state, e); return next(e); });
+  on('session.start', async ($, e, next) => { await ensureBoot($, state, e); return next(e); });
   on('command.run', { command: 'ms' }, ($, e) => agentCommand($, state, e)).catch(() => ({ text: 'The agent operation could not complete. Check Activity before sending again.' }));
   on('prompt.submit', { text: /^\/ms\s+\S/ }, ($, e, next) => e.attachments?.length ? { drop: 'MainSequence agent commands accept text only. Keep attachments in ordinary Claude chat.' } : next(e));
   // This site belongs to the session footer, so closing our pane does not remove it.
@@ -504,7 +547,7 @@ export function register(on, options = {}) {
       children: [existing, Box({ key: 'mainsequence-launcher-group', flexDirection: 'row', alignItems: 'center', gap: 1,
         children: [Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 18, height: 18 }),
           Button({ key: 'mainsequence-launcher', label: 'MainSequence', onPress: () => {
-            void $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true }).catch(() => {
+            void openPane($, state).catch(() => {
               $.ui.toast('MainSequence could not open. Try /ms or reload the plugin.');
             });
           } })] })].filter(Boolean) });
@@ -519,12 +562,25 @@ export function register(on, options = {}) {
       ui.Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [renderAgentActivity(ui, state, state.activeAgent),
         ui.Button({ key: 'agent-switch', label: 'Switch agent', plain: true, dimColor: true, onPress: () => {
           state.tab = 'Agents'; state.agentDetail = null; update($);
-          void $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true }).catch(() => {});
+          void openPane($, state).catch(() => {});
         } })] })].filter(Boolean) });
   });
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+  // Desktop discovers render sites from static hook metadata before invoking JS.
+  // Imported constants become unknown matcher values in that discovery pass.
+  on('ui.render', { component: 'Pane', requestId: 'mainsequence' }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
-    return renderPane($.ui.resolve(e), state, actionsFor($, state), { placement: e.props?.placement });
+    const ui = $.ui.resolve(e), actions = actionsFor($, state);
+    if (!state.booted && !state.booting && !state.paneFault) void ensureBoot($, state, e);
+    if (state.paneFault) return renderRecovery(ui, state, actions);
+    try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
+    catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
+  });
+  on('ui.fault', { component: 'Pane', requestId: 'mainsequence' }, ($, e, next) => {
+    if (e.surface === 'desktop' && !state.paneFault) {
+      state.paneFault = { phase: clean(e.phase), element: clean(e.element) };
+      update($);
+    }
+    return next(e);
   });
   on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
     if (e.surface !== 'desktop' || e.props.command !== 'ms') return next(e);
@@ -875,7 +931,7 @@ async function handleAgentTool($, state, e) {
 
 async function agentCommand($, state, e) {
   const args = String(e.args || '');
-  if (!args.trim()) { await $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true }); return {}; }
+  if (!args.trim()) { await openPane($, state); return {}; }
   const help = 'Choose Talk on an agent, then write your message after /ms. Use /ms agent <agent-uid> <message> or /ms task <agent-uid> <message> to address an agent explicitly.';
   const explicit = /^(agent|task)\s+([a-fA-F0-9-]{36})(?:[ \t]|\n)([\s\S]*)$/.exec(args);
   let binding, message, responseKind;

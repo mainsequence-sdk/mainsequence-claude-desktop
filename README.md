@@ -7,7 +7,7 @@ and **Settings**, where MainSequence browser login, session renewal, connection 
 and workspace settings live. The pane uses the MainSequence emblem and Claude's own
 theme; it adds no strip above the prompt.
 
-[Version **0.4.8**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.8)
+[Version **0.4.11**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.11)
 is the [pane redesign](docs/ux-proposal.md): lists of rows instead of dropdowns, one
 primary action per view, status colours, disabled-with-reason controls, confirmations
 that keep the navigation visible, and `/ms <message>` for the selected agent.
@@ -118,7 +118,7 @@ the prepared, integrity-checked archive with
 using the already installed development dependencies, then run `npm run release:check`.
 The ZIP includes the complete runtime; end users need no sibling checkout.
 
-### 0.4.8 — pane redesign
+### 0.4.11 — pane redesign
 
 The pane has a persistent header (account, environment, running operations,
 Settings) and five sections: **Home** (next steps, this session's repository status,

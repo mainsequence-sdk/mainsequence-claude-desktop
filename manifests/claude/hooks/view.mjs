@@ -1,4 +1,4 @@
-import { TABS, clean, record, rows, resultText, mcpDisplayName, basename } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey } from './model.mjs';
 import { primitives, OPERATION_STATUS, OPERATION_KIND } from './primitives.mjs';
 import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
@@ -13,6 +13,16 @@ export function signedInState(state) {
     signedOut: auth?.data?.authenticated === false || auth?.error?.code === 'NOT_AUTHENTICATED' };
 }
 
+/** Drawn when the host refused a tree or startup failed: nothing is replayed. */
+export function renderRecovery(ui, state, actions) {
+  return ui.Box({ flexDirection: 'column', gap: 1, padding: 1, children: [
+    ui.Text({ weight: 'semibold', children: ['MainSequence could not display this screen.'] }),
+    ui.Text({ dimColor: true, children: ['Your running operations have not been restarted.'] }),
+    ui.Text({ dimColor: true, size: 'caption', children: [clean([state.paneFault?.phase, state.paneFault?.element].filter(Boolean).join(' · '))] }),
+    ui.Button({ key: 'retry-pane', label: 'Retry display', variant: 'primary', onPress: actions.retryPane }),
+  ] });
+}
+
 /** Host-themed Desktop primitives: a status header, one row of sections, and list-to-detail views. */
 export function renderPane(ui, state, actions, options = {}) {
   const p = primitives(ui, state, actions);
@@ -23,6 +33,7 @@ export function renderPane(ui, state, actions, options = {}) {
   const f = state.fields;
   const busy = (scope, action) => state.operations.some(op => op.status === 'running' && op.label === `${scope} · ${action}`);
   const running = state.operations.filter(op => op.status === 'running').length;
+  const runningSetups = state.operations.filter(op => op.setupTarget && op.status === 'running');
   const { auth, session, signedIn, signedOut } = signedInState(state);
   const environments = rows(state.results['devtools.mcp-environments']?.data);
   const environment = environments.find(r => r.uid === f.mcpEnvironment);
@@ -56,11 +67,15 @@ export function renderPane(ui, state, actions, options = {}) {
   const header = column([
     options.placement === 'dock' ? inline([brand, Box({ flexGrow: 1 }), chips], { justifyContent: 'space-between', flexWrap: 'wrap' }) : column([brand, chips]),
     navigation, blocker,
+    state.tab !== 'Activity' && runningSetups.some(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f)))
+      ? column(runningSetups.filter(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f))).map(op =>
+      inline([status('warning', `Setting up ${op.context}: ${op.progress}`), button(`show-setup-activity-${op.id}`, 'View progress', () => actions.tab('Activity'), { plain: true, dim: true })], { flexWrap: 'wrap' })), { gap: 0 }) : null,
     state.workspaceAttachment && inline([status(state.workspaceAttachment.error ? 'error' : state.workspaceAttachment.running ? 'warning' : 'success', state.workspaceAttachment.message),
       state.workspaceAttachment.error && button('workspace-attach-retry', 'Retry adding repositories', actions.attachWorkspace, { plain: true })], { flexWrap: 'wrap' }),
     state.problem && status('error', state.problem),
   ]);
   const page = body => Box({ flexDirection: 'column', gap: 1, padding: 1, children: [header, ...body.filter(Boolean)] });
+  if (!state.booted) return page([muted('Loading MainSequence…')]);
   if (!state.ready) return page([card('Update required', [text('Update Claude Desktop to use MainSequence in a local Code session.')])]);
   // A pending confirmation sits above the view it belongs to; the header and navigation stay.
   const confirmation = state.confirmation && Box({ flexDirection: 'column', gap: 1, paddingX: 1, paddingY: 1, borderStyle: 'round', borderColor: 'warning', children: [
@@ -188,16 +203,26 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated }) {
       // Remote-only repository: choose a branch, then set it up under the repositories folder.
       const branches = rows(selected?.branches).map(r => ({ value: r.repository_branch, label: r.repository_branch }));
       const name = selected?.code_repository_name || selected?.name || detail.repositoryUid;
+      const setup = state.operations.findLast(op => op.setupTarget === setupKey(f));
+      const settingUp = setup?.status === 'running';
       return column([back, heading(name), caption(`${selected ? typeLabel(selected) : 'Repository'} · not on this computer`),
         card('Set up', [
           select('repository-branch', 'Branch', branches, f.branch, value => actions.field('branch', value)),
           !branches.length && muted('This repository has no branches available for setup yet.'),
           line('Destination', f.baseDir || 'Choose a repositories folder in Settings'),
           toggle('setup-install', state.expanded['setup-install'] ? 'Install dependencies after setup' : 'Install dependencies after setup (off)'),
-          buttons([button('setup', busy('devtools', 'setup') ? 'Setting up…' : 'Set up', mut('Set up repository', dev('setup', state.expanded['setup-install'] ? { install: true } : {}),
-            `Clone ${name}${f.branch ? ` (${f.branch})` : ''} into ${f.baseDir}.${state.expanded['setup-install'] ? ' Then install its dependencies.' : ''}`),
-            { primary: true, available: !!f.branch && !!f.baseDir && !busy('devtools', 'setup'), reason: !f.baseDir ? 'Choose a repositories folder first.' : !f.branch ? 'Choose a branch first.' : '' })]),
-          result('devtools.setup'),
+          buttons([button('setup', settingUp ? 'Setting up…' : 'Set up', () => actions.setup(!!state.expanded['setup-install']),
+            { primary: true, available: !!f.branch && !!f.baseDir && !settingUp, reason: settingUp ? '' : !f.baseDir ? 'Choose a repositories folder first.' : !f.branch ? 'Choose a branch first.' : '' })]),
+          setup && column([
+            status(settingUp ? 'warning' : setup.status === 'success' ? 'success' : setup.status === 'cancelled' ? 'info' : 'error',
+              settingUp ? 'Setting up locally…' : setup.status === 'success' ? 'Local setup completed' : setup.status === 'cancelled' ? 'Setup cancelled' : 'Setup failed'),
+            caption(setup.context), text(setup.progress, { wrap: 'wrap' }),
+            settingUp && button('cancel-setup', setup.cancelled ? 'Cancelling…' : 'Cancel setup', () => actions.cancel(setup.id), { plain: true, available: !setup.cancelled }),
+            setup.result?.effects && status('warning', setup.result.effects.message),
+            setup.status === 'failure' && caption('Review the error and any partial changes before starting setup again.'),
+            setup.result?.data?.root && button('setup-open', 'Open local repository', () => actions.openCode({ root: setup.result.data.root, repositoryUid: detail.repositoryUid }), { primary: true }),
+            button('setup-activity', 'View activity', () => actions.tab('Activity'), { plain: true, dim: true }),
+          ], { gap: 0 }),
         ])]);
     }
     const capabilities = record(state.results['devtools.status']?.data).capabilities;

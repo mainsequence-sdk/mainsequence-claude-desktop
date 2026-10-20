@@ -77,7 +77,7 @@ function fixture(options = {}) {
   const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
   const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg', 'Link'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
-    if (type === 'Select') assert.ok(props.options.length);
+    if (type === 'Select') assert.ok(props.options.length > 0 && props.options.length <= 64, 'Native Select supports 1–64 options');
     return { type, props };
   }]));
   let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1';
@@ -137,7 +137,7 @@ function fixture(options = {}) {
 test('one native pane has five sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start', {surface:'desktop'});
   assert.equal(f.calls[0].command.name, 'ms');
-  assert.deepEqual(f.calls.find(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence' });
+  assert.equal(f.calls.some(c => c.pane), false, 'startup must not open a pane');
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
   assert.deepEqual(band, { type: 'engine', ref: 1 });
   for (const tab of ['Home', 'Code', 'Projects', 'Agents', 'Tools', 'Settings', 'Activity', 'Home']) {
@@ -237,7 +237,7 @@ test('MCP labels and tool descriptions use the release UID when display names ar
     } });
     register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
     f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
-    const display = name === 'Named project' ? name : 'release-1';
+    const display = name === 'Named project' ? name : 'Unnamed MCP';
     let tree = await f.pane();
     assert.equal(f.find(tree, 'mcp-open-release-1').props.label, display);
     assert.match(JSON.stringify(f.find(tree, 'mcp-connected-release-1')), /1 tools/);
@@ -823,4 +823,208 @@ test('/ms <message> reaches the selected agent, keywords stay explicit, and exam
   const taskOnly = await agentFixture({ agent: { responseKinds: ['task'] } }); await taskOnly.startTalk(); assert.equal(taskOnly.draft, `/ms task ${agentUid} `);
   const fresh = await agentFixture(); assert.match((await fresh.emit('command.run', { command: 'ms', args: 'hello', origin: { kind: 'composer' } })).text, /Choose Talk/);
   assert.equal(fresh.calls.some(c => c.request?.request.action === 'agent-send'), false);
+});
+
+test('restored panes initialize without session.start and repeated startup never opens the pane', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on);
+  assert.match(JSON.stringify(await f.pane()), /Loading MainSequence/);
+  await flush();
+  assert.ok(f.find(await f.pane(), 'tab-Home'));
+  await f.emit('session.start', {surface:'desktop'});
+  await f.emit('session.start', {surface:'desktop'});
+  assert.equal(f.calls.filter(c => c.command).length, 1);
+  assert.equal(f.calls.some(c => c.pane), false);
+});
+
+test('render faults show a retry screen and recover without replaying actions', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start');
+  await f.press('tab-Tools');
+  const requests = f.calls.filter(c => c.request).length;
+  await f.emit('ui.fault', {surface:'desktop', component:'Pane', requestId:'mainsequence', phase:'draw', element:'Svg'});
+  assert.ok(f.find(await f.pane(), 'retry-pane'));
+  await f.press('retry-pane');
+  assert.ok(f.find(await f.pane(), 'mcp-environments'));
+  assert.equal(f.calls.filter(c => c.request).length, requests);
+  const resolve = f.$.ui.resolve;
+  f.$.ui.resolve = () => ({...resolve(), Svg() { throw new Error('private-render-error'); }});
+  assert.ok(f.find(await f.pane(), 'retry-pane'));
+  assert.doesNotMatch(JSON.stringify(await f.pane()), /private-render-error/);
+  f.$.ui.resolve = resolve;
+  await f.press('retry-pane');
+  assert.ok(f.find(await f.pane(), 'tab-Tools'));
+});
+
+test('failed startup can be retried without leaving an empty pane', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on);
+  const get = f.$.store.get;
+  f.$.store.get = async () => { throw new Error('private-store-error'); };
+  await f.emit('session.start', {surface:'desktop'});
+  assert.ok(f.find(await f.pane(), 'retry-pane'));
+  f.$.store.get = get;
+  await f.press('retry-pane');
+  assert.ok(f.find(await f.pane(), 'tab-Home'));
+  assert.equal(f.calls.some(c => c.pane), false);
+});
+
+async function setupFixture() {
+  const { register } = await load();
+  const f = fixture({ respond: d => success(d.request.action,
+    d.request.action === 'repositories' ? ['a', 'b'].map(uid => ({uid, code_repository_name: `Repo ${uid}`, branches:[{repository_branch:'main'},{repository_branch:'develop'}]}))
+      : d.request.action === 'local-repositories' ? [] : d.request.action === 'setup' ? {root:'/repos/a'} : {}) });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  await f.press('setup-repository-a');
+  f.find(await f.pane(), 'repository-branch').props.onSelect('main'); await flush();
+  const original = f.$.process.spawn;
+  let finish;
+  f.$.process.spawn = input => {
+    const envelope = JSON.parse(input.input);
+    if (envelope.request.request.action !== 'setup') return original(input);
+    f.calls.push(envelope);
+    let done; const result = new Promise(resolve => { done = resolve; });
+    let complete; const gate = new Promise(resolve => { complete = resolve; });
+    const stream = (async function* () {
+      yield {stream:'stdout', text:JSON.stringify({type:'progress', id:envelope.id, message:'Cloning Repo a…'})+'\n'};
+      const answer = await gate;
+      yield {stream:'stdout', text:JSON.stringify({type:'result', id:envelope.id, result:answer})+'\n'};
+      done({code:0,signal:null}); return {code:0,signal:null};
+    })();
+    stream.result = result;
+    finish = complete;
+    stream.return = async () => { done({code:null,signal:'SIGTERM'}); complete({schemaVersion:1,action:'setup',status:'cancelled',summary:'Setup cancelled.'}); return {done:true}; };
+    return stream;
+  };
+  f.finishSetup = answer => finish(answer);
+  return f;
+}
+
+test('setup displays streamed progress, prevents duplicates, and retains target-specific status across navigation', async () => {
+  const f = await setupFixture();
+  // Retain the callback too: a stale click must not bypass the operation guard.
+  const setup = f.find(await f.pane(), 'setup').props.onPress;
+  await f.press('setup'); await f.press('confirm-action');
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /Cloning Repo a/);
+  assert.equal(f.find(tree, 'setup').props.disabled, true);
+  setup(); await flush(); assert.equal(f.find(await f.pane(), 'confirm-action'), undefined);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'setup').length, 1);
+  await f.press('tab-Settings'); assert.match(JSON.stringify(await f.pane()), /Setting up Repo a · main: Cloning Repo a/);
+  await f.press('tab-Code'); await f.press('code-back'); await f.press('setup-repository-b');
+  tree = await f.pane(); assert.doesNotMatch(JSON.stringify(f.find(tree, 'setup')), /Setting up/);
+  assert.match(JSON.stringify(tree), /Setting up Repo a · main/, 'another repository still shows the running setup in the header');
+  await f.press('code-back'); await f.press('setup-repository-a');
+  f.find(await f.pane(), 'repository-branch').props.onSelect('main'); await flush();
+  assert.match(JSON.stringify(await f.pane()), /Cloning Repo a/);
+  f.finishSetup(success('setup',{root:'/repos/a'})); await flush();
+  tree = await f.pane(); assert.match(JSON.stringify(tree), /Local setup completed/);
+  assert.ok(f.find(tree, 'setup-open')); assert.equal(f.find(tree, 'cancel-setup'), undefined);
+});
+
+test('setup failure and cancellation release controls and never retry the operation automatically', async () => {
+  for (const cancelled of [false, true]) {
+    const f = await setupFixture(); await f.press('toggle-setup-install'); await f.press('setup');
+    assert.match(JSON.stringify(await f.pane()), /install its dependencies/);
+    await f.press('confirm-action');
+    assert.equal(f.calls.find(c => c.request?.request.action === 'setup').request.request.install, true);
+    if (cancelled) await f.press('cancel-setup');
+    else {
+      f.finishSetup({schemaVersion:1,action:'setup',status:'failure',summary:'Dependency installation failed.',effects:{state:'partial-or-uncertain',message:'The cloned folder remains.'}});
+      await flush();
+    }
+    const tree = await f.pane();
+    assert.match(JSON.stringify(tree), cancelled ? /Setup cancelled/ : /The cloned folder remains/);
+    assert.equal(!!f.find(tree, 'setup').props.disabled, false);
+    assert.equal(f.calls.filter(c => c.request?.request.action === 'setup').length, 1);
+  }
+});
+
+test('MCP rows show repository names and route by exact release without environment suffixes', async () => {
+  const { register } = await load();
+  const connections = ['BackofficeBackend', 'alpaca-connectors'].map((name, i) => ({
+    resource_release_uid: `release-${i}`, name: 'app', display_name: name,
+    backend: 'https://backend.example', mcp_connection: { organization_environment_uid: 'env', organization_environment_name: 'Production' },
+  }));
+  const f = fixture({ respond: domain => {
+    const q = domain.request;
+    return success(q.action, q.action === 'mcp-environments' ? [{ uid: 'env', name: 'Production' }]
+      : ['mcp-discover', 'mcp-list'].includes(q.action) ? connections
+      : q.action === 'mcp-tools' ? { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] } : {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  let tree = await f.pane();
+  assert.deepEqual(connections.map(c => f.find(tree, `mcp-open-${c.resource_release_uid}`).props.label), ['BackofficeBackend', 'alpaca-connectors']);
+  await f.press('tools-add'); tree = await f.pane();
+  for (const c of connections) assert.match(JSON.stringify(f.find(tree, `mcp-discovered-${c.resource_release_uid}`)), new RegExp(c.display_name));
+  assert.doesNotMatch(JSON.stringify(tree), /Production ·|· Production|"app"/);
+  await f.press('tools-back'); await f.press('mcp-open-release-0');
+  assert.equal(f.calls.filter(call => call.request?.request.action === 'mcp-tools').at(-1).request.request.releaseUid, 'release-0');
+});
+
+test('slow MCP tool reads cannot block discovery or replace another selected MCP catalog', async () => {
+  const { register } = await load();
+  const f = fixture({respond: d => {
+    const q = d.request;
+    const connections = ['a','b'].map(uid => ({backend:'https://api.main-sequence.app',resource_release_uid:uid,name:`MCP ${uid}`,mcp_connection:{organization_environment_uid:'env'}}));
+    return success(q.action, q.action === 'mcp-environments' ? [{uid:'env',name:'Research'}]
+      : ['mcp-list','mcp-discover'].includes(q.action) ? connections
+        : q.action === 'mcp-tools' ? {tools:[{name:`lookup_${q.releaseUid}`,inputSchema:{type:'object'}}]} : {});
+  }});
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
+  // Oldest pending mcp-tools request is released first.
+  const original = f.$.process.spawn, gates = [];
+  f.$.process.spawn = input => {
+    const envelope = JSON.parse(input.input);
+    if (envelope.request.request.action !== 'mcp-tools') return original(input);
+    let release; const gate = new Promise(resolve => { release = resolve; }); gates.push(release);
+    const child = original(input);
+    const stream = (async function*(){ await gate; for await (const chunk of child) yield chunk; })(); stream.result = child.result; return stream;
+  };
+  const finish = () => { assert.ok(gates.length, 'request started'); gates.shift()(); };
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  await f.press('tools-add');
+  assert.ok(f.find(await f.pane(), 'mcp-discovered-a'), 'directory loads while tool registration waits');
+  finish(); await flush(); finish(); await flush();
+  await f.press('tools-back'); await f.press('mcp-open-a');
+  await f.press('tools-back'); await f.press('mcp-open-b');
+  finish(); await flush();
+  let tree = await f.pane(); assert.equal(f.find(tree, 'tool-lookup_a'), undefined, 'late A tools are not displayed for B');
+  finish(); await flush();
+  tree = await f.pane(); assert.ok(f.find(tree, 'tool-lookup_b'));
+});
+
+test('large MCP catalogs list every tool and page the direct-call selector within the native limit', async () => {
+  const { register } = await load();
+  const f = fixture({respond: d => {
+    const q = d.request;
+    return success(q.action, q.action === 'mcp-environments' ? [{uid:'env',name:'Production'}]
+      : ['mcp-list','mcp-discover'].includes(q.action) ? [{resource_release_uid:'release',name:'CRM',backend:'https://api.main-sequence.app',mcp_connection:{organization_environment_uid:'env'}}]
+      : q.action === 'mcp-tools' ? {tools:Array.from({length:130}, (_, i) => ({name:`crm_tool_${i}`,description:`Tool ${i}`,inputSchema:{type:'object'}}))} : {});
+  }});
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  assert.equal(f.tools.length, 80, 'registration keeps its existing cap');
+  await f.press('mcp-open-release'); await f.press('toggle-tools-advanced');
+  let tree = await f.pane(); assert.ok(f.find(tree, 'tool-crm_tool_129'), 'every tool is listed as a row');
+  assert.ok(f.find(tree, 'mcp-tool').props.options.length <= 64); assert.match(JSON.stringify(tree), /1–63 of 130/);
+  await f.press('mcp-tool-next'); await f.press('mcp-tool-next');
+  f.find(await f.pane(), 'mcp-tool').props.onSelect('crm_tool_129'); await flush();
+  await f.press('mcp-tool-previous');
+  tree = await f.pane(); assert.equal(f.find(tree, 'mcp-tool').props.value, 'crm_tool_129'); assert.equal(f.find(tree, 'field-mcpTool').props.value, 'crm_tool_129');
+});
+
+test('paged native selectors retain every catalog entry, selection and valid bounds', async () => {
+  const { selectPage } = await import(pathToFileURL(path.resolve(__dirname, '../manifests/claude/hooks/model.mjs')).href);
+  for (const count of [0, 1, 63, 64, 65, 70, 130]) {
+    const options = Array.from({length:count}, (_, i) => ({value:`item-${i}`,label:`Item ${i}`}));
+    const seen = [];
+    for (let page = 0; page < Math.ceil(count/63); page++) {
+      const result = selectPage(options, 'item-0', page);
+      assert.ok(result.entries.length <= 63);
+      assert.equal(result.selected.value, 'item-0');
+      seen.push(...result.entries);
+    }
+    assert.deepEqual(seen, options);
+    assert.equal(selectPage(options, '', 100).page, Math.max(0, Math.ceil(count/63)-1));
+  }
+  assert.equal(selectPage([{value:'a'},{value:'a'},{value:null}], '', 0).total, 1);
 });

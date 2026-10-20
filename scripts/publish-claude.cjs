@@ -43,16 +43,10 @@ try {
   else if (!/release not found/i.test(lookup.stderr || '')) throw new Error('Could not inspect the release.');
   if (!release) {
     const notes = path.join(temporary, 'notes.md');
-    fs.writeFileSync(notes, `MainSequence for Claude Desktop Code ${pkg.version} preview.
-
-Fix MCP connections for FastAPI release details that omit the discovery-only name. Bundles @dev-mainsequence/devtools@${lock.version}, allowing discovery, add, tool listing and tool calls with nameless release details and saved connections. Missing display labels use the release UID in the MCP selectors, registered tool descriptions and availability errors. Existing environment scoping, confirmations, credential isolation and access checks remain in place.
-
-Validation: all 49 Node tests passed, including a real packaged-worker HTTP integration test with synthetic credentials and temporary connection storage. Five native Desktop simulator tests, native loader validation and portable ZIP/marketplace checks passed. These checks do not claim live GUI or live backend acceptance.
-
-Install through this repository's marketplace or upload the attached ZIP. Node 22+ required. Reload the plugin or start a fresh Code session to load updated hooks.
-
-Source revision: ${revision}. Archive SHA-256: ${catalog.plugins[0].source.sha256}.
-`);
+    const versionNotes = path.join(root, 'docs/releases', `${pkg.version}.md`);
+    const description = fs.existsSync(versionNotes) ? fs.readFileSync(versionNotes, 'utf8').trim()
+      : `MainSequence for Claude Desktop Code ${pkg.version} preview. Bundles @dev-mainsequence/devtools@${lock.version}.`;
+    fs.writeFileSync(notes, `${description}\n\nSource revision: ${revision}. Archive SHA-256: ${catalog.plugins[0].source.sha256}.\n`);
     run('gh', ['release', 'create', tag, '--repo', repository, '--target', revision, '--draft', '--prerelease', '--title', `MainSequence Desktop ${pkg.version} preview`, '--notes-file', notes]);
     release = JSON.parse(run('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft,assets,tagName'], root, true));
   }
@@ -71,7 +65,14 @@ Source revision: ${revision}. Archive SHA-256: ${catalog.plugins[0].source.sha25
     devtools: lock.version, archiveSha256: catalog.plugins[0].source.sha256, sourceRevision: revision }, null, 2) + '\n');
   run('git', ['add', '--', catalogFile, 'mainsequence-distribution.json'], checkout);
   if (run('git', ['diff', '--cached', '--name-only'], checkout, true)) {
-    run('git', ['-c', 'user.name=MainSequence Release', '-c', 'user.email=release@mainsequence.io', 'commit', '-m', `Publish Claude Desktop ${pkg.version} catalog`], checkout);
+    // Carry the source checkout's configured identity into the temporary clone.
+    // CI without a configured identity retains the established release defaults.
+    const identity = [];
+    for (const [key, fallback] of [['user.name', 'MainSequence Release'], ['user.email', 'release@mainsequence.io']]) {
+      const configured = spawnSync('git', ['config', '--get', key], { cwd: root, encoding: 'utf8' });
+      identity.push('-c', `${key}=${configured.stdout?.trim() || fallback}`);
+    }
+    run('git', [...identity, 'commit', '-m', `Publish Claude Desktop ${pkg.version} catalog\n\nCo-authored-by: Codex <codex@openai.com>`], checkout);
     run('git', ['-c', 'credential.helper=!gh auth git-credential', 'push', 'origin', `HEAD:${remote.defaultBranchRef.name}`], checkout);
   }
   console.log(`Published https://github.com/${repository}/releases/tag/${tag}`);

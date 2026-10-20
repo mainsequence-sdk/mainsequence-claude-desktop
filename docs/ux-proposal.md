@@ -1,6 +1,6 @@
 # MainSequence pane: UX analysis and redesign proposal
 
-Status: implemented in 0.4.8 (2026-10-20); see "Deviations" at the end. Written as
+Status: implemented in 0.4.11 (2026-10-20); see "Deviations" at the end. Written as
 a proposal on 2026-10-20 against 0.4.7. Covers the Claude Desktop pane rendered by
 `manifests/claude/hooks/view.mjs`, `agentView.mjs`, `projectView.mjs`, the footer
 launcher and the composer band in `register.mjs`. A rendered before/after sketch is in
@@ -381,7 +381,7 @@ caption says so.
   session" action so the operation target never changes implicitly, matching the
   existing documented rule.
 
-## 9. Deviations in the 0.4.8 implementation
+## 9. Deviations in the 0.4.11 implementation
 
 - **Confirmations stay in the pane**, drawn above the view with the header and
   navigation still visible, instead of `$.ui.ask`. The container-configuration preview

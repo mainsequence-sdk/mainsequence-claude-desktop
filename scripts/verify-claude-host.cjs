@@ -12,7 +12,7 @@ const dependency = JSON.parse(fs.readFileSync(path.join(artifact, 'dist/vendor/d
 assert.equal(dependency.name, '@dev-mainsequence/devtools');
 assert.equal(dependency.version, info.devtools.version);
 
-for (const file of ['hooks/hooks.json', 'hooks/register.mjs', 'hooks/view.mjs', 'hooks/agentView.mjs', 'hooks/projectView.mjs', 'docs/agents.md', 'dist/claudeRunner.js',
+for (const file of ['hooks/hooks.json', 'hooks/register.mjs', 'hooks/view.mjs', 'hooks/agentView.mjs', 'hooks/agentIcon.mjs', 'hooks/projectView.mjs', 'hooks/primitives.mjs', 'docs/agent-icons.md', 'docs/agents.md', 'dist/claudeRunner.js',
   'docs/claude-desktop.md', 'docs/claude-desktop-verification.md', 'third_party/claude-account-rotator/LICENSE']) {
   assert.ok(fs.statSync(path.join(artifact, file)).isFile(), `Missing packaged file: ${file}`);
 }
@@ -32,5 +32,10 @@ if (process.env.MS_CLAUDE_DESKTOP_BINARY) {
     const result = spawnSync(binary, ['plugin', command, artifact], { encoding: 'utf8', timeout: 60_000, cwd: artifact });
     process.stdout.write(result.stdout || '');
     assert.equal(result.status, 0, result.stderr || result.error?.message || `Native plugin ${command} failed`);
+    if (command === 'validate') {
+      // Mount tests bypass Desktop's static render-site discovery. Validate its
+      // routing metadata too: an imported matcher used to become requestId=?.
+      assert.match(result.stdout, /ui\.render\{component=Pane, requestId=mainsequence\}/);
+    }
   }
 } else console.log('Native loader/GUI checks not run: set MS_CLAUDE_DESKTOP_BINARY for loader validation; follow the live acceptance checklist.');

@@ -6,12 +6,25 @@ export const clean = value => String(value ?? '').replace(/[\u0000-\u0008\u000b\
 export const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 export const rows = value => Array.isArray(value) ? value : Array.isArray(value?.results) ? value.results : Array.isArray(value?.items) ? value.items : [];
 export const request = (scope, action, values = {}) => ({ scope, request: { action, ...values } });
+// Branches share a clone destination, so a second branch cannot run concurrently.
+export const setupKey = values => JSON.stringify([values.backend?.trim() || '', String(values.repositoryUid || ''), values.baseDir]);
+// Claude rejects the entire pane when a Select has more than 64 options.
+// Reserve one slot for the placeholder or the selection on another page.
+export function selectPage(options, value, requestedPage = 0) {
+  const seen = new Set();
+  const entries = options.filter(option => typeof option.value === 'string' && !seen.has(option.value) && seen.add(option.value));
+  const size = 63, count = Math.ceil(entries.length / size);
+  const page = Math.max(0, Math.min(Number.isInteger(requestedPage) ? requestedPage : 0, count - 1));
+  const visible = entries.slice(page * size, (page + 1) * size);
+  const selected = entries.find(option => option.value === value);
+  return { entries: visible, selected, page, count, total: entries.length, start: page * size + 1, end: page * size + visible.length };
+}
 export function mcpDisplayName(value) {
-  const name = typeof value?.name === 'string' ? clean(value.name).trim() : '';
-  return name || clean(value?.resource_release_uid || value?.uid || 'Release MCP');
+  const name = [value?.display_name, value?.name].find(name => typeof name === 'string' && clean(name).trim());
+  return name ? clean(name).trim() : 'Unnamed MCP';
 }
 export function initialState(options = {}) {
-  return { tab: 'Home', expanded: {}, codeDetail: null, codeFilter: 'all', toolsView: 'list', projectListView: false, homeStatusRequested: false, contextRevision: 0, initializing: false, repositoriesLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
+  return { tab: 'Home', expanded: {}, booting: null, booted: false, paneFault: null, selectPages: {}, codeDetail: null, codeFilter: 'all', toolsView: 'list', projectListView: false, homeStatusRequested: false, contextRevision: 0, initializing: false, repositoriesLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
     fields: { backend: 'https://api.main-sequence.app', commandCenterUrl: '', projectSearch: '', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
       image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}', agentSearch: '', codeSearch: '',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },

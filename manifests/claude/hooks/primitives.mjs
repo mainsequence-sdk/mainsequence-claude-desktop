@@ -1,4 +1,4 @@
-import { clean, resultText } from './model.mjs';
+import { clean, resultText, selectPage } from './model.mjs';
 
 /** Shared drawing helpers over the host's own elements: no custom palette, DOM or CSS. */
 export const STATUS = {
@@ -33,9 +33,16 @@ export function primitives(ui, state, actions) {
   const toggle = (key, label) => Button({ key: `toggle-${key}`, label: `${state.expanded[key] ? '▾' : '▸'} ${label}`, plain: true, dimColor: true, onPress: () => actions.toggle(key) });
   const input = (key, label, placeholder = '', extra = {}) => column([label && caption(label), Input({ key: `field-${key}`, value: state.fields[key] || '', placeholder, ...extra,
     onInput: value => actions.field(key, value), onSubmit: value => actions.field(key, value) })], { gap: 0 });
-  const select = (key, label, options, value, onSelect, placeholder = `Choose ${String(label || 'an option').toLowerCase()}`) => options.length ? column([label && caption(label), Select({ key,
-    options: options.some(o => o.value === value) ? options : [{ value: '', label: placeholder }, ...options],
-    value: options.some(o => o.value === value) ? value : '', onSelect })], { gap: 0 }) : null;
+  /** Pages at 63 entries: Claude refuses a pane whose Select has more than 64 options. */
+  const select = (key, label, options, value, onSelect, placeholder = `Choose ${String(label || 'an option').toLowerCase()}`) => {
+    const page = selectPage(options, value, state.selectPages[key]);
+    if (!page.total) return null;
+    const choices = page.entries.some(option => option.value === value) ? page.entries : [page.selected || { value: '', label: placeholder }, ...page.entries];
+    return column([label && caption(label), Select({ key, options: choices, value: page.selected ? value : '', onSelect }),
+      page.count > 1 && inline([button(`${key}-previous`, 'Previous', () => actions.selectPage(key, page.page - 1), { plain: true, available: page.page > 0 }),
+        caption(`${page.start}–${page.end} of ${page.total}`),
+        button(`${key}-next`, 'Next', () => actions.selectPage(key, page.page + 1), { plain: true, available: page.page + 1 < page.count })])], { gap: 0 });
+  };
   /** A list row: name and metadata on the left, inline controls on the right. */
   const grow = child => Box({ flexGrow: 1, flexShrink: 1, minWidth: 0, children: [child] });
   const row = (key, left, right = [], props = {}) => Box({ key, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 1, paddingY: 0, ...props, children: [

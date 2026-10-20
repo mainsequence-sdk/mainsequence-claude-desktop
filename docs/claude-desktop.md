@@ -1,7 +1,7 @@
 # MainSequence for Claude Desktop Code
 
 MainSequence provides a native pane in local Claude Desktop Code sessions. Since
-0.4.8 the layout is a status header plus five sections with one active selection:
+0.4.11 the layout is a status header plus five sections with one active selection:
 **Home, Code, Projects, Agents, Tools**. The header shows the account, the organization
 environment, a running-operations counter that opens **Activity**, and **Settings**.
 There is no Accounts page, rotation configuration or launcher strip above the chat.
@@ -24,8 +24,8 @@ MainSequence from `mainsequence-desktop`. The catalog supplies a versioned ZIP w
 a pinned SHA-256. A local build remains unpublished until the release workflow runs.
 You can also upload a built ZIP using **Add plugin → Upload plugin**.
 
-Enable the plugin in a local Code session and start a fresh session. It opens its
-native pane without requesting keyboard focus. The **MainSequence** button in
+Enable the plugin in a local Code session. Click **MainSequence** to open its
+native pane; startup and plugin reloads do not automatically open it. The button in
 the session footer remains available when the pane is closed. Click the
 button to reopen and focus the same pane without typing a command or submitting
 a message. `/ms` remains an optional fallback. The launcher preserves existing
@@ -92,7 +92,11 @@ All / Local filter narrow the list. A remote-only row offers **Set up**: its det
 shows the branch (a single available branch is selected automatically), the
 destination and an optional **Install dependencies after setup** toggle. Setup uses the
 canonical `<base>/<organization>/projects/<name>-<uid>` layout and repository SSH
-identity; a successful setup reopens the same repository as a local detail.
+identity. Setup shows its streamed progress beside the disabled Set up button
+immediately after confirmation, can be cancelled there, stays visible in the header
+while you work elsewhere, and reports completion or failure; a successful setup
+reopens the same repository as a local detail. Retry is explicit and never replays
+automatically.
 
 Opening a local row makes that folder the operation target and shows its detail:
 status (branch, commit, type, SDK), **Dependencies**, **Instructions and skills** and
@@ -179,11 +183,14 @@ are available from the next prompt. Exact release identities remain pinned.
 Activity shows actual operations from the session, their running/completed/failed/
 cancelled status, progress text, outcome and partial-effect warnings. Result details
 are collapsed. Cancellation stops the worker stream; it does not promise rollback.
-Tools lists the connected MCPs of the selected environment as rows with their
-registered tool count; **Add MCP** opens a search over the environment's releases
+MCP discovery runs alongside connected-tool registration. Tools lists the connected
+MCPs of the selected environment as rows with their registered tool count; **Add MCP** opens a search over the environment's releases
 with a **Connect** button per result, and a connected MCP's detail lists its tools.
 Calling a tool directly and re-registering tools sit under **Advanced** in that
-detail. The running-operations counter in the header opens Activity and is mirrored
+detail; its tool selector pages at 63 entries, keeping every tool reachable within
+Claude's 64-option native limit, and late results from another MCP cannot replace
+the selected catalog. Rendering or startup failures show a **Retry display** screen
+without replaying operations. The running-operations counter in the header opens Activity and is mirrored
 in Claude's status line. When there are no operations, the empty state links to Code
 and Tools.
 

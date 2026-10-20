@@ -13,7 +13,8 @@ test('packaged Claude worker discovers, connects and calls MCPs with nameless re
   const otherUid = 'b0a5ee29-f649-46ab-a040-38504838a132';
   const environmentUid = 'ba034541-73b4-4c5b-81ad-16516d8a8f94';
   const platformToken = 'fixture-platform-token', releaseToken = 'fixture-release-token';
-  const state = { denied: false, noMcp: false, endpoint: undefined, detailUid: releaseUid, exchanged: 0, invoked: 0 };
+  const state = { denied: false, noMcp: false, namesDenied: false, namesEnvironment: environmentUid,
+    endpoint: undefined, detailUid: releaseUid, exchanged: 0, invoked: 0 };
   const calls = [];
   async function listen(handler) {
     const server = http.createServer(async (req, res) => {
@@ -58,11 +59,29 @@ test('packaged Claude worker discovers, connects and calls MCPs with nameless re
     if (req.url === '/mcp') {
       if (initialized(res, message)) return;
       assert.equal(message.params.name, 'resource_release.mcp_endpoints');
-      return reply(res, message.id, { content: [], structuredContent: { count: 1, results: [
-        { resource_release_uid: releaseUid, name: 'Fixture MCP', mcp_connection: metadata(releaseUid) },
+      return reply(res, message.id, { content: [], structuredContent: { count: 2, results: [
+        { resource_release_uid: releaseUid, name: 'app', mcp_connection: metadata(releaseUid) },
+        { resource_release_uid: otherUid, name: 'app', mcp_connection: metadata(otherUid) },
       ] } });
     }
     res.setHeader('Content-Type', 'application/json');
+    if (req.url.startsWith('/api/v1/resource-releases/?')) {
+      if (state.namesDenied) return res.writeHead(403).end('{}');
+      // Exact matching must find entries after the first collection page and
+      // ignore metadata for the same release in another environment.
+      const offset = Number(new URL(req.url, backend).searchParams.get('offset'));
+      return res.end(JSON.stringify({ count: 102, results: offset === 0
+        ? [{ uid: releaseUid, code_repository_branch_uid: 'wrong', mcp_connection: { organization_environment_uid: 'different' } }]
+        : [releaseUid, otherUid].map((uid, i) => ({ uid, code_repository_branch_uid: `branch-${i}`,
+          mcp_connection: { organization_environment_uid: state.namesEnvironment } })) }));
+    }
+    if (req.url.startsWith('/api/v1/code-repository-branches/')) {
+      const uid = req.url.split('/').at(-2);
+      assert.ok(['branch-0', 'branch-1'].includes(uid), 'only exact environment matches are resolved');
+      return res.end(JSON.stringify({ uid, code_repository_uid: `repo-${uid}`,
+        code_repository_name: uid === 'branch-0' ? 'BackofficeBackend' : 'alpaca-connectors',
+        repository_branch: 'main', is_initialized: true }));
+    }
     if (req.url === '/api/v1/resource-releases/' + releaseUid + '/') return res.end(JSON.stringify({
       uid: state.detailUid, release_kind: 'fastapi', mcp_enabled: !state.noMcp,
       mcp_connection: state.noMcp ? null : metadata(state.detailUid),
@@ -107,14 +126,25 @@ require(${JSON.stringify(path.join(packageRoot, 'dist/claudeRunner.js'))}).main(
 
   const discovered = await run('mcp-discover');
   assert.equal(discovered.status, 'success');
-  assert.equal(discovered.data.results[0].name, 'Fixture MCP');
+  assert.deepEqual(discovered.data.results.map(row => row.name), ['app', 'app']);
+  assert.deepEqual(discovered.data.results.map(row => row.display_name), ['BackofficeBackend', 'alpaca-connectors']);
   const added = await run('mcp-add');
   assert.equal(added.status, 'success', added.summary);
   assert.equal(added.data.tools[0].name, 'lookup');
   assert.equal(Object.hasOwn(added.data.connection, 'name'), false);
   const saved = await fs.readFile(store, 'utf8');
   assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'name'), false);
-  assert.equal((await run('mcp-list')).data.length, 1);
+  const listed = await run('mcp-list');
+  assert.equal(listed.data.length, 1);
+  assert.equal(listed.data[0].display_name, 'BackofficeBackend', 'old nameless saved connections get the same name');
+  assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'display_name'), false, 'presentation names do not rewrite connection storage');
+  state.namesDenied = true;
+  const unavailableNames = await run('mcp-list');
+  assert.equal(unavailableNames.status, 'success');
+  assert.equal(unavailableNames.data[0].display_name, undefined, 'optional name lookup cannot break a saved connection');
+  state.namesDenied = false; state.namesEnvironment = 'different';
+  assert.equal((await run('mcp-list')).data[0].display_name, undefined, 'names from another environment cannot leak');
+  state.namesEnvironment = environmentUid;
   assert.equal((await run('mcp-tools')).data.tools[0].name, 'lookup');
   const called = await run('mcp-call', { tool: 'lookup', arguments: { value: 42 } });
   assert.equal(called.status, 'success'); assert.equal(called.data.structuredContent.value, 42);
