@@ -146,3 +146,8 @@ same batch has an empty icon record. See the [release notes](docs/releases/0.4.1
 MainSequence MCP tools stay usable after `/reload-plugins`: the plugin finishes startup
 from the desktop surface, its first draw, or the first tool call, and that call waits for
 registration instead of being refused. See the [release notes](docs/releases/0.4.13.md).
+
+### 0.4.14 — MCP content blocks
+
+MCP images and other non-text blocks are converted to the content blocks Claude
+accepts. See the [release notes](docs/releases/0.4.14.md).

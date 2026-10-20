@@ -1066,7 +1066,13 @@ test('registered tool results reach Claude as content blocks, forwarding the MCP
   const { register, toolResult } = await load();
   const blocks = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'The MCP tool completed.',
     data: { content: [{ type: 'text', text: 'Found 2 contacts' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }], isError: false, structuredContent: { count: 2 } } });
-  assert.ok(Array.isArray(blocks.result)); assert.deepEqual(blocks.result[0], { type: 'text', text: 'Found 2 contacts' }); assert.equal(blocks.result[1].type, 'image');
+  assert.ok(Array.isArray(blocks.result)); assert.deepEqual(blocks.result[0], { type: 'text', text: 'Found 2 contacts' });
+  assert.deepEqual(blocks.result[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }, 'MCP images become Messages API images');
+  const other = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'ok', data: { content: [
+    { type: 'resource_link', uri: 'file:///report.pdf', name: 'report' }, { type: 'audio', data: 'BBBB', mimeType: 'audio/wav' },
+    { type: 'resource', resource: { uri: 'mem://x', blob: 'CCCC', mimeType: 'application/pdf' } }, { type: 'image', data: 'DDDD', mimeType: 'image/svg+xml' }] } });
+  assert.deepEqual(other.result.map(b => b.type), ['text', 'text', 'text', 'text'], 'non-API blocks become text');
+  assert.match(other.result[0].text, /report\.pdf/); assert.doesNotMatch(JSON.stringify(other.result), /BBBB|CCCC|DDDD/, 'binary payloads are not inlined as text');
   assert.match(blocks.result[2].text, /"count":2/); assert.equal(blocks.isError, undefined);
   const failed = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'failure', summary: 'The MCP tool reported an error.', error: { code: 'API_ERROR', message: 'boom' },
     data: { content: [{ type: 'text', text: 'missing uid' }], isError: true } });

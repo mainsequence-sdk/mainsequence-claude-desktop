@@ -160,6 +160,18 @@ async function runProject($, state, action, extra = {}) {
   return result;
 }
 
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+/** MCP blocks use MCP's shape; Claude's core expects Messages API blocks: text and base64 images pass, the rest becomes text. */
+function apiBlock(block) {
+  if (block.type === 'text') return { type: 'text', text: clean(String(block.text ?? '')) };
+  if (block.type === 'image' && typeof block.data === 'string' && IMAGE_TYPES.has(block.mimeType)) return { type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } };
+  if (block.type === 'image' && block.source && typeof block.source === 'object') return { type: 'image', source: block.source };
+  const resource = block.resource && typeof block.resource === 'object' ? block.resource : null;
+  const { data, ...rest } = resource ? { ...block, resource: { ...resource, blob: undefined } } : block;
+  const binary = data !== undefined || resource?.blob !== undefined;
+  return { type: 'text', text: clean(JSON.stringify({ ...rest, ...(binary ? { omitted: 'binary content' } : {}) })) };
+}
+
 /** Claude accepts a registered tool's result as text, content blocks or nothing: never a bare object. */
 export function toolResult(value) {
   const result = publicValue(value);
@@ -169,7 +181,7 @@ export function toolResult(value) {
     ...(data.structuredContent !== undefined ? { structuredContent: data.structuredContent } : {}) };
   const content = blocks?.length ? [...blocks, ...(result?.status !== 'success' || data.structuredContent !== undefined ? [{ type: 'text', text: JSON.stringify(extra) }] : [])]
     : [{ type: 'text', text: JSON.stringify(blocks ? extra : result) }];
-  return { result: content.map(block => block.type === 'text' ? { type: 'text', text: clean(String(block.text ?? '')) } : block), ...(result?.status !== 'success' ? { isError: true } : {}) };
+  return { result: content.map(apiBlock), ...(result?.status !== 'success' ? { isError: true } : {}) };
 }
 
 function toolName(backend, environment, release, name) {
