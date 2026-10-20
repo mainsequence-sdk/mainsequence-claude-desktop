@@ -30,7 +30,7 @@ export function renderAgentActivity(ui, state, binding) {
   const activity = agentIconActivity(binding);
   const label = binding.uncertain && !binding.busy ? 'Delivery needs review'
     : binding.iconPhase === 'approval' ? 'Review agent request' : binding.busy ? 'Waiting for agent…' : binding.status === 'working' ? 'Agent task in progress'
-    : activity.failed ? 'Conversation needs attention' : binding.status === 'ready' ? 'Reply received' : 'Agent ready';
+    : activity.failed ? 'Conversation needs attention' : binding.status === 'ready' ? 'Reply received · your next message goes here too' : 'Agent ready · your messages go here';
   return ui.Box({ key: 'agent-chat-activity', flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: 1,
     children: [renderAgentIcon(ui, state, binding.agent.uid, { size: 24, activity }),
       ui.Text({ children: [binding.agent.name] }), ui.Text({ dimColor: true, children: [label] })].filter(Boolean) });

@@ -28,7 +28,14 @@ turn. Write your question after the prefix and submit it yourself. A bare
 `/ms <message>` is refused with the handles of the agents prepared by Talk; when two
 prepared agents share a name, the handle resolves to the selected one.
 `/ms agent <agent-uid> <message>` and `/ms task <agent-uid> <message>` address an
-agent by id. The plugin sends your
+agent by id.
+
+The conversation then stays open: after each reply to a command you submitted, the
+plugin re-addresses the empty composer with the same `/ms @<handle> ` prefix, so the
+next message reaches the same agent without pressing Talk again. Text you typed while
+waiting is never replaced, deleting the prefix sends to Claude as usual, and **End** in
+the band above the composer stops the re-addressing and clears a bare prefix. Only
+commands submitted from the composer keep the prefix; model-initiated sends do not. The plugin sends your
 text directly to that agent and shows the reply with its agent/environment label in
 Claude's command transcript. **Switch agent** in the composer band reopens the pane
 on Agents.

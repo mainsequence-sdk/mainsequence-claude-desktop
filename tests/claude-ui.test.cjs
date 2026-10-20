@@ -1098,3 +1098,24 @@ test('an uncertain delivery can be released by the person for the next send with
   assert.doesNotMatch((await f.send('@research-assistant Third')).text, /uncertain/);
   assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').length, 2);
 });
+
+test('a conversation stays addressed to the agent after each reply until the person ends it', async () => {
+  const f = await agentFixture(); await f.startTalk(); assert.equal(f.draft, '/ms @research-assistant ');
+  f.draft = ''; // the composer empties when the command is submitted
+  assert.match((await f.send('@research-assistant First question')).text, /Reply from Research/);
+  assert.equal(f.draft, '/ms @research-assistant ', 'the empty composer is re-addressed after the reply');
+  f.draft = 'Typed while waiting';
+  await f.send('@research-assistant Second'); assert.equal(f.draft, 'Typed while waiting', 'queued text is never replaced');
+  f.draft = '/ms @research-assistant ';
+  const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
+  assert.ok(f.find(band, 'agent-end')); f.find(band, 'agent-end').props.onPress(); await flush();
+  assert.equal(f.draft, '', 'ending clears a bare prefix');
+  assert.deepEqual(await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} }), { type: 'engine', ref: 1 }, 'the band disappears');
+  await f.send('@research-assistant Third'); assert.equal(f.draft, '', 'no refill after End');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').length, 3, 'End never resends or blocks explicit sends');
+  await f.startTalk(); assert.equal(f.draft, '/ms @research-assistant '); f.draft = '';
+  await f.send('@research-assistant Fourth'); assert.equal(f.draft, '/ms @research-assistant ', 'Talk resumes the sticky conversation');
+  const model = await agentFixture(); await model.startTalk(); model.draft = '';
+  await model.emit('command.run', { command: 'ms', args: `agent ${agentUid} From a plugin`, origin: { kind: 'plugin', name: 'other' } });
+  assert.equal(model.draft, '', 'only composer submissions keep the prefix');
+});

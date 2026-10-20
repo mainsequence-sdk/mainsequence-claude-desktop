@@ -290,6 +290,7 @@ function actionsFor($, state) {
     connectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Connect MCP', detail: `Connect ${name} in ${environmentLabel(state)} and register its tools for Claude.`, callback: () => runDev($, state, 'mcp-add') }; update($); },
     disconnectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Disconnect MCP', detail: `Disconnect ${name} from ${environmentLabel(state)}. Its tools stop being available to Claude.`, callback: () => runDev($, state, 'mcp-remove') }; update($); },
     askAgent: (uid, message) => background(talkToAgent($, state, uid, false, message)),
+    endAgentConversation: () => background(endAgentConversation($, state)),
     allowAgentResend: uid => background((async () => {
       const binding = Object.values(state.agentBindings).find(value => value.agent.uid === uid && current(state, value));
       if (!binding || binding.busy || !binding.uncertain) return;
@@ -585,10 +586,13 @@ export function register(on, options = {}) {
     const ui = $.ui.resolve(e);
     return ui.Box({ flexDirection: 'column', children: [existing,
       ui.Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [renderAgentActivity(ui, state, state.activeAgent),
-        ui.Button({ key: 'agent-switch', label: 'Switch agent', plain: true, dimColor: true, onPress: () => {
-          state.tab = 'Agents'; state.agentDetail = null; update($);
-          void openPane($, state).catch(() => {});
-        } })] })].filter(Boolean) });
+        ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
+          ui.Button({ key: 'agent-switch', label: 'Switch agent', plain: true, dimColor: true, onPress: () => {
+            state.tab = 'Agents'; state.agentDetail = null; update($);
+            void openPane($, state).catch(() => {});
+          } }),
+          ui.Button({ key: 'agent-end', label: 'End', plain: true, dimColor: true, onPress: () => { void endAgentConversation($, state).catch(() => {}); } }),
+        ] })] })].filter(Boolean) });
   });
   // Desktop discovers render sites from static hook metadata before invoking JS.
   // Imported constants become unknown matcher values in that discovery pass.
@@ -804,6 +808,25 @@ async function saveBinding($, state, binding, replace = false) {
   const queued = state.agentSave.then(write); state.agentSave = queued.catch(() => {}); await queued;
 }
 
+const agentPrefix = agent => `/ms ${agent.responseKinds.includes('message') ? '' : 'task '}@${agentHandle(agent.name)} `;
+const bareAgentPrefix = /^\/ms\s+(?:task\s+)?@[A-Za-z0-9._-]+\s*$/;
+
+/** After a reply, keep the empty composer addressed to the same agent until the person ends the conversation. */
+async function keepAgentPrefix($, state, binding) {
+  if (!current(state, binding) || binding.ended || state.agentDrafts[binding.agent.uid] !== binding) return;
+  const draft = await $.prompt.read();
+  if (!current(state, binding) || binding.ended || draft.text.trim()) return;
+  await $.prompt.fill({ text: agentPrefix(binding.agent), mode: 'replace' });
+}
+
+async function endAgentConversation($, state) {
+  const binding = state.activeAgent;
+  if (!binding) return;
+  binding.ended = true; state.activeAgent = null; refresh($);
+  const draft = await $.prompt.read();
+  if (bareAgentPrefix.test(draft.text)) await $.prompt.fill({ text: '', mode: 'replace' });
+}
+
 async function fillAgentDraft($, state, binding, ticket, preparation) {
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   const draft = await $.prompt.read();
@@ -815,12 +838,11 @@ async function fillAgentDraft($, state, binding, ticket, preparation) {
   const match = explicit || handled || bare;
   if (draft.text.trimStart().startsWith('/') && !match) { $.ui.toast('Your existing slash command was kept. Clear it before choosing an agent message.'); return; }
   const message = typeof preparation?.message === 'string' ? preparation.message : match ? draft.text.slice(match[0].length) : draft.text;
-  const prefix = `/ms ${binding.agent.responseKinds.includes('message') ? '' : 'task '}@${agentHandle(binding.agent.name)} `;
-  const filled = await $.prompt.fill({ text: `${prefix}${message}`, mode: 'replace' });
+  const filled = await $.prompt.fill({ text: `${agentPrefix(binding.agent)}${message}`, mode: 'replace' });
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   if (!filled?.isFilled) { $.ui.toast('Claude Desktop could not fill its chat input. No message was sent.'); return; }
-  state.agentDrafts[binding.agent.uid] = binding;
-  $.ui.toast(`${binding.agent.name} is ready. Write your message in Claude’s input, then send it.`);
+  state.agentDrafts[binding.agent.uid] = binding; binding.ended = false;
+  $.ui.toast(`${binding.agent.name} is ready. Write your message in Claude’s input, then send it. Replies keep the conversation addressed to it until you press End.`);
 }
 
 async function prepareAgent($, state, binding, preparation) {
@@ -981,6 +1003,7 @@ async function agentCommand($, state, e) {
   const answer = result.answer;
   const text = `${binding.agent.name} · ${binding.agent.environmentName}\n\n${answer.status !== 'success' ? answer.summary + (answer.effects ? '\nThe message may have reached the agent. Do not resend automatically.' : '')
     : answer.data?.responseKind === 'task' ? `Task ${answer.data.taskUid}: ${answer.data.status}` : answer.data?.message || answer.summary}`;
+  if (current(state, binding) && e.origin?.kind === 'composer') { state.activeAgent = binding; await keepAgentPrefix($, state, binding); }
   if (current(state, binding)) {
     const previous = state.agentCommandOutputs.get(text);
     // Identical text from two agents cannot safely identify a historical row.
