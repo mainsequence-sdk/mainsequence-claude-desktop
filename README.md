@@ -140,3 +140,9 @@ configuration contract changes. See [the proposal](docs/ux-proposal.md) and its
 
 Agents with valid Command Center icons now show them even when another agent in the
 same batch has an empty icon record. See the [release notes](docs/releases/0.4.12.md).
+
+### 0.4.13 — tools after a reload
+
+MainSequence MCP tools stay usable after `/reload-plugins`: the plugin finishes startup
+from the desktop surface, its first draw, or the first tool call, and that call waits for
+registration instead of being refused. See the [release notes](docs/releases/0.4.13.md).

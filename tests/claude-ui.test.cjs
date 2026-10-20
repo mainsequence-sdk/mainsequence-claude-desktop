@@ -88,7 +88,8 @@ function fixture(options = {}) {
   };
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
-    session: { cwd: async () => options.cwd || '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }) },
+    session: { cwd: async () => options.cwd || '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }),
+      ...(options.surfaces ? { surfaces: async () => options.surfaces } : {}) },
     store: { get: async key => stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined, set: async (key, value) => { stores.set(key, value); calls.push({ store: key, value }); } },
     prompt: { read: async () => ({ text: draft, cursor: draft.length }), fill: async value => { calls.push({ filled: value }); if (options.refuseFill) return { isFilled: false }; draft = value.text; return { isFilled: true, text: draft, cursor: draft.length }; }, submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
     command: { register: async spec => { calls.push({ command: spec }); }, run: async spec => { calls.push({runCommand:spec}); return options.commandResult ? options.commandResult(spec) : {text:`Added ${spec.args} as a working directory for this session`}; } },
@@ -166,12 +167,14 @@ test('Desktop footer launcher survives pane closure and preserves native control
     assert.match(JSON.stringify(tree), /MainSequence emblem/);
     const launcher = f.find(tree, 'mainsequence-launcher'); assert.ok(launcher);
     launcher.props.onPress(); await flush();
-    assert.deepEqual(f.calls.at(-1).pane, { id: 'mainsequence', title: 'MainSequence', focus: true, closeOnEscape: true });
+    assert.deepEqual(f.calls.findLast(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence', focus: true, closeOnEscape: true });
     await f.emit('ui.close', { id: 'mainsequence', origin: { kind: 'person' } });
     assert.ok(f.find(await footer(), 'mainsequence-launcher'));
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'SessionMode', props: { modes: ['focus'] } }), { type: 'engine', ref: 1 });
-  assert.equal(f.calls.slice(callsBefore).every(c => c.pane), true);
+  // A desktop footer draw may start the session's own startup reads; it never writes settings or opens anything else.
+  assert.equal(f.calls.slice(callsBefore).every(c => c.pane || ['workspace-preferences', 'auth-status', 'mcp-environments', 'mcp-list', 'mcp-discover', 'read-project-workspace'].includes(c.request?.request.action)), true);
+  assert.equal(f.calls.some(c => c.store), false);
   assert.equal(JSON.stringify(saved), settingsBefore);
   f.$.ui.open = async () => { throw new Error('private-host-error'); };
   f.find(await footer(), 'mainsequence-launcher').props.onPress(); await flush();
@@ -182,7 +185,7 @@ test('Desktop footer launcher survives pane closure and preserves native control
 test('native forms run structured actions without model APIs; mutating actions require explicit confirmation', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start');
   await f.press('tab-Settings'); await f.field('backend', 'https://backend.example'); await f.press('auth-status');
-  assert.deepEqual(f.calls.find(c => c.request)?.request, { scope: 'devtools', request: { action: 'auth-status', backend: 'https://backend.example', check: true } });
+  assert.deepEqual(f.calls.find(c => c.request?.request.action === 'auth-status' && c.request.request.check)?.request, { scope: 'devtools', request: { action: 'auth-status', backend: 'https://backend.example', check: true } });
   await f.press('tab-Code'); await f.press('code-open-session'); await f.field('root', '/work/selected');
   const before = f.calls.filter(c => c.request).length;
   await f.press('sync'); assert.equal(f.calls.filter(c => c.request).length, before);
@@ -318,7 +321,7 @@ test('MainSequence login, renewal and logout remain available without touching C
     return success(domain.request.action, domain.request.action === 'auth-status' ? { authenticated: signedIn, username: 'fixture@example.test' } : {});
   } });
   f.$.env.set = f.$.fs.read = f.$.process.run = async () => assert.fail('Claude credential APIs must never be used');
-  register(f.on); await f.emit('session.start');
+  register(f.on); await f.emit('session.start'); await f.pane(); await flush();
   await f.press('login'); assert.match(JSON.stringify(await f.pane()), /fixture@example.test/);
   await f.press('tab-Settings'); await f.press('toggle-connection-actions'); await f.press('refresh-token');
   await f.press('logout'); await f.press('confirm-action'); assert.ok(f.find(await f.pane(), 'login')); assert.ok(f.find(await f.pane(), 'settings-login'));
@@ -337,7 +340,7 @@ test('Activity has useful empty state navigation, real operation results and col
   await f.press('tab-Settings'); await f.press('auth-status'); await f.press('tab-Activity');
   let tree=await f.pane(); assert.match(JSON.stringify(tree),/Check MainSequence connection/); assert.match(JSON.stringify(tree),/Completed/);
   assert.doesNotMatch(JSON.stringify(tree),/"type":"Code"/);
-  await f.press('toggle-activity-' + f.calls.find(c=>c.request?.request.action==='auth-status').id); assert.match(JSON.stringify(await f.pane()),/"type":"Code"/);
+  await f.press('toggle-activity-' + f.calls.findLast(c=>c.request?.request.action==='auth-status').id); assert.match(JSON.stringify(await f.pane()),/"type":"Code"/);
 });
 
 test('startup reads existing MainSequence session without saving or rotating credentials', async () => {
@@ -1146,4 +1149,52 @@ test('an agent without an idle icon never costs the other agents in its batch th
   assert.equal(f.calls.filter(c => c.request?.request.action === 'agents-list').length, lists + 1, 'Refresh reloads the list');
   tree = await f.pane();
   for (const uid of [uids[3], uids[4]]) assert.ok(f.find(tree, `agent-icon-${uid}-20`), `icon for ${uid} after Refresh`);
+});
+
+function reloadFixture(options = {}) {
+  const backend = 'https://api.main-sequence.app';
+  return fixture({ ...options, environments: { [backend]: 'env-1' }, respond: d => {
+    const q = d.request;
+    if (q.action === 'workspace-preferences') return success(q.action, { backend, baseDir: '/repos' });
+    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'reload@example.test' });
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Production' }]);
+    if (q.action === 'mcp-list') return success(q.action, [{ resource_release_uid: 'release-1', name: 'BackofficeBackend', backend, mcp_connection: { organization_environment_uid: 'env-1' } }]);
+    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'get_current_user', inputSchema: { type: 'object' } }] });
+    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: '{"user_uid":"u-1"}' }], isError: false });
+    return success(q.action, {});
+  } });
+}
+
+test('an SDK-hosted start or reload with no surface still initializes from the desktop surfaces or the first footer render', async () => {
+  const { register } = await load();
+  // session.start names no surface, but the session already draws on the desktop.
+  const a = reloadFixture({ surfaces: ['desktop'] }); register(a.on); await a.emit('session.start', { surface: null });
+  for (const t of a.timers.filter(t => t.ms === 0)) t.callback(); await flush(); await flush();
+  assert.ok(a.calls.some(c => c.request?.request.action === 'auth-status'), 'session checked'); assert.equal(a.tools.length, 1, 'MCP tools re-registered');
+  assert.match(JSON.stringify(await a.pane()), /reload@example.test/); assert.equal(a.calls.some(c => c.pane), false, 'the pane is not opened');
+  // Neither session.start nor surfaces() reveal the desktop: the footer render does.
+  const b = reloadFixture({ surfaces: [] }); register(b.on); await b.emit('session.start', { surface: null });
+  assert.equal(b.calls.some(c => c.request), false, 'nothing runs before a desktop draw');
+  await b.emit('ui.render', { surface: 'desktop', component: 'SessionMode', props: { modes: [] } }); await flush(); await flush();
+  assert.ok(b.calls.some(c => c.request?.request.action === 'auth-status')); assert.equal(b.tools.length, 1, 'footer render registers MCP tools');
+  await b.emit('ui.render', { surface: 'desktop', component: 'SessionMode', props: { modes: [] } }); await flush();
+  assert.equal(b.calls.filter(c => c.request?.request.action === 'workspace-preferences').length, 1, 'startup runs once');
+  // A terminal or headless start never spawns workers.
+  const c = reloadFixture({ surfaces: [] }); register(c.on); await c.emit('session.start', { surface: null });
+  await c.emit('ui.render', { surface: 'terminal', component: 'SessionMode', props: { modes: [] } }); await flush();
+  assert.equal(c.calls.some(x => x.request), false);
+});
+
+test('a model call to a MainSequence tool right after a reload waits for registration instead of refusing', async () => {
+  const { register } = await load();
+  const first = reloadFixture({ surfaces: ['desktop'] }); register(first.on); await first.emit('session.start', { surface: null });
+  for (const t of first.timers.filter(t => t.ms === 0)) t.callback(); await flush(); await flush();
+  const name = 'mcp__mainsequence__' + first.tools[0].name;
+  // The reloaded instance: the engine's catalog still names the tool; nothing has run yet.
+  const f = reloadFixture({ surfaces: [] }); register(f.on); await f.emit('session.start', { surface: null });
+  assert.equal(f.tools.length, 0);
+  const answer = await f.emit('tool.call', { tool: name, tool_use_id: 'after-reload' });
+  assert.deepEqual(answer, { result: [{ type: 'text', text: '{"user_uid":"u-1"}' }] });
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').length, 1);
+  assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_unknown_0' })).deny, /no longer connected/, 'an unknown name is still refused');
 });

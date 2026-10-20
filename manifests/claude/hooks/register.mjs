@@ -179,7 +179,40 @@ function toolName(backend, environment, release, name) {
   return `ms_${String(name).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 42)}_${hash.toString(16)}`;
 }
 
-async function refreshTools($, state) {
+function refreshTools($, state) {
+  // A tool call that arrives while tools are being registered waits for this run.
+  const run = refreshToolsNow($, state).finally(() => { if (state.toolRefresh === run) state.toolRefresh = null; });
+  state.toolRefresh = run;
+  return run;
+}
+
+/** Startup work (preferences, session check, environments and MCP tools) runs once per session, from whichever trigger comes first. */
+function ensureInitialized($, state) {
+  if (state.initPromise) return state.initPromise;
+  state.preferencesLoading = true; update($);
+  state.initPromise = initializeWorkspace($, state).catch(() => { state.initializing = false; state.preferencesLoading = false; update($); });
+  return state.initPromise;
+}
+
+/** A desktop render or a tool call proves the session is live even when session.start named no surface (SDK-hosted Desktop, reloads). */
+function wakeOnDesktop($, state, e) {
+  if (e.surface !== 'desktop' || state.paneFault) return;
+  if (!state.booted && !state.booting) { void ensureBoot($, state, e); return; }
+  if (state.booted && !state.initPromise) void ensureInitialized($, state);
+}
+
+async function toolsReady($, state) {
+  let timer;
+  const limit = new Promise(resolve => { timer = $.clock.after(90000, resolve); });
+  const work = (async () => {
+    await ensureBoot($, state, { surface: 'desktop' });
+    await ensureInitialized($, state);
+    while (state.toolRefresh) await state.toolRefresh;
+  })();
+  try { await Promise.race([work, limit]); } finally { timer?.cancel(); }
+}
+
+async function refreshToolsNow($, state) {
   const revision = state.contextRevision;
   state.mcpTools = {};
   if (!state.fields.mcpEnvironment || state.preferencesLoading) return;
@@ -401,10 +434,14 @@ async function boot($, state, e) {
   state.environmentSelections = record(await $.store.get('mcp-environments'));
   for (const key of ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
   await $.command.register({ name: 'ms', description: 'Open MainSequence or message an agent by handle', argumentHint: '[@agent <message> | agent <uid> <message>]', immediate: true });
-  if (e.surface === 'desktop') {
-    state.preferencesLoading = true;
+  // Desktop hosts the engine through the SDK: session.start (and a plugin reload) can name no
+  // surface although the session draws on the desktop. Ask the session which surfaces it has.
+  let desktop = e.surface === 'desktop';
+  if (!desktop) { try { desktop = (await $.session.surfaces()).includes('desktop'); } catch { desktop = false; } }
+  state.initPromise = null;
+  if (desktop) {
     // Only a person opens the pane. Startup/reloads must not reopen a closed pane.
-    state.timers.push($.clock.after(0, () => { void initializeWorkspace($, state).catch(() => { state.initializing = false; state.preferencesLoading = false; update($); }); }));
+    state.timers.push($.clock.after(0, () => { void ensureInitialized($, state); }));
   }
   update($);
 }
@@ -567,6 +604,7 @@ export function register(on, options = {}) {
   // Keep the engine/other plugins' footer content and leave terminal rendering alone.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
+    wakeOnDesktop($, state, e);
     const existing = await next(e);
     const ui = $.ui.resolve(e), { Box, Button, Svg } = ui;
     return Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 1,
@@ -581,6 +619,7 @@ export function register(on, options = {}) {
   // SessionMode is flattened into a narrow text slot by Desktop. Use the native
   // composer band for the selected agent's image and readable activity instead.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    wakeOnDesktop($, state, e);
     const existing = await next(e);
     if (e.surface !== 'desktop' || !current(state, state.activeAgent)) return existing;
     const ui = $.ui.resolve(e);
@@ -599,7 +638,7 @@ export function register(on, options = {}) {
   on('ui.render', { component: 'Pane', requestId: 'mainsequence' }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
     const ui = $.ui.resolve(e), actions = actionsFor($, state);
-    if (!state.booted && !state.booting && !state.paneFault) void ensureBoot($, state, e);
+    wakeOnDesktop($, state, e);
     if (state.paneFault) return renderRecovery(ui, state, actions);
     try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
     catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
@@ -635,7 +674,10 @@ export function register(on, options = {}) {
   });
   on('tool.call', { tool: /^mcp__mainsequence__/ }, async ($, e) => {
     if (e.tool.startsWith('mcp__mainsequence__ms_agent_')) return handleAgentTool($, state, e);
-    const entry = state.mcpTools[e.tool];
+    let entry = state.mcpTools[e.tool];
+    // After a reload or right at startup the catalog still names tools this instance has not
+    // registered yet: finish startup and the in-flight registration before refusing.
+    if (!entry) { await toolsReady($, state); entry = state.mcpTools[e.tool]; }
     if (!entry || entry.environmentUid !== state.fields.mcpEnvironment) return { deny: 'This MainSequence MCP tool is no longer connected. Refresh MainSequence tools.' };
     const revision = state.contextRevision;
     const answer = await $.ui.ask(`Run MainSequence tool ${entry.tool} in ${environmentLabel(state)}?`, ['Run tool', 'Cancel']);

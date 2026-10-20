@@ -1,5 +1,28 @@
 # Claude Desktop plugin verification
 
+## 0.4.13 — startup after reload, and a real Back Office conversation (2026-10-20)
+
+In the user's Desktop session, after `/reload-plugins` loaded 0.4.12, a model call to
+the Back Office `get_current_user` tool was refused as "no longer connected". Desktop
+hosts the engine through the SDK, so the reload's `session.start` named no surface and
+the plugin skipped startup, leaving its MCP tools unregistered. 0.4.13 starts from the
+session's reported surfaces, the first desktop draw, or the first MainSequence tool
+call, which waits for registration.
+
+A real end-to-end run used the installed hooks, the installed worker and the local
+backend (only Claude's host APIs were simulated). It passed: signed-in header, saved
+Production environment, 105 MCP tools (35 Back Office, 70 CRM), the Back Office MCP
+listed by name, a real `get_current_user` call returning content blocks, agents with the
+Tutorial Helper icon, Refresh, Talk to Back Office Helper after real session allocation
+and readiness, a two-turn conversation in the same agent session with attributed
+replies, the composer re-addressed after each reply, decorated reply and tool rows, and
+the agent send tool returning content blocks. A separate run talked to Tutorial Helper
+without sending anything and drew its icon in the list, details, composer band and
+running/completed tool rows with its animated poses loaded.
+
+The engine test harness accepts any hook result shape, so it cannot prove what Claude's
+core accepts from a model call; that is verified only by a live call in Desktop.
+
 ## 0.4.12 — agent icons with an empty record in the batch (2026-10-20)
 
 After 0.4.11 was installed, agent icons did not appear in the user's Desktop. The
