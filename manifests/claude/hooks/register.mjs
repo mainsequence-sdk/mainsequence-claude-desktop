@@ -160,6 +160,18 @@ async function runProject($, state, action, extra = {}) {
   return result;
 }
 
+/** Claude accepts a registered tool's result as text, content blocks or nothing: never a bare object. */
+export function toolResult(value) {
+  const result = publicValue(value);
+  const data = record(result?.data);
+  const blocks = Array.isArray(data.content) ? data.content.filter(block => block && typeof block === 'object' && typeof block.type === 'string') : null;
+  const extra = { summary: result?.summary, ...(result?.effects ? { effects: result.effects } : {}), ...(result?.error ? { error: result.error } : {}),
+    ...(data.structuredContent !== undefined ? { structuredContent: data.structuredContent } : {}) };
+  const content = blocks?.length ? [...blocks, ...(result?.status !== 'success' || data.structuredContent !== undefined ? [{ type: 'text', text: JSON.stringify(extra) }] : [])]
+    : [{ type: 'text', text: JSON.stringify(blocks ? extra : result) }];
+  return { result: content.map(block => block.type === 'text' ? { type: 'text', text: clean(String(block.text ?? '')) } : block), ...(result?.status !== 'success' ? { isError: true } : {}) };
+}
+
 function toolName(backend, environment, release, name) {
   const value = `${backend}:${environment}:${release}:${name}`;
   let hash = 2166136261;
@@ -620,7 +632,7 @@ export function register(on, options = {}) {
     if (state.closed || revision !== state.contextRevision || state.mcpTools[e.tool] !== entry) return { deny: 'The selected environment changed. Review the tool in the current environment.' };
     const { tool, tool_use_id, agentId, ...arguments_ } = e;
     const result = await execute($, state, request('devtools', 'mcp-call', { ...entry, arguments: arguments_ }));
-    return { result: publicValue(result), ...(result.status !== 'success' ? { isError: true } : {}) };
+    return toolResult(result);
   }).catch(() => ({ deny: 'MainSequence could not confirm or run this tool call.' }));
   on('session.end', async ($, e, next) => {
     state.closed = true;
@@ -924,15 +936,17 @@ async function runAgentOperation($, state, binding, kind, input, approved = fals
       if (kind === 'send') binding.uncertain = false;
     } else { binding.status = 'failed'; binding.error = answer.summary; if (kind === 'send') binding.uncertain = !!answer.effects; }
     await saveBinding($, state, binding);
-    return { result: { ...publicValue(answer), agentName: binding.agent.name, environment: binding.agent.environmentName,
-      contextChanged: !current(state, binding) }, ...(answer.status !== 'success' ? { isError: true } : {}) };
+    const labelled = { ...answer, data: { ...record(answer.data), agentName: binding.agent.name, environment: binding.agent.environmentName, contextChanged: !current(state, binding) } };
+    // `answer` serves the /ms command transcript; the model tool gets content blocks only.
+    return { ...toolResult(labelled), answer: publicValue(labelled) };
   } finally { binding.busy = false; binding.iconPhase = null; refresh($); }
 }
 
 async function handleAgentTool($, state, e) {
   const entry = state.agentTools[e.tool];
   if (!entry) return { deny: 'This agent conversation is no longer active. Choose an agent in the current environment.' };
-  return runAgentOperation($, state, entry.binding, entry.kind, e);
+  const { deny, result, isError } = await runAgentOperation($, state, entry.binding, entry.kind, e);
+  return deny ? { deny } : { result, ...(isError ? { isError } : {}) };
 }
 
 async function agentCommand($, state, e) {
@@ -952,7 +966,7 @@ async function agentCommand($, state, e) {
   }
   const result = await runAgentOperation($, state, binding, 'send', { message, responseKind }, e.origin?.kind === 'composer');
   if (result.deny) return { text: result.deny };
-  const answer = result.result;
+  const answer = result.answer;
   const text = `${binding.agent.name} · ${binding.agent.environmentName}\n\n${answer.status !== 'success' ? answer.summary + (answer.effects ? '\nThe message may have reached the agent. Do not resend automatically.' : '')
     : answer.data?.responseKind === 'task' ? `Task ${answer.data.taskUid}: ${answer.data.status}` : answer.data?.message || answer.summary}`;
   if (current(state, binding)) {

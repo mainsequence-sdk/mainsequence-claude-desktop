@@ -1056,3 +1056,31 @@ test('pressing Agents during startup keeps the signed-in account, the saved envi
   assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-environments').length, 1, 'environments load once');
   assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-icons').length, 1, 'icons load once');
 });
+
+test('registered tool results reach Claude as content blocks, forwarding the MCP blocks and never a bare object', async () => {
+  const { register, toolResult } = await load();
+  const blocks = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'The MCP tool completed.',
+    data: { content: [{ type: 'text', text: 'Found 2 contacts' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }], isError: false, structuredContent: { count: 2 } } });
+  assert.ok(Array.isArray(blocks.result)); assert.deepEqual(blocks.result[0], { type: 'text', text: 'Found 2 contacts' }); assert.equal(blocks.result[1].type, 'image');
+  assert.match(blocks.result[2].text, /"count":2/); assert.equal(blocks.isError, undefined);
+  const failed = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'failure', summary: 'The MCP tool reported an error.', error: { code: 'API_ERROR', message: 'boom' },
+    data: { content: [{ type: 'text', text: 'missing uid' }], isError: true } });
+  assert.equal(failed.isError, true); assert.equal(failed.result[0].text, 'missing uid'); assert.match(failed.result[1].text, /API_ERROR/);
+  const plain = toolResult({ schemaVersion: 1, action: 'agent-send', status: 'success', summary: 'Sent.', data: { message: 'Reply', accessToken: 'secret-token' } });
+  assert.deepEqual(plain.result.map(b => b.type), ['text']); assert.match(plain.result[0].text, /Reply/); assert.doesNotMatch(plain.result[0].text, /secret-token/);
+  // Through the hooks: an MCP tool call and an agent send both answer with blocks.
+  const f = fixture({ respond: domain => {
+    const q = domain.request;
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Research' }]);
+    if (q.action === 'mcp-list') return success(q.action, [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example', mcp_connection: { organization_environment_uid: 'env-1' } }]);
+    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
+    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: 'hello back' }], isError: false });
+    return success(q.action, {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+  const answer = await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[0].name, tool_use_id: 'call-1', query: 'hi' });
+  assert.deepEqual(answer, { result: [{ type: 'text', text: 'hello back' }] });
+  const agents = await agentFixture(); await agents.startTalk();
+  const sent = await agents.emit('tool.call', { tool: agents.tool('send'), message: 'Hi', responseKind: 'message' });
+  assert.ok(Array.isArray(sent.result)); assert.equal(sent.result[0].type, 'text'); assert.match(sent.result[0].text, /Reply from Research assistant/); assert.match(sent.result[0].text, /"agentName":"Research assistant"/);
+});
