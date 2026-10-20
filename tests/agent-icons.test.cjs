@@ -51,8 +51,15 @@ test('a large static PNG, like a 512 px Command Center icon, is shrunk to fit in
   // Nearest-pixel scaling keeps pixel-art colours exact.
   assert.deepEqual([...decoded.pixels.subarray(0, 3)], [...pixels.subarray(0, 3)]);
   // A heavy static PNG that would fit is still shrunk; a small one is not.
-  const heavy = encodePng({ width: 256, height: 256, pixels: Buffer.from(pixels.subarray(0, 256 * 256 * 4)) });
-  assert.ok(heavy.length > 32768 && Buffer.from(heavy).toString('base64').length < 131072, 'fixture fits but is heavy');
+  // zlib output differs between Node versions: pick the first square whose PNG is over 32 KiB yet still fits the limit.
+  let heavy;
+  for (let side = 256; side >= 136 && !heavy; side -= 8) {
+    const crop = Buffer.alloc(side * side * 4);
+    for (let y = 0; y < side; y++) pixels.copy(crop, y * side * 4, y * 512 * 4, (y * 512 + side) * 4);
+    const candidate = encodePng({ width: side, height: side, pixels: crop });
+    if (candidate.length > 32768 && Buffer.from(candidate).toString('base64').length < 120000) heavy = candidate;
+  }
+  assert.ok(heavy, 'a heavy PNG that fits the limit exists');
   const shrunk = nativeAgentIcon(heavy, 'image/png', { rendering: 'color', imageRendering: 'pixelated' });
   assert.ok(decodePng(Buffer.from(/base64,([^"]+)"/.exec(shrunk.source)[1], 'base64')).width <= 128);
   // Small icons are embedded unchanged.
