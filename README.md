@@ -112,11 +112,11 @@ matches the MainSequence project exactly. The enabled plugin then adds every
 repository to the new session using local `/add-dir` commands, without a model turn.
 See [local project setup](docs/claude-desktop.md#mainsequence-projects).
 
-This version bundles devtools **0.2.8**. Before that package is published, install
-the prepared, integrity-checked archive with
-`node scripts/use-local-devtools.cjs /absolute/path/dev-mainsequence-devtools-0.2.8.tgz`
-using the already installed development dependencies, then run `npm run release:check`.
-The ZIP includes the complete runtime; end users need no sibling checkout.
+This version bundles devtools **0.2.8**, published to npm on 2026-10-20 from
+mainsequence-sdk/mainsequence-devtools#10 with provenance. `npm ci --ignore-scripts`
+installs it from the registry with the pinned integrity; `scripts/use-local-devtools.cjs`
+remains for testing an unpublished devtools archive. The ZIP includes the complete
+runtime; end users need no sibling checkout.
 
 ### 0.4.11 — pane redesign
 
