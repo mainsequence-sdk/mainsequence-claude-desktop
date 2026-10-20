@@ -1,4 +1,4 @@
-import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey } from './model.mjs';
+import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle } from './model.mjs';
 import { renderPane, renderRecovery } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
@@ -290,6 +290,13 @@ function actionsFor($, state) {
     connectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Connect MCP', detail: `Connect ${name} in ${environmentLabel(state)} and register its tools for Claude.`, callback: () => runDev($, state, 'mcp-add') }; update($); },
     disconnectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Disconnect MCP', detail: `Disconnect ${name} from ${environmentLabel(state)}. Its tools stop being available to Claude.`, callback: () => runDev($, state, 'mcp-remove') }; update($); },
     askAgent: (uid, message) => background(talkToAgent($, state, uid, false, message)),
+    allowAgentResend: uid => background((async () => {
+      const binding = Object.values(state.agentBindings).find(value => value.agent.uid === uid && current(state, value));
+      if (!binding || binding.busy || !binding.uncertain) return;
+      // The person reviewed the uncertain delivery; only they may clear the marker.
+      binding.uncertain = false; binding.status = binding.sessionUid ? 'selected' : binding.status; binding.error = '';
+      await saveBinding($, state, binding); refresh($);
+    })()),
     refreshEnvironments: () => background(loadEnvironments($, state)),
     refreshAgents: () => { state.agentIconTimes = {}; background(loadAgents($, state)); },
     nextAgents: () => background(loadAgents($, state, state.agentOffset + 25)),
@@ -392,7 +399,7 @@ async function boot($, state, e) {
   state.savedSettings = saved;
   state.environmentSelections = record(await $.store.get('mcp-environments'));
   for (const key of ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
-  await $.command.register({ name: 'ms', description: 'Open MainSequence or message the selected agent', argumentHint: '[message | agent <uid> <message>]', immediate: true });
+  await $.command.register({ name: 'ms', description: 'Open MainSequence or message an agent by handle', argumentHint: '[@agent <message> | agent <uid> <message>]', immediate: true });
   if (e.surface === 'desktop') {
     state.preferencesLoading = true;
     // Only a person opens the pane. Startup/reloads must not reopen a closed pane.
@@ -801,12 +808,14 @@ async function fillAgentDraft($, state, binding, ticket, preparation) {
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   const draft = await $.prompt.read();
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
-  // `/ms <message>` reaches the selected agent; `/ms agent|task <uid> <message>` stays explicit.
+  // The command names its target: `/ms @handle <message>`; `/ms agent|task <uid> <message>` stays explicit.
   const explicit = /^\/ms\s+(agent|task)\s+([-a-fA-F0-9]{36})(?:[ \t]|$)/.exec(draft.text);
-  const implicit = !explicit && /^\/ms(?:[ \t]|$)(?!(?:agent|task)\b)/.exec(draft.text);
-  if (draft.text.trimStart().startsWith('/') && !explicit && !implicit) { $.ui.toast('Your existing slash command was kept. Clear it before choosing an agent message.'); return; }
-  const message = typeof preparation?.message === 'string' ? preparation.message : explicit ? draft.text.slice(explicit[0].length) : implicit ? draft.text.slice(implicit[0].length) : draft.text;
-  const prefix = binding.agent.responseKinds.includes('message') ? '/ms ' : `/ms task ${binding.agent.uid} `;
+  const handled = !explicit && /^\/ms\s+(?:task\s+)?@[A-Za-z0-9._-]+(?:[ \t]|$)/.exec(draft.text);
+  const bare = !explicit && !handled && /^\/ms(?:[ \t]+|$)(?!(?:agent|task)\b|@)/.exec(draft.text);
+  const match = explicit || handled || bare;
+  if (draft.text.trimStart().startsWith('/') && !match) { $.ui.toast('Your existing slash command was kept. Clear it before choosing an agent message.'); return; }
+  const message = typeof preparation?.message === 'string' ? preparation.message : match ? draft.text.slice(match[0].length) : draft.text;
+  const prefix = `/ms ${binding.agent.responseKinds.includes('message') ? '' : 'task '}@${agentHandle(binding.agent.name)} `;
   const filled = await $.prompt.fill({ text: `${prefix}${message}`, mode: 'replace' });
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   if (!filled?.isFilled) { $.ui.toast('Claude Desktop could not fill its chat input. No message was sent.'); return; }
@@ -952,18 +961,21 @@ async function handleAgentTool($, state, e) {
 async function agentCommand($, state, e) {
   const args = String(e.args || '');
   if (!args.trim()) { await openPane($, state); return {}; }
-  const help = 'Choose Talk on an agent, then write your message after /ms. Use /ms agent <agent-uid> <message> or /ms task <agent-uid> <message> to address an agent explicitly.';
+  const prepared = Object.values(state.agentDrafts).filter(binding => current(state, binding));
+  const help = `Name the agent that receives the message: ${prepared.length ? prepared.map(binding => `/ms @${agentHandle(binding.agent.name)} <message>`).join(', ') : 'choose Talk on an agent first, then write after the /ms @agent prefix'}. Use /ms task @agent <message> for longer work, or /ms agent <agent-uid> <message> to address an agent by id.`;
   const explicit = /^(agent|task)\s+([a-fA-F0-9-]{36})(?:[ \t]|\n)([\s\S]*)$/.exec(args);
+  const handled = !explicit && /^(task\s+)?@([A-Za-z0-9._-]+)(?:[ \t]|\n)([\s\S]*)$/.exec(args);
   let binding, message, responseKind;
   if (explicit) {
     if (!uuid(explicit[2]) || !explicit[3].trim()) return { text: help };
     binding = state.agentDrafts[explicit[2]]; message = explicit[3]; responseKind = explicit[1] === 'task' ? 'task' : 'message';
-  } else if (/^\s*(agent|task)\b/.test(args)) return { text: help };
-  else {
-    binding = state.activeAgent;
-    if (!binding || state.agentDrafts[binding.agent.uid] !== binding) return { text: help };
-    message = args; responseKind = binding.agent.responseKinds.includes('message') ? 'message' : 'task';
-  }
+  } else if (handled) {
+    // A handle comes from the agent's name; two prepared agents with one name resolve to the selected one.
+    const matches = prepared.filter(candidate => agentHandle(candidate.agent.name) === handled[2].toLowerCase());
+    binding = matches.length === 1 ? matches[0] : matches.find(candidate => candidate === state.activeAgent);
+    if (!binding || !handled[3].trim()) return { text: help };
+    message = handled[3]; responseKind = handled[1] || !binding.agent.responseKinds.includes('message') ? 'task' : 'message';
+  } else return { text: help };
   const result = await runAgentOperation($, state, binding, 'send', { message, responseKind }, e.origin?.kind === 'composer');
   if (result.deny) return { text: result.deny };
   const answer = result.answer;

@@ -20,12 +20,15 @@ and example questions that fill Claude's input when pressed. “Up to date” me
 branch commit. It is not a connection health check.
 
 **Talk** creates or resumes an empty MainSequence agent conversation and waits for
-the agent to be ready, then fills Claude's existing input with `/ms ` (or
-`/ms task <agent-uid> ` for task-only agents). It does not send an introduction or
-start a model turn. Write your question after the prefix and submit it yourself. A
-bare `/ms <message>` goes to the agent most recently prepared by Talk, which the band
-above the composer names; `/ms agent <agent-uid> <message>` and
-`/ms task <agent-uid> <message>` address an agent explicitly. The plugin sends your
+the agent to be ready, then fills Claude's existing input with `/ms @<handle> ` (or
+`/ms task @<handle> ` for task-only agents), where the handle is the agent's name in
+lower case with dashes, such as `@back-office-helper`. The command therefore always
+shows who receives the message. It does not send an introduction or start a model
+turn. Write your question after the prefix and submit it yourself. A bare
+`/ms <message>` is refused with the handles of the agents prepared by Talk; when two
+prepared agents share a name, the handle resolves to the selected one.
+`/ms agent <agent-uid> <message>` and `/ms task <agent-uid> <message>` address an
+agent by id. The plugin sends your
 text directly to that agent and shows the reply with its agent/environment label in
 Claude's command transcript. **Switch agent** in the composer band reopens the pane
 on Agents.
@@ -87,8 +90,9 @@ names, so inactive tools return a clear refusal.
 The plugin store holds only handles, session/task IDs and uncertain-delivery markers,
 partitioned by conversation identity. It does not add a token or transcript store.
 A marker is persisted before sending. Ambiguous delivery, timeout or crash blocks
-automatic replay, including after reload. Review Activity and the known task before
-starting over. All replies retain the original agent/environment attribution.
+automatic replay, including after reload. Review Activity and the known task, then
+press **Allow sending again** on the agent's row to clear the marker yourself; nothing
+is resent by that press. All replies retain the original agent/environment attribution.
 
 ## Ownership and verification
 

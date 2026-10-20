@@ -272,11 +272,11 @@ test('Agents opens a bound session and fills the native draft without submitting
   expect(prompts).toHaveLength(0);
   preparationPending=false;releaseReadiness();await clock.settle();
   expect(prompts,JSON.stringify({requests,toasts,tools})).toHaveLength(0);
-  expect(draft,JSON.stringify({requests,toasts,tools})).toBe('/ms My question');
+  expect(draft,JSON.stringify({requests,toasts,tools})).toBe('/ms @research-assistant My question');
   expect(requests.filter(r=>r.action==='agent-session')).toHaveLength(1);
   expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(0);
   expect(tools.filter(t=>t.name.includes('introduce'))).toHaveLength(0);
-  const reply=await $.command.run({command:'ms',args:'Explain my portfolio risk'});
+  const reply=await $.command.run({command:'ms',args:'@research-assistant Explain my portfolio risk'});
   expect(JSON.stringify(reply)).toContain('I explain portfolio risk');
   expect(JSON.stringify(await $.command.run({command:'ms',args:`agent ${uid} Explain my portfolio risk`}))).toContain('I explain portfolio risk');
   const footer=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});

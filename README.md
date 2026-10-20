@@ -10,7 +10,7 @@ theme; it adds no strip above the prompt.
 [Version **0.4.11**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.11)
 is the [pane redesign](docs/ux-proposal.md): lists of rows instead of dropdowns, one
 primary action per view, status colours, disabled-with-reason controls, confirmations
-that keep the navigation visible, and `/ms <message>` for the selected agent.
+that keep the navigation visible, and `/ms @agent <message>` naming the receiving agent.
 
 The current local build adds [animated agent icons](docs/agent-icons.md) to the
 directory, details and conversation UI, using the platform’s existing icon assets.
@@ -128,8 +128,9 @@ MCPs first; Add MCP searches releases; the tool explorer sits under Advanced).
 Confirmations appear above the view instead of replacing it, unavailable actions are
 shown disabled with a reason, results and statuses use Claude's success, warning and
 error colours, and the running count also appears in Claude's status line. Talk fills
-Claude's input with `/ms ` so the message goes to the selected agent; the explicit
-`/ms agent <uid> <message>` and `/ms task <uid> <message>` forms still work, and
+Claude's input with `/ms @<agent-handle> ` so the command names the agent that receives
+the message; the explicit `/ms agent <uid> <message>` and `/ms task <uid> <message>`
+forms still work, a bare `/ms <message>` is refused with the prepared handles, and
 example questions in an agent's details fill the input when pressed. The composer band
 above the prompt gains **Switch agent**. No worker, backend, credential or
 configuration contract changes. See [the proposal](docs/ux-proposal.md) and its

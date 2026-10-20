@@ -394,6 +394,9 @@ caption says so.
   rule that the target is never Claude's working directory is unchanged.
 - **No hover styling or hotkeys** yet. Theme-key backgrounds under the pointer were not
   verified in the live app, and hotkeys would compete with the composer.
+- **The composer names the agent.** Talk prefills `/ms @<handle> ` rather than a bare
+  `/ms `, because a prefix without a target left the person unsure who would receive
+  the message; a bare `/ms <message>` is refused with the prepared handles.
 - **Environments are not loaded at startup.** The header offers "Choose environment"
   (and Home a next step) that loads them on request, so startup still spawns only the
   preference and session reads.

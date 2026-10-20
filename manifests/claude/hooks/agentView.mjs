@@ -36,7 +36,8 @@ export function renderAgents(ui, state, actions) {
     const binding = bindingFor(agent), preparing = state.agentPreparing[agent.uid];
     return [!preparing && binding?.error && caption(binding.error, { color: 'error' }),
       binding?.task && caption(`Task ${binding.task.status}${binding.task.cancellationRequested ? ' · cancellation requested' : ''}`),
-      binding?.uncertain && caption('The previous request may have reached the agent. Review Activity before sending again.')].filter(Boolean);
+      binding?.uncertain && !preparing && inline([caption('The previous request may have reached the agent. Review Activity before sending again.'),
+        !binding.busy && button(`agent-resend-${agent.uid}`, 'Allow sending again', () => actions.allowAgentResend(agent.uid), { plain: true })], { flexWrap: 'wrap' })].filter(Boolean);
   };
   const detail = state.agentDetail;
   if (detail) {

@@ -562,12 +562,12 @@ test('Talk resolves a session and prefills an editable draft with no auto-send o
  const f=await agentFixture({draft:'What is the exposure?'});
  assert.doesNotMatch(JSON.stringify(await f.pane()),/Explain portfolio risk/);
  await f.press(`agent-details-${agentUid}`);assert.match(JSON.stringify(await f.pane()),/Explain portfolio risk/);await f.press('agents-back');
- await f.startTalk();assert.equal(f.draft,'/ms What is the exposure?');
+ await f.startTalk();assert.equal(f.draft,'/ms @research-assistant What is the exposure?');
  assert.equal(f.calls.filter(c=>c.submitted||c.suggested).length,0);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
  const opened=f.calls.find(c=>c.request?.request.action==='agent-session').request.request;
  assert.match(opened.handleId,/^claude_[a-f0-9]+_.*_default$/);assert.equal(opened.expectedAccount,'agent-user@example.test');assert.equal(opened.parentSessionUid,undefined);
- await f.startTalk();assert.equal(f.draft,'/ms What is the exposure?');assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session').length,1);
+ await f.startTalk();assert.equal(f.draft,'/ms @research-assistant What is the exposure?');assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session').length,1);
  f.$.ui.ask=async()=>{throw new Error('Explicit user submission must not ask twice')};
  assert.match((await f.send('Only my message')).text,/Reply from Research/);
  const sent=f.calls.find(c=>c.request?.request.action==='agent-send').request.request;
@@ -576,7 +576,7 @@ test('Talk resolves a session and prefills an editable draft with no auto-send o
 });
 test('draft retargeting keeps its text; unrelated slash commands and refused filling are preserved',async()=>{
  const f=await agentFixture({twoAgents:true,draft:'Keep\nall my text'});await f.startTalk();await f.startTalk(secondUid);
- assert.equal(f.draft,'/ms Keep\nall my text');
+ assert.equal(f.draft,'/ms @crm-assistant Keep\nall my text');
  f.draft='/review something';await f.startTalk();assert.equal(f.draft,'/review something');
  const blocked=await agentFixture({refuseFill:true,draft:'Keep this'});await blocked.startTalk();assert.equal(blocked.draft,'Keep this');assert.match(blocked.calls.at(-1).toast,/could not fill/);
  assert.equal(blocked.calls.some(c=>c.submitted),false);
@@ -584,7 +584,7 @@ test('draft retargeting keeps its text; unrelated slash commands and refused fil
 test('preparation and waiting affect only the correct card; changing selection keeps the original request valid',async()=>{
  const f=await agentFixture({twoAgents:true});const finishOpen=delayRequest(f,'agent-session',agentUid);
  await f.startTalk();let tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-status-${agentUid}`)),/Opening session/);assert.equal(f.find(tree,`agent-status-${secondUid}`),undefined);assert.equal(f.find(tree,`agent-talk-${agentUid}`).props.label,'Talk');assert.equal(f.find(tree,`agent-talk-${secondUid}`).props.label,'Talk');
- await f.startTalk(secondUid);finishOpen();await flush();assert.equal(f.draft,'/ms ');
+ await f.startTalk(secondUid);finishOpen();await flush();assert.equal(f.draft,'/ms @crm-assistant ');
  await f.startTalk(agentUid);const finish=delayRequest(f,'agent-send',agentUid);const pending=f.send('Wait for this');await flush();
  await f.startTalk(secondUid);tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-${agentUid}`)),/Waiting for agent/);assert.doesNotMatch(JSON.stringify(f.find(tree,`agent-${secondUid}`)),/Waiting for agent/);
  assert.match((await f.send('Other agent',secondUid)).text,/CRM assistant/);finish();assert.match((await pending).text,/Research assistant/);
@@ -639,7 +639,7 @@ test('duplicate submissions to the same agent are refused while its request is p
 });
 test('failed resolution and tool registration can retry without any message or introduction',async()=>{
  const f=await agentFixture();const register=f.$.tool.register;f.$.tool.register=async()=>{throw new Error('host not ready')};await f.startTalk();assert.match(JSON.stringify(await f.pane()),/needs attention/);
- f.$.tool.register=register;await f.startTalk();assert.equal(f.draft,'/ms ');assert.equal(f.calls.filter(c=>c.submitted||c.request?.request.action==='agent-send').length,0);
+ f.$.tool.register=register;await f.startTalk();assert.equal(f.draft,'/ms @research-assistant ');assert.equal(f.calls.filter(c=>c.submitted||c.request?.request.action==='agent-send').length,0);
  const unavailable=await agentFixture({respond:r=>r.action==='agent-session'?{schemaVersion:1,action:r.action,status:'failure',summary:'Model configuration required'}:null});await unavailable.startTalk();
  assert.equal(unavailable.draft,'');assert.match(unavailable.calls.at(-1).toast,/Model configuration/);
 });
@@ -648,7 +648,7 @@ test('failed resolution and tool registration can retry without any message or i
 test('returning to an agent that is still opening makes it the final selection without duplicate allocation', async () => {
  const f=await agentFixture({twoAgents:true}); const finish=delayRequest(f,'agent-session',agentUid);
  await f.startTalk(); await f.startTalk(secondUid); await f.startTalk(agentUid); finish(); await flush();
- assert.equal(f.draft,'/ms ');
+ assert.equal(f.draft,'/ms @research-assistant ');
  assert.match(JSON.stringify(f.find(await f.pane(),`agent-status-${agentUid}`)),/Agent ready/);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session'&&c.request.request.agentUid===agentUid).length,1);
  const message='  Keep leading spaces\nand a second line  '; await f.send(message);
@@ -663,13 +663,13 @@ test('Talk preserves the current draft while readiness waits, then fills once wi
  assert.equal(f.calls.some(c=>c.filled||c.submitted||c.request?.request.action==='agent-send'),false);
  assert.match((await f.send()).text,/still being prepared|no longer active/);
  f.draft='Keep my edited question';finish();await flush();
- assert.equal(f.draft,'/ms Keep my edited question');
+ assert.equal(f.draft,'/ms @research-assistant Keep my edited question');
  assert.equal(f.calls.filter(c=>c.filled).length,1);assert.equal(f.calls.some(c=>c.submitted),false);
 });
 test('late ready cannot replace another selected agent; resumed Talk checks again',async()=>{
  const f=await agentFixture({twoAgents:true});const finish=delayRequest(f,'agent-readiness',agentUid);
  await f.startTalk();await f.startTalk(secondUid);finish();await flush();
- assert.equal(f.draft,'/ms ');
+ assert.equal(f.draft,'/ms @crm-assistant ');
  await f.startTalk(secondUid);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-readiness'&&c.request.request.agentUid===secondUid).length,2);
  await f.send('Only my text',secondUid);
@@ -809,19 +809,21 @@ test('Tools lists connections as rows, adds MCPs through search with confirmatio
   assert.match(JSON.stringify(await f.pane()), /No MCPs connected/);
 });
 
-test('/ms <message> reaches the selected agent, keywords stay explicit, and example questions prefill the draft', async () => {
-  const f = await agentFixture({ draft: 'Keep this' }); await f.startTalk(); assert.equal(f.draft, '/ms Keep this');
-  assert.match((await f.emit('command.run', { command: 'ms', args: 'What is my exposure?', origin: { kind: 'composer' } })).text, /Reply from Research/);
+test('/ms @handle <message> names the receiving agent, bare and keyword forms are refused, and example questions prefill the draft', async () => {
+  const f = await agentFixture({ draft: 'Keep this' }); await f.startTalk(); assert.equal(f.draft, '/ms @research-assistant Keep this');
+  assert.match((await f.emit('command.run', { command: 'ms', args: 'What is my exposure?', origin: { kind: 'composer' } })).text, /\/ms @research-assistant <message>/, 'a bare message names the prepared handles');
+  assert.match((await f.emit('command.run', { command: 'ms', args: '@research-assistant What is my exposure?', origin: { kind: 'composer' } })).text, /Reply from Research/);
   assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').at(-1).request.request.message, 'What is my exposure?');
-  assert.match((await f.emit('command.run', { command: 'ms', args: 'agent not-a-uid hello', origin: { kind: 'composer' } })).text, /Choose Talk/);
+  assert.match((await f.emit('command.run', { command: 'ms', args: 'agent not-a-uid hello', origin: { kind: 'composer' } })).text, /Name the agent/);
   assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').length, 1);
   await f.press(`agent-details-${agentUid}`); await f.press(`agent-example-${agentUid}-0`);
-  assert.equal(f.draft, '/ms Explain exposure'); assert.equal(f.calls.some(c => c.submitted), false);
+  assert.equal(f.draft, '/ms @research-assistant Explain exposure'); assert.equal(f.calls.some(c => c.submitted), false);
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
   assert.ok(f.find(band, 'agent-switch')); f.find(band, 'agent-switch').props.onPress(); await flush();
   assert.equal(f.calls.at(-1).pane.focus, true); assert.equal(f.find(await f.pane(), `agent-talk-${agentUid}`).props.variant, 'primary');
-  const taskOnly = await agentFixture({ agent: { responseKinds: ['task'] } }); await taskOnly.startTalk(); assert.equal(taskOnly.draft, `/ms task ${agentUid} `);
-  const fresh = await agentFixture(); assert.match((await fresh.emit('command.run', { command: 'ms', args: 'hello', origin: { kind: 'composer' } })).text, /Choose Talk/);
+  const taskOnly = await agentFixture({ agent: { responseKinds: ['task'] } }); await taskOnly.startTalk(); assert.equal(taskOnly.draft, '/ms task @research-assistant ');
+  assert.equal((await taskOnly.emit('command.run', { command: 'ms', args: 'task @research-assistant Analyze', origin: { kind: 'composer' } })).text.includes('Task'), true);
+  const fresh = await agentFixture(); assert.match((await fresh.emit('command.run', { command: 'ms', args: '@research-assistant hello', origin: { kind: 'composer' } })).text, /choose Talk/);
   assert.equal(fresh.calls.some(c => c.request?.request.action === 'agent-send'), false);
 });
 
@@ -1083,4 +1085,16 @@ test('registered tool results reach Claude as content blocks, forwarding the MCP
   const agents = await agentFixture(); await agents.startTalk();
   const sent = await agents.emit('tool.call', { tool: agents.tool('send'), message: 'Hi', responseKind: 'message' });
   assert.ok(Array.isArray(sent.result)); assert.equal(sent.result[0].type, 'text'); assert.match(sent.result[0].text, /Reply from Research assistant/); assert.match(sent.result[0].text, /"agentName":"Research assistant"/);
+});
+
+test('an uncertain delivery can be released by the person for the next send without replaying anything', async () => {
+  const f = await agentFixture({ respond: r => r.action === 'agent-send' ? { schemaVersion: 1, action: r.action, status: 'failure', summary: 'Timed out.', effects: { state: 'partial-or-uncertain', message: 'The message may have reached the agent.' } } : null });
+  await f.startTalk(); await f.send('@research-assistant First');
+  let tree = await f.pane(); assert.ok(f.find(tree, `agent-resend-${agentUid}`)); assert.match((await f.send('@research-assistant Again')).text, /uncertain/);
+  await f.press(`agent-resend-${agentUid}`);
+  tree = await f.pane(); assert.equal(f.find(tree, `agent-resend-${agentUid}`), undefined);
+  assert.equal(f.stores.get('agent-conversations-session-1')[Object.keys(f.stores.get('agent-conversations-session-1'))[0]].uncertain, false);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').length, 1, 'releasing sends nothing');
+  assert.doesNotMatch((await f.send('@research-assistant Third')).text, /uncertain/);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').length, 2);
 });

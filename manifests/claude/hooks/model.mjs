@@ -19,6 +19,8 @@ export function selectPage(options, value, requestedPage = 0) {
   const selected = entries.find(option => option.value === value);
   return { entries: visible, selected, page, count, total: entries.length, start: page * size + 1, end: page * size + visible.length };
 }
+/** The composer handle for an agent: `/ms @back-office-helper …` names its target. */
+export const agentHandle = name => clean(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'agent';
 export function mcpDisplayName(value) {
   const name = [value?.display_name, value?.name].find(name => typeof name === 'string' && clean(name).trim());
   return name ? clean(name).trim() : 'Unnamed MCP';
