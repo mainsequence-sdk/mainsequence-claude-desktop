@@ -58,10 +58,18 @@ reduced-motion preference kept all six samples on frame zero. Page-only motion
 emulation did not propagate into nested SVG images; live operating-system motion
 and manually overridden theme preferences have not been independently verified.
 
-The platform permits icons up to 512 KiB; Claude’s Svg markup limit is 128 KiB.
-The adapter first tries the animated widget, then its frame-zero still, then no image
-if neither representation fits. It never truncates SVG markup or asks the
-backend to change the asset. An SVG asset is nested as an image, rather than
+The platform permits icons up to 512 KiB and 512 px; Claude’s Svg markup limit is 128 KiB,
+and Claude draws icons at 20–32 px. A static PNG that would not fit, or that is heavier than
+32 KiB, is decoded and shrunk in the worker to at most 128 px (nearest pixel for
+`pixelated` icons, an alpha-weighted average otherwise) and re-encoded, so a 512 px
+Command Center icon of about 105 KB is embedded as roughly 12 KB. Animated icons keep
+their frames while they fit; when they do not, their frame-zero still is used and shrunk
+the same way. The backend limit is tracked in
+[tdag-django#1136](https://github.com/Main-Sequence-Server-Side/tdag-django/issues/1136).
+The adapter first tries the animated widget, then its frame-zero still, then a shrunk
+PNG still, and draws no image only when none of these fits (for example an oversized
+SVG, which is never rasterized). It never truncates SVG markup or changes the stored
+asset. An SVG asset is nested as an image, rather than
 inserted as executable frame markup.
 
 ## Authentication, caching and lifecycle

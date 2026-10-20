@@ -151,3 +151,8 @@ registration instead of being refused. See the [release notes](docs/releases/0.4
 
 MCP images and other non-text blocks are converted to the content blocks Claude
 accepts. See the [release notes](docs/releases/0.4.14.md).
+
+### 0.4.15 — large agent icons
+
+Icons larger than Claude can embed, such as Back Office Helper's 512 px PNG, are shrunk to
+at most 128 px instead of being dropped. See the [release notes](docs/releases/0.4.15.md).
