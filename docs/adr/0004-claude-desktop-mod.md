@@ -96,3 +96,19 @@ widgets draw isolated, non-executable image content. The native AbovePrompt,
 CommandOutput and ToolUse/ToolResult render sites carry the icons while preserving
 the engine’s content. No backend route, worker protocol version, stored settings
 or conversation-binding format changes. See [agent icon behavior and limits](../agent-icons.md).
+
+## MCP name presentation (2026-10-20)
+
+MCP selectors show only the repository name, matching the compact Agents labels.
+The environment remains in its existing selector. Release names such as `app` and
+environment suffixes are not appended to repository names.
+
+The pinned devtools 0.2.7 projection omits repository identity. A Claude
+presentation adapter reads the existing resource-release collection and resolves
+the exact branch with the public RepositoryClient, using the public session
+service for authentication. It attaches transient `display_name` metadata after
+successful discovery/list results. It does not change discovery membership,
+connection storage, endpoint verification or tool routing. Name lookup is optional:
+unavailable repository metadata retains the original name, or `Unnamed MCP` when
+no name exists. Paginated collection reads and exact release/environment matching
+prevent a similarly named or foreign-environment MCP from supplying the label.

@@ -13,6 +13,10 @@ through the pinned devtools package's public API.
   icon responses to JSON inside the public session service, preserving that
   service's credential and renewal policy. It limits bytes, validates exact
   environment membership and delivery paths, and derives APNG frame-zero stills.
+- `claudeMcpNames.ts` adds repository names to MCP presentation results using
+  existing release metadata and the public RepositoryClient. Labels contain just
+  the name. Exact release/environment matching preserves routing; optional name
+  lookup failures preserve the original result and never rewrite saved connections.
 
 Hook-side rendering and transient caching live in `manifests/claude/hooks/`.
 See [agent icon behavior and current transport limits](../../docs/agent-icons.md).

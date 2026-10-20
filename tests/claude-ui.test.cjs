@@ -275,7 +275,7 @@ test('MCP tools refresh from exact releases, use flattened hook arguments, and c
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__missing' })).deny, /no longer connected/);
 });
 
-test('MCP labels and tool descriptions use the release UID when display names are missing', async () => {
+test('MCP selectors show only names and retain exact release routing when names are missing', async () => {
   const { register } = await load();
   for (const name of [undefined, '', '   ', null, 17, 'Named project']) {
     const connection = { resource_release_uid: 'release-1', name, backend: 'https://backend.example',
@@ -290,10 +290,10 @@ test('MCP labels and tool descriptions use the release UID when display names ar
     } });
     register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
     f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
-    const display = name === 'Named project' ? name : 'release-1';
+    const display = name === 'Named project' ? name : 'Unnamed MCP';
     const tree = await f.pane();
-    assert.equal(f.find(tree, 'mcp-connected').props.options.find(option => option.value === 'release-1').label, `${display} · Research`);
-    assert.equal(f.find(tree, 'mcp-discovered').props.options.find(option => option.value === 'release-1').label, 'Discovered project · Research');
+    assert.equal(f.find(tree, 'mcp-connected').props.options.find(option => option.value === 'release-1').label, display);
+    assert.equal(f.find(tree, 'mcp-discovered').props.options.find(option => option.value === 'release-1').label, 'Discovered project');
     assert.equal(f.tools.length, 1);
     assert.equal(f.tools[0].description, `MainSequence ${display} [Research]: lookup`);
     const tool = 'mcp__mainsequence__' + f.tools[0].name;
@@ -301,6 +301,29 @@ test('MCP labels and tool descriptions use the release UID when display names ar
     const request = f.calls.filter(call => call.request?.request.action === 'mcp-call').at(-1).request.request;
     assert.equal(request.releaseUid, 'release-1'); assert.deepEqual(request.arguments, { query: 'value' });
   }
+});
+
+test('MCP repository names distinguish generic app releases without environment suffixes', async () => {
+  const { register } = await load();
+  const connections = ['BackofficeBackend', 'alpaca-connectors'].map((name, i) => ({
+    resource_release_uid: `release-${i}`, name: 'app', display_name: name,
+    backend: 'https://backend.example', mcp_connection: { organization_environment_uid: 'env', organization_environment_name: 'Production' },
+  }));
+  const f = fixture({ respond: domain => {
+    const q = domain.request;
+    return success(q.action, q.action === 'mcp-environments' ? [{ uid: 'env', name: 'Production' }]
+      : ['mcp-discover', 'mcp-list'].includes(q.action) ? connections
+      : q.action === 'mcp-tools' ? { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] } : {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  for (const key of ['mcp-discovered', 'mcp-connected']) {
+    const select = f.find(await f.pane(), key);
+    assert.deepEqual(select.props.options.filter(option => option.value).map(option => option.label), ['BackofficeBackend', 'alpaca-connectors']);
+  }
+  f.find(await f.pane(), 'mcp-connected').props.onSelect('release-0'); await flush();
+  await f.press('mcp-tools'); await flush();
+  assert.equal(f.calls.filter(call => call.request?.request.action === 'mcp-tools').at(-1).request.request.releaseUid, 'release-0');
 });
 
 test('worker protocol rejects malformed result and cancellation closes the real stream', async () => {

@@ -18,8 +18,8 @@ export function selectPage(options, value, requestedPage = 0) {
   return { entries: visible, selected, page, count, total: entries.length, start: page * size + 1, end: page * size + visible.length };
 }
 export function mcpDisplayName(value) {
-  const name = typeof value?.name === 'string' ? clean(value.name).trim() : '';
-  return name || clean(value?.resource_release_uid || value?.uid || 'Project MCP');
+  const name = [value?.display_name, value?.name].find(name => typeof name === 'string' && clean(name).trim());
+  return name ? clean(name).trim() : 'Unnamed MCP';
 }
 export function initialState(options = {}) {
   return { tab: 'General', expanded: {}, contextRevision: 0, initializing: false, booting: null, booted: false, paneFault: null, projectsLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
