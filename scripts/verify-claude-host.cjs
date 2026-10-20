@@ -12,7 +12,7 @@ const dependency = JSON.parse(fs.readFileSync(path.join(artifact, 'dist/vendor/d
 assert.equal(dependency.name, '@dev-mainsequence/devtools');
 assert.equal(dependency.version, info.devtools.version);
 
-for (const file of ['hooks/hooks.json', 'hooks/register.mjs', 'hooks/view.mjs', 'hooks/agentView.mjs', 'hooks/agentIcon.mjs', 'docs/agent-icons.md', 'docs/agents.md', 'dist/claudeRunner.js',
+for (const file of ['hooks/hooks.json', 'hooks/register.mjs', 'hooks/view.mjs', 'hooks/agentView.mjs', 'hooks/agentIcon.mjs', 'hooks/projectView.mjs', 'hooks/primitives.mjs', 'docs/agent-icons.md', 'docs/agents.md', 'dist/claudeRunner.js',
   'docs/claude-desktop.md', 'docs/claude-desktop-verification.md', 'third_party/claude-account-rotator/LICENSE']) {
   assert.ok(fs.statSync(path.join(artifact, file)).isFile(), `Missing packaged file: ${file}`);
 }

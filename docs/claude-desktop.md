@@ -1,9 +1,13 @@
 # MainSequence for Claude Desktop Code
 
-MainSequence provides a native pane in local Claude Desktop Code sessions. The
-approved layout has six visible sections with one active selection: **General,
-Projects, Current Project, MCP, Agents, Activity**. There is no Tools picker, Accounts page,
-rotation configuration or launcher strip above the chat. The MainSequence emblem
+MainSequence provides a native pane in local Claude Desktop Code sessions. Since
+0.4.11 the layout is a status header plus five sections with one active selection:
+**Home, Code, Projects, Agents, Tools**. The header shows the account, the organization
+environment, a running-operations counter that opens **Activity**, and **Settings**.
+There is no Accounts page, rotation configuration or launcher strip above the chat.
+Earlier releases used seven peer sections (General, Repositories, Current Repository,
+Projects, MCP, Agents, Activity); the [redesign proposal](ux-proposal.md) records why
+they were merged. The MainSequence emblem
 comes from MainSequencePublic.
 
 ## Installation and opening
@@ -35,16 +39,27 @@ does not patch the Desktop application or register an unsupported toolbar button
 The approved browser preview defines grouping, navigation and content, not custom
 CSS injected into the Desktop application.
 
-Git/SSH, uv for Python, npm for frontend projects and Docker/buildx for builds are
+The local candidate also shows [platform agent icons](agent-icons.md) in the agent
+directory, details, composer activity band and attributed command/tool rows. Existing native
+transcript content and footer controls remain visible.
+
+Git/SSH, uv for Python, npm for frontend repositories and Docker/buildx for builds are
 required only for the corresponding operations. They are not installed silently.
 If Desktop cannot locate Node, configure its absolute path through the plugin's
-Node executable setting or **General → Advanced → Runtime & diagnostics →
+Node executable setting or **Settings → Advanced → Runtime & diagnostics →
 Executable overrides**.
 
-Agent icons now appear in the directory, details, composer activity band and
-attributed command/tool rows. See [animation behavior and limits](agent-icons.md).
+## Home
 
-## General: MainSequence login and settings
+Home is the landing view. A **Next steps** card lists what is still missing (sign in,
+choose an environment, choose a repositories folder) with one button per step and
+disappears once everything is set. **This session** shows the Code session's folder;
+**Check status** reads its branch and SDK state through the existing `status` and
+`sdk-status` actions and offers **Update SDK** when one is supported. **Recent** shows
+the last three operations. Nothing is spawned on startup beyond the existing
+preference and session reads.
+
+## Settings: MainSequence login and workspace
 
 The pane reads the existing MainSequence session on startup without initiating a
 new sign-in. It reads the existing local repositories preference when available;
@@ -68,17 +83,27 @@ fields remain intact. Startup never writes the shared configuration.
 Runtime diagnostics and the Node executable override are collapsed under Advanced.
 Technical JSON is hidden until requested.
 
-## Projects and Current Project
+## Code
 
-Opening Projects loads the existing repository list through shared devtools APIs.
-Choose a repository and branch, then **Set up locally** or **Set up & install**.
-A single available branch is selected automatically. Setup uses the canonical
-`<base>/<organization>/projects/<name>-<uid>` layout and repository SSH identity.
-Existing local copies lead to **Manage project** instead of another clone.
+Code lists the session folder first, then every repository available to the account
+through shared devtools APIs, each marked **Local** when a canonical checkout exists,
+and any other local copies found under the repositories folder. A search field and an
+All / Local filter narrow the list. A remote-only row offers **Set up**: its detail
+shows the branch (a single available branch is selected automatically), the
+destination and an optional **Install dependencies after setup** toggle. Setup uses the
+canonical `<base>/<organization>/projects/<name>-<uid>` layout and repository SSH
+identity. Setup shows its streamed progress beside the disabled Set up button
+immediately after confirmation, can be cancelled there, stays visible in the header
+while you work elsewhere, and reports completion or failure; a successful setup
+reopens the same repository as a local detail. Retry is explicit and never replays
+automatically.
 
-Current Project contains project status, dependency/SDK operations, instructions,
-skills and workspace tools. Selecting a folder changes the operation target, not
-Claude's session working directory. Mutations have explicit confirmations; supported
+Opening a local row makes that folder the operation target and shows its detail:
+status (branch, commit, type, SDK), **Dependencies**, **Instructions and skills** and
+**More** (folder, terminal, containers, delete). Selecting a folder changes the
+operation target, not Claude's session working directory. Unavailable actions stay
+visible, disabled, with the capability's reason beneath them. Mutations have explicit
+confirmations drawn above the view, so the header and navigation remain; supported
 previews remain separate. Stale results are discarded after context changes.
 
 MainSequence supports the existing one-saved-identity-per-backend credential model.
@@ -86,21 +111,62 @@ Setup writes the endpoint without copying access tokens into the project. **Clea
 legacy environment credentials** is an explicit project action; signing in does
 not silently migrate other projects or rewrite their provider settings.
 
-## MCP and Activity
+## MainSequence Projects
 
-Choose an **Organization environment** in MCP or Agents. The choices come from the existing
+Projects lists `OrganizationProject` records within the selected environment.
+Search and pagination use the backend. Select a project to load its visible member
+branches, grouped by repository. Repository and branch buttons open their exact
+Command Center detail when Settings has a Command Center URL; otherwise they open
+the authorized GitHub repository/branch. A project link requires that platform URL.
+An inaccessible parent repository does not hide an otherwise visible project branch.
+
+**Set up project locally** reviews the selected project, then:
+
+1. Prepares any missing ordinary repositories using existing setup and deploy keys.
+2. Creates or reuses a UID-scoped container under
+   `<base>/<organization>/organization-projects/<backend-hash>/`, with a workspace
+   child named exactly after the project: **Ontology**, including its case, with no UID suffix.
+3. Creates independent repository branch checkouts alongside that workspace or switches
+   existing clean checkouts to their assigned branches, then opens the workspace in Claude.
+4. On startup in that folder, the enabled MainSequence plugin explicitly adds every
+   member checkout using Claude's native `/add-dir` command. It confirms attachment
+   separately from Git preparation and shows a retry control if any attachment fails.
+
+The workspace manifest records all repository paths and branch UIDs. Multiple
+branches of one repository get separate checkouts. Source repositories keep their
+existing branches; running setup again reuses the same workspace. Git objects can
+be copied from local repositories, but the checkouts remain independent. A dirty
+checkout on the correct branch is retained; switching a dirty checkout is refused.
+No reset, stash, automatic pull or dependency installation occurs. Removed project
+memberships leave old folders intact, and an existing `CLAUDE.md` is preserved.
+Failures/cancellation retain completed checkouts and report partial effects; retry
+continues after the underlying problem is resolved.
+
+After all branches are ready, the plugin opens the documented
+[Claude Code folder link](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link).
+Claude requires its own folder confirmation. The existing Code session remains
+unchanged. The new session runs local `/add-dir` commands without a model turn.
+Only the exact membership saved by the user's setup is attached; changing it requires
+running setup again. **Open in Claude** reopens the prepared folder;
+it does not create another checkout or edit Claude's private project/chat records.
+The folder is reused, while Claude controls whether a new conversation is started.
+Older UID-suffixed folders become storage containers. Setup reuses both existing
+repository paths and copies the old `CLAUDE.md` into the correctly named child.
+
+Environment, backend and project changes discard stale project responses and pending
+setup confirmations. Authentication stays in Settings and uses the existing human
+MainSequence session. Project creation, deletion and membership editing stay in
+Command Center.
+
+## Tools (MCP) and Activity
+
+Choose an **Organization environment** in the header. The choices come from the existing
 MainSequence organization-environments endpoint. No environment is selected
 implicitly, including Production. The choice is remembered per backend in the
-plugin store, independently of General's Save button, and is validated when a new
+plugin store, independently of Settings' Save button, and is validated when a new
 session restores it. Changing it scopes discovery, connected MCPs, tool inspection,
 and Claude tool calls to that environment. Labels and tool confirmations show the
 environment name. Other environments' connections stay saved.
-
-MCP discovery runs alongside connected-tool registration. Select a connected MCP
-and choose **View tools** to browse its catalog. Large selectors have Previous/Next
-controls, keeping all entries accessible within Claude's 64-option native limit.
-Selecting a tool displays its description. Late results from another MCP cannot
-replace the selected catalog.
 
 The shared devtools API validates the current release environment before exchanging
 credentials or calling an MCP. Switching environments clears pending confirmations,
@@ -117,13 +183,16 @@ are available from the next prompt. Exact release identities remain pinned.
 Activity shows actual operations from the session, their running/completed/failed/
 cancelled status, progress text, outcome and partial-effect warnings. Result details
 are collapsed. Cancellation stops the worker stream; it does not promise rollback.
-When there are no operations, the empty state links to Projects and MCP.
-
-Local setup shows its current progress beside the repository controls immediately
-after confirmation. Setup buttons stay disabled for that destination while work
-runs. You can cancel there, follow progress from another section, and open or manage
-the resulting folder on completion. Failure and cancellation release the controls;
-retry is explicit and never replays automatically.
+MCP discovery runs alongside connected-tool registration. Tools lists the connected
+MCPs of the selected environment as rows with their registered tool count; **Add MCP** opens a search over the environment's releases
+with a **Connect** button per result, and a connected MCP's detail lists its tools.
+Calling a tool directly and re-registering tools sit under **Advanced** in that
+detail; its tool selector pages at 63 entries, keeping every tool reachable within
+Claude's 64-option native limit, and late results from another MCP cannot replace
+the selected catalog. Rendering or startup failures show a **Retry display** screen
+without replaying operations. The running-operations counter in the header opens Activity and is mirrored
+in Claude's status line. When there are no operations, the empty state links to Code
+and Tools.
 
 The browser preview used illustrative operations and setup steps. Production uses
 real worker progress messages: no fabricated percentages, step counts or sample
@@ -147,6 +216,7 @@ conversation through Claude, task polling, local continuity and uncertain reques
 | Dependency install and sync | Python installation uses `uv sync`; frontend installation uses `npm ci`. Dependency-only synchronization uses the project-local SDK. Mutating operations use repository locks and cancellation. |
 | SDK status and supported updates | Existing SDK contracts; no invented Python update support. |
 | SDK skills and instructions | Python instruction updates, frontend skill installation with a preview, and shared skills synchronization with MCP skills enabled for this host. User instructions remain governed by the SDK's merge behavior. |
+| MainSequence Projects | Environment-scoped project search, pagination and member branches; exact repository/branch links; repeatable local project setup and native Claude folder link. |
 | Open folder | Reveals the selected directory in the OS folder viewer. Selecting an action target does not silently change the Code session's working directory. |
 | Signed terminal | Represented in the UI and capability model. The current adapter has no supported native terminal-opening callback; it reports unavailable. |
 | Docker build | Reviews image/platform/arguments, requires the repository-root Dockerfile, then runs a local buildx build with image loading, a shared repository lock, progress and cancellation; waits for completion. |
@@ -173,7 +243,7 @@ credential files, saved profiles, provider configuration or OAuth environment
 variables. Earlier MainSequence account metadata under
 `~/.config/mainsequence/claude-accounts/` is left intact and unused. The obsolete
 Claude executable setting is ignored; unrelated existing settings are retained.
-No backend endpoints, schema or configuration are changed by this release.
+This feature consumes existing human Project APIs; no backend endpoints or schemas change.
 
 ## Upgrade, removal and troubleshooting
 
@@ -185,7 +255,7 @@ Disabling/uninstalling the plugin does not revoke MainSequence credentials or
 remove projects. Use MainSequence's confirmed Sign out action only when desired.
 
 If the pane is missing, verify a local Code session with the plugin enabled, then
-use `/ms`. For worker failures, open **General → Advanced → Runtime & diagnostics**.
+use `/ms`. For worker failures, open **Settings → Advanced → Runtime & diagnostics**.
 For operation failures, inspect Activity before retrying; cancellation can leave
 partial filesystem effects. Backend changes clear stale connection/repository
 results so another backend's state is not displayed as current.

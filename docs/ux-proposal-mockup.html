@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MainSequence pane mockup</title>
+<style>
+  :root {
+    --bg: #f7f6f3; --pane: #ffffff; --text: #1f1e1c; --muted: #7a7670; --line: #e4e1db;
+    --accent: #c96442; --accent-text: #ffffff; --success: #2e7d4f; --warning: #b26a00; --error: #c0392b;
+    --subtle: #f1efea; --badge: #ebe8e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1c1b19; --pane: #262523; --text: #ecebe8; --muted: #9b978f; --line: #3a3835;
+      --accent: #d97757; --subtle: #2f2d2a; --badge: #35332f; --success: #62c48a; --warning: #e0a53a; --error: #e8705f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1c1b19; --pane: #262523; --text: #ecebe8; --muted: #9b978f; --line: #3a3835;
+    --accent: #d97757; --subtle: #2f2d2a; --badge: #35332f; --success: #62c48a; --warning: #e0a53a; --error: #e8705f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 24px; max-width: 760px; }
+  h2 { font-size: 15px; margin: 32px 0 10px; }
+  .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px; }
+  .pane { background: var(--pane); border: 1px solid var(--line); border-radius: 10px; padding: 14px; max-width: 420px; }
+  .pane.before { opacity: .92; }
+  .hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .emblem { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  .title { font-weight: 600; }
+  .spacer { flex: 1; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--badge); color: var(--text); white-space: nowrap; }
+  .chip.ok { color: var(--success); }
+  .chip.warn { color: var(--warning); }
+  .chip.err { color: var(--error); }
+  .btn { display: inline-block; font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--pane); color: var(--text); margin: 2px 4px 2px 0; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .btn.plain { border-color: transparent; background: transparent; }
+  .btn.dim { color: var(--muted); }
+  .btn.disabled { opacity: .45; }
+  .nav { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 10px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+  .card.flat { border: none; padding: 6px 0; }
+  .h { font-weight: 600; margin: 0 0 6px; }
+  .h.big { font-size: 15px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-radius: 6px; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row:hover { background: var(--subtle); }
+  .row .name { font-weight: 500; }
+  .row .meta { color: var(--muted); font-size: 12px; }
+  .row .grow { flex: 1; min-width: 0; }
+  .ok { color: var(--success); } .warn { color: var(--warning); } .err { color: var(--error); }
+  .field { margin: 6px 0; }
+  .field .muted { display: block; margin-bottom: 2px; }
+  .input, .select { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--pane); color: var(--text); font-size: 13px; }
+  .select::after { content: " ▾"; color: var(--muted); }
+  .code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: var(--subtle); padding: 4px 6px; border-radius: 4px; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .blocker { border-left: 3px solid var(--warning); padding: 6px 10px; background: var(--subtle); border-radius: 4px; margin: 8px 0; display: flex; align-items: center; gap: 8px; }
+  .composer { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 8px; background: var(--subtle); }
+  .band { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 6px; }
+  .band .icon { width: 18px; height: 18px; border-radius: 4px; background: var(--accent); display: inline-block; }
+</style>
+</head>
+<body>
+<h1>MainSequence pane: before and after</h1>
+<p class="lede">Sketches of the proposal in <code>docs/ux-proposal.md</code>. Both columns use only what the host primitives can draw: boxes, text with size and theme color, primary and secondary buttons, selects, inputs, links. Left is the current pane as rendered by <code>view.mjs</code>; right is the proposed layout.</p>
+
+<h2>1. Shell and landing view</h2>
+<div class="pair">
+  <div>
+    <p class="label">Today: General</p>
+    <div class="pane before">
+      <div class="hdr"><span class="emblem"></span><span class="title">MainSequence</span></div>
+      <div class="nav">
+        <span class="btn">✓ General</span><span class="btn dim">Repositories</span><span class="btn dim">Current repository</span>
+      </div>
+      <div class="nav">
+        <span class="btn dim">Projects</span><span class="btn dim">MCP</span><span class="btn dim">Agents</span><span class="btn dim">Activity</span>
+      </div>
+      <div class="card flat">
+        <p class="h">MainSequence account</p>
+        <p class="h" style="font-weight:600">Signed in</p>
+        <div>jose</div>
+        <div class="muted">Using your saved MainSequence session</div>
+        <div><span class="btn">Check connection</span><span class="btn">▸ Manage account</span></div>
+      </div>
+      <div class="card flat">
+        <p class="h">Workspace settings</p>
+        <div class="field"><span class="muted">Backend URL</span><div class="input">https://api.main-sequence.app</div></div>
+        <div class="field"><span class="muted">Command Center URL (optional)</span><div class="input">&nbsp;</div></div>
+        <div class="field"><span class="muted">Code repositories folder</span><div class="input">~/mainsequence</div></div>
+        <div class="muted">These values are used now. Save settings keeps your edits for future sessions.</div>
+        <div><span class="btn">Choose folder</span><span class="btn">Save settings</span></div>
+      </div>
+      <div class="card flat">
+        <p class="h">Advanced</p>
+        <div class="muted">Runtime troubleshooting and optional overrides.</div>
+        <span class="btn">▸ Runtime &amp; diagnostics</span>
+      </div>
+    </div>
+  </div>
+  <div>
+    <p class="label">Proposed: Home</p>
+    <div class="pane">
+      <div class="hdr">
+        <span class="emblem"></span><span class="title">MainSequence</span><span class="spacer"></span>
+        <span class="chip ok">● jose</span>
+        <span class="chip">Staging ▾</span>
+        <span class="chip warn">1 running</span>
+        <span class="btn plain dim" title="Settings">⚙</span>
+      </div>
+      <div class="nav">
+        <span class="btn primary">Home</span><span class="btn plain">Code</span><span class="btn plain">Projects</span><span class="btn plain">Agents</span><span class="btn plain">Tools</span>
+      </div>
+      <div class="card">
+        <p class="h">This session</p>
+        <div class="row"><div class="grow"><div class="name">mainsequence-claude-desktop</div><div class="meta">codex/claude-mcp-027 · 19 changed files</div></div><span class="chip ok">SDK up to date</span></div>
+        <div class="row"><div class="grow"><div class="meta">Dependencies synced 2 h ago</div></div><span class="btn">Sync</span><span class="btn plain dim">Open folder</span></div>
+      </div>
+      <div class="card">
+        <p class="h">Recent</p>
+        <div class="row"><span class="warn">◌</span><div class="grow"><div class="name">Set up project locally</div><div class="meta">Ontology · Cloning ontology-api…</div></div><span class="btn plain dim">Cancel</span></div>
+        <div class="row"><span class="ok">●</span><div class="grow"><div class="name">Connect MCP</div><div class="meta">crm-release · Staging · 2 min ago</div></div></div>
+        <div class="row"><span class="err">!</span><div class="grow"><div class="name">Sync dependencies</div><div class="meta err">uv sync failed: lockfile out of date</div></div><span class="btn plain dim">Details</span></div>
+        <div class="note">See all activity</div>
+      </div>
+    </div>
+    <p class="note">Settings (backend URL, folders, Command Center URL, diagnostics) move behind the gear. The header answers the four questions the user has on every view.</p>
+  </div>
+</div>
+
+<h2>2. First run: blocker line instead of per-tab gate screens</h2>
+<div class="pair">
+  <div>
+    <p class="label">Today: Agents before choosing an environment</p>
+    <div class="pane before">
+      <div class="nav"><span class="btn dim">General</span><span class="btn dim">Repositories</span><span class="btn dim">Current repository</span></div>
+      <div class="nav"><span class="btn dim">Projects</span><span class="btn dim">MCP</span><span class="btn">✓ Agents</span><span class="btn dim">Activity</span></div>
+      <div class="card flat">
+        <div class="row" style="padding:0"><span class="grow">Organization environment</span><span class="btn">Refresh</span></div>
+        <div class="select" style="margin:6px 0">Choose environment</div>
+        <div class="muted">Used by projects, MCP tools and agents.</div>
+      </div>
+      <div class="card flat"><p class="h">Choose an environment</p><div class="muted">The environment above controls both agents and MCP tools.</div></div>
+    </div>
+  </div>
+  <div>
+    <p class="label">Proposed: same state</p>
+    <div class="pane">
+      <div class="hdr"><span class="emblem"></span><span class="title">MainSequence</span><span class="spacer"></span><span class="chip ok">● jose</span><span class="chip dim" style="color:var(--muted)">No environment ▾</span><span class="btn plain dim">⚙</span></div>
+      <div class="nav"><span class="btn plain">Home</span><span class="btn plain">Code</span><span class="btn plain">Projects</span><span class="btn primary">Agents</span><span class="btn plain">Tools</span></div>
+      <div class="blocker"><span class="warn">!</span><span class="grow">Choose an organization environment to see its agents.</span><span class="select">Choose…</span></div>
+      <div class="row" style="opacity:.5"><div class="grow"><div class="name">Tutorial</div><div class="meta">Agents appear here once an environment is selected.</div></div></div>
+    </div>
+  </div>
+</div>
+
+<h2>3. Repositories: dropdowns become a list</h2>
+<div class="pair">
+  <div>
+    <p class="label">Today: Repositories</p>
+    <div class="pane before">
+      <div class="card flat">
+        <div class="row" style="padding:0"><span class="h grow" style="margin:0">Repositories</span><span class="btn">Refresh</span></div>
+        <div class="field"><span class="muted">Repository</span><div class="select">ontology-api</div></div>
+        <div class="row" style="padding:2px 0"><span class="muted grow">Type</span><span>Python</span></div>
+        <div class="field"><span class="muted">Branch</span><div class="select">main</div></div>
+        <div class="row" style="padding:2px 0"><span class="muted grow">Destination</span><span>~/mainsequence</span></div>
+        <div><span class="btn">Set up locally</span><span class="btn">Set up &amp; install</span></div>
+      </div>
+      <div class="card flat">
+        <p class="h">On this computer</p>
+        <div class="field"><span class="muted">Local repository</span><div class="select">Choose local repository</div></div>
+        <span class="btn">▸ Local discovery settings</span>
+      </div>
+    </div>
+  </div>
+  <div>
+    <p class="label">Proposed: Code</p>
+    <div class="pane">
+      <div class="row" style="padding:0 0 8px"><div class="input grow">Search repositories</div><span class="btn plain">All</span><span class="btn plain dim">Local</span></div>
+      <div class="row"><div class="grow"><div class="name">mainsequence-claude-desktop <span class="chip">This session</span></div><div class="meta">React · codex/claude-mcp-027</div></div><span class="btn plain dim">Open</span></div>
+      <div class="row"><div class="grow"><div class="name">ontology-api <span class="chip ok">Local</span></div><div class="meta">Python · main</div></div><span class="btn plain dim">Open</span></div>
+      <div class="row"><div class="grow"><div class="name">crm-frontend</div><div class="meta">React · 3 branches</div></div><span class="btn primary">Set up</span></div>
+      <div class="row"><div class="grow"><div class="name">pricing-models</div><div class="meta">Python · 1 branch</div></div><span class="btn primary">Set up</span></div>
+      <div class="note">Pressing a row opens its detail: status lines, Dependencies, Instructions and skills, and More (terminal, Docker, delete). Container inputs appear only inside the Docker action.</div>
+    </div>
+  </div>
+</div>
+
+<h2>4. Current repository: button wall becomes status plus grouped actions</h2>
+<div class="pair">
+  <div>
+    <p class="label">Today: Current Repository</p>
+    <div class="pane before">
+      <div class="card flat">
+        <p class="h">Repository</p>
+        <div class="field"><span class="muted">Repository folder</span><div class="input">~/code/…/ontology-api</div></div>
+        <span class="btn">Choose repository folder</span>
+        <div class="field"><span class="muted">Repository type</span><div class="select">Detect automatically</div></div>
+        <div><span class="btn">Refresh status</span><span class="btn">Identify repository</span><span class="btn">Check SDK</span></div>
+      </div>
+      <div class="card flat"><p class="h">Dependencies &amp; SDK</p>
+        <div><span class="btn">Sync dependencies</span><span class="btn">Install dependencies</span><span class="btn">Preview SDK update</span><span class="btn">Update SDK</span></div>
+        <div class="muted">Check SDK status to see whether this repository supports an available automatic update.</div></div>
+      <div class="card flat"><p class="h">Repository instructions</p>
+        <div><span class="btn">Update agent instructions</span><span class="btn">Preview skill installation</span><span class="btn">Install skills</span><span class="btn">Sync skills</span><span class="btn">Clean legacy environment credentials</span></div></div>
+      <div class="card flat"><p class="h">Workspace tools</p>
+        <div><span class="btn">Open folder</span><span class="btn">Open signed terminal</span></div>
+        <div class="field"><span class="muted">Container image</span><div class="input muted">mainsequence-project:latest</div></div>
+        <div class="field"><span class="muted">Docker platform</span><div class="input muted">linux/arm64</div></div>
+        <div><span class="btn">Review Docker build</span><span class="btn">Review container configuration</span><span class="btn">Open container</span></div></div>
+    </div>
+  </div>
+  <div>
+    <p class="label">Proposed: repository detail</p>
+    <div class="pane">
+      <div class="row" style="padding:0 0 6px"><span class="btn plain dim">← Code</span><span class="spacer"></span><span class="btn plain">Use for this session</span></div>
+      <p class="h big">ontology-api</p>
+      <div class="muted">~/mainsequence/acme/projects/ontology-api-3f2a</div>
+      <div class="card">
+        <div class="row"><span class="grow muted">Branch</span><span class="select">main</span></div>
+        <div class="row"><span class="grow muted">Git</span><span>clean · 2 commits behind origin</span></div>
+        <div class="row"><span class="grow muted">SDK</span><span class="warn">1.8.2 → 1.9.0 available</span></div>
+        <div class="row"><span class="grow muted">Dependencies</span><span class="err">Lockfile out of date</span></div>
+      </div>
+      <p class="h">Dependencies</p>
+      <div><span class="btn primary">Sync dependencies</span><span class="btn">Update SDK</span><span class="btn disabled">Install</span></div>
+      <div class="note">Install is disabled: dependencies are already installed. Sync updates them.</div>
+      <p class="h">Instructions and skills</p>
+      <div><span class="btn">Update instructions and skills</span><span class="btn plain dim">▸ Individual actions</span></div>
+      <p class="h">More</p>
+      <div><span class="btn plain">Open folder</span><span class="btn plain">Terminal</span><span class="btn plain">Docker build…</span><span class="btn plain">Container config…</span><span class="btn plain dim">Delete local copy…</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>5. Agents: rows, one status line, a real Talk button</h2>
+<div class="pair">
+  <div>
+    <p class="label">Today</p>
+    <div class="pane before">
+      <div class="row" style="padding:0 0 6px"><span class="h grow" style="margin:0">Agents</span><span class="btn">Refresh</span></div>
+      <div class="field"><span>Search agents</span><div class="row" style="padding:0"><div class="input grow">Name or capability</div><span class="btn">Search</span></div></div>
+      <div class="muted">4 agents · showing 1–4</div>
+      <div class="card flat">
+        <div class="row" style="padding:0"><span class="band"><span class="icon"></span><b>Tutorial</b></span><span class="spacer"></span><span class="btn">ⓘ</span><span class="btn">💬</span></div>
+        <div class="muted">openai-codex · gpt-5.6-luna · medium</div>
+        <div class="muted">Opening session…</div>
+        <span class="btn">Cancel</span>
+      </div>
+      <div class="card flat">
+        <div class="row" style="padding:0"><span class="band"><span class="icon" style="background:#7a7670"></span><b>CRM Assistant</b></span><span class="spacer"></span><span class="btn">ⓘ</span><span class="btn">💬</span></div>
+        <div class="muted">Not configured · Not configured · Not configured</div>
+        <div class="muted">Reply received</div>
+      </div>
+      <div class="card flat">
+        <div class="row" style="padding:0"><span class="band"><span class="icon" style="background:#9b978f"></span><b>Pricing</b></span><span class="spacer"></span><span class="btn">ⓘ</span></div>
+        <div class="muted">Not configured · Not configured · Not configured</div>
+        <div class="muted">Deploy this agent to start a conversation.</div>
+      </div>
+      <div class="composer"><span class="code">/ms agent 3f2a9c1e-7b44-4d8e-9a1f-0c2b5e6d7f80 </span></div>
+    </div>
+  </div>
+  <div>
+    <p class="label">Proposed</p>
+    <div class="pane">
+      <div class="row" style="padding:0 0 8px"><div class="input grow">Search agents</div><span class="btn plain dim">Refresh</span></div>
+      <div class="row"><span class="band"><span class="icon"></span></span><div class="grow"><div class="name">Tutorial</div><div class="meta"><span class="warn">◌ Opening session…</span></div></div><span class="btn plain dim">Cancel</span></div>
+      <div class="row"><span class="band"><span class="icon" style="background:#7a7670"></span></span><div class="grow"><div class="name">CRM Assistant</div><div class="meta"><span class="ok">● Reply received</span> · gpt-5.6-luna</div></div><span class="btn primary">Talk</span></div>
+      <div class="row"><span class="band"><span class="icon" style="background:#9b978f"></span></span><div class="grow"><div class="name">Pricing</div><div class="meta">Not deployed</div></div><span class="btn disabled">Talk</span></div>
+      <div class="row"><span class="band"><span class="icon" style="background:#b26a00"></span></span><div class="grow"><div class="name">Ontology Curator</div><div class="meta"><span class="err">! Delivery needs review</span></div></div><span class="btn plain dim">Review</span></div>
+      <div class="note">Pressing a row opens the detail: Markdown description, skills, example questions that fill the composer when pressed.</div>
+      <div class="composer">
+        <div class="band"><span class="icon"></span><span>Tutorial</span><span class="muted">· Ready</span><span class="spacer"></span><span class="btn plain dim" style="margin:0">Switch</span></div>
+        <span class="code">/ms </span><span class="muted">Ask Tutorial…</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>6. MCP: connected list first, search on demand</h2>
+<div class="pair">
+  <div>
+    <p class="label">Today</p>
+    <div class="pane before">
+      <div class="card flat"><p class="h">Find MCPs</p>
+        <div class="field"><span class="muted">Search MCPs</span><div class="input">&nbsp;</div></div>
+        <div><span class="btn">Find MCPs</span><span class="btn">Refresh connections</span></div>
+        <div class="field"><span class="muted">Discovered MCP</span><div class="select">Choose discovered mcp</div></div></div>
+      <div class="card flat"><p class="h">Connected MCPs</p>
+        <div class="field"><span class="muted">Connected MCP</span><div class="select">crm-release · Staging</div></div>
+        <div><span class="btn">View tools</span><span class="btn">Disconnect selected MCP</span><span class="btn">Refresh Claude tools</span></div></div>
+      <div class="card flat"><p class="h">Tool explorer</p>
+        <div class="field"><span class="muted">MCP tool</span><div class="select">Choose mcp tool</div></div>
+        <div class="field"><span class="muted">Tool name</span><div class="input">&nbsp;</div></div>
+        <div class="field"><span class="muted">Arguments (JSON object)</span><div class="input">{}</div></div>
+        <span class="btn">Review and call tool</span></div>
+    </div>
+  </div>
+  <div>
+    <p class="label">Proposed: Tools</p>
+    <div class="pane">
+      <div class="row" style="padding:0 0 8px"><span class="h grow" style="margin:0">Connected in Staging</span><span class="btn primary">Add MCP</span></div>
+      <div class="row"><div class="grow"><div class="name">crm-release</div><div class="meta"><span class="ok">● Connected</span> · 12 tools</div></div><span class="btn plain dim">Disconnect</span></div>
+      <div class="row"><div class="grow"><div class="name">ontology-search</div><div class="meta"><span class="ok">● Connected</span> · 4 tools</div></div><span class="btn plain dim">Disconnect</span></div>
+      <div class="note">Tools become available to Claude on the next prompt.</div>
+      <p class="h" style="margin-top:12px">Add MCP</p>
+      <div class="row" style="padding:0 0 6px"><div class="input grow">Search MCPs in Staging</div></div>
+      <div class="row"><div class="grow"><div class="name">pricing-tools</div><div class="meta">release 0.3.1</div></div><span class="btn">Connect</span></div>
+      <div class="row"><div class="grow"><div class="name">docs-indexer</div><div class="meta">release 1.2.0</div></div><span class="btn">Connect</span></div>
+      <div class="note">Pressing a connected row opens its tool list; "Advanced: call a tool directly" and "Re-register tools" live at the bottom of that detail.</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

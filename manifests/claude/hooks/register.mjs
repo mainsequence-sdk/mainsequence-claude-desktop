@@ -1,13 +1,14 @@
-import { TABS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey } from './model.mjs';
+import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle } from './model.mjs';
 import { renderPane, renderRecovery } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
+import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
 
 async function openPane($, state) {
-  await $.ui.open({ id: PANE, title: 'MainSequence', focus: true });
+  await $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true });
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
 }
@@ -24,21 +25,23 @@ function ensureBoot($, state, e) {
 function operationTitle(action) {
   return ({ 'auth-status': 'Check MainSequence connection', login: 'Sign in to MainSequence', logout: 'Sign out of MainSequence',
     'refresh-token': 'Renew MainSequence session', repositories: 'Refresh code repositories', setup: 'Set up repository',
-    status: 'Check project status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
-    'mcp-discover': 'Find project MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect project MCP',
-    'mcp-remove': 'Disconnect project MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool',
+    status: 'Check repository status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
+    'mcp-discover': 'Find MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect MCP',
+    'mcp-remove': 'Disconnect MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool',
     'agents-list': 'Find agents', 'agent-get': 'Read agent details', 'agent-session': 'Open agent conversation', 'agent-readiness': 'Prepare agent', 'agent-send': 'Send agent message',
     'agent-task-get': 'Check agent task', 'agent-task-wait': 'Wait for agent task', 'agent-task-cancel': 'Cancel agent task',
+    'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
+    'organization-project-setup': 'Set up project locally', 'open-project-workspace': 'Open project in Claude',
     'local-repositories': 'Discover local repositories' })[action] || action.replaceAll('-', ' ');
 }
 
 async function execute($, state, domain, quiet = false, observer = {}) {
   const action = domain.request.action;
-  const contextRevision = state.contextRevision;
+  const contextRevision = state.contextRevision, backend = state.fields.backend;
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
   const setupTarget = action === 'setup' ? setupKey(domain.request) : null;
   if (setupTarget && [...state.running.values()].some(op => op.setupTarget === setupTarget)) {
-    $.ui.toast('This repository is already being set up. Its progress is shown in Projects.');
+    $.ui.toast('This repository is already being set up. Its progress is shown in Code.');
     return fail(action, 'This repository is already being set up.', 'PROJECT_BUSY');
   }
   if (state.running.size >= 8) return fail(action, 'Wait for a running operation to finish.', 'PROJECT_BUSY');
@@ -51,7 +54,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
     op.progress = 'Checking repository access and preparing the local folder…';
   }
   state.running.set(id, op); observer.started?.(op);
-  if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); update($); }
+  if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); statusLine($, state); update($); }
   const envelope = { protocolVersion: 1, id, request: domain };
   let result = await runWorker($, state, envelope, op, message => { op.progress = message; observer.progress?.(message); if (!quiet) update($); });
   const publicResult = publicValue(result);
@@ -59,10 +62,20 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   if (action === 'mcp-tools' && Array.isArray(result.data?.tools)) publicResult.data.tools = result.data.tools.map(tool => publicValue(tool));
   op.status = publicResult.status; op.progress = publicResult.summary; op.result = publicResult;
   state.running.delete(id);
+  if (!quiet) statusLine($, state);
   const currentMcp = !['mcp-tools', 'mcp-call'].includes(action) || domain.request.releaseUid === state.selectedMcp;
-  if (contextRevision === state.contextRevision && currentMcp && !state.closed && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  // Session results depend on the backend alone: an environment or folder change while
+  // the sign-in check is in flight must not discard it.
+  const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
+  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
+}
+
+/** Mirror the pane's running operations in Claude's status line. */
+function statusLine($, state) {
+  const running = state.operations.filter(op => op.status === 'running').length;
+  $.ui.status(running ? `MainSequence: ${running} running` : undefined);
 }
 
 function devRequest(state, action, extra = {}) {
@@ -108,7 +121,13 @@ async function runDev($, state, action, extra = {}) {
     clearMcp($, state); state.fields.mcpEnvironment = ''; delete state.results['devtools.mcp-environments']; state.selectedLocal = ''; state.fields.repositoryUid = ''; state.fields.branch = '';
     for (const key of ['devtools.repositories', 'projects.local-repositories', 'devtools.mcp-list', 'devtools.mcp-discover', 'devtools.mcp-tools']) delete state.results[key];
   }
-  if (result.status === 'success' && action === 'setup') await runProject($, state, 'local-repositories');
+  if (result.status === 'success' && action === 'mcp-remove') state.toolsView = 'list';
+  if (result.status === 'success' && action === 'setup') {
+    await runProject($, state, 'local-repositories');
+    if (state.closed || revision !== state.contextRevision) return result;
+    const local = rows(state.results['projects.local-repositories']?.data).find(row => String(row.repositoryUid) === String(state.fields.repositoryUid));
+    if (local && state.codeDetail?.repositoryUid === state.fields.repositoryUid && !state.codeDetail.root) await openCode($, state, { root: local.path, repositoryUid: state.fields.repositoryUid });
+  }
   update($);
   return result;
 }
@@ -127,7 +146,7 @@ async function runProject($, state, action, extra = {}) {
   if (action === 'workspace-profile' && typeof data.organization === 'string') state.fields.organization = data.organization;
   if (action === 'pick-folder' && typeof data.path === 'string' && ['root', 'baseDir'].includes(destination)) {
     state.editedSettings.add(destination); state.fields[destination] = data.path;
-    if (destination === 'baseDir') { state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
+    if (destination === 'baseDir') { clearOrganizationProjects($, state); state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
     if (destination === 'root') { state.contextRevision++; state.confirmation = null; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
   }
   if (action === 'delete-local-preview') state.confirmation = { title: 'Permanently delete local repository', detail: `${data.root}\n${data.warning || ''}`,
@@ -141,6 +160,30 @@ async function runProject($, state, action, extra = {}) {
   return result;
 }
 
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+/** MCP blocks use MCP's shape; Claude's core expects Messages API blocks: text and base64 images pass, the rest becomes text. */
+function apiBlock(block) {
+  if (block.type === 'text') return { type: 'text', text: clean(String(block.text ?? '')) };
+  if (block.type === 'image' && typeof block.data === 'string' && IMAGE_TYPES.has(block.mimeType)) return { type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } };
+  if (block.type === 'image' && block.source && typeof block.source === 'object') return { type: 'image', source: block.source };
+  const resource = block.resource && typeof block.resource === 'object' ? block.resource : null;
+  const { data, ...rest } = resource ? { ...block, resource: { ...resource, blob: undefined } } : block;
+  const binary = data !== undefined || resource?.blob !== undefined;
+  return { type: 'text', text: clean(JSON.stringify({ ...rest, ...(binary ? { omitted: 'binary content' } : {}) })) };
+}
+
+/** Claude accepts a registered tool's result as text, content blocks or nothing: never a bare object. */
+export function toolResult(value) {
+  const result = publicValue(value);
+  const data = record(result?.data);
+  const blocks = Array.isArray(data.content) ? data.content.filter(block => block && typeof block === 'object' && typeof block.type === 'string') : null;
+  const extra = { summary: result?.summary, ...(result?.effects ? { effects: result.effects } : {}), ...(result?.error ? { error: result.error } : {}),
+    ...(data.structuredContent !== undefined ? { structuredContent: data.structuredContent } : {}) };
+  const content = blocks?.length ? [...blocks, ...(result?.status !== 'success' || data.structuredContent !== undefined ? [{ type: 'text', text: JSON.stringify(extra) }] : [])]
+    : [{ type: 'text', text: JSON.stringify(blocks ? extra : result) }];
+  return { result: content.map(apiBlock), ...(result?.status !== 'success' ? { isError: true } : {}) };
+}
+
 function toolName(backend, environment, release, name) {
   const value = `${backend}:${environment}:${release}:${name}`;
   let hash = 2166136261;
@@ -148,7 +191,40 @@ function toolName(backend, environment, release, name) {
   return `ms_${String(name).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 42)}_${hash.toString(16)}`;
 }
 
-async function refreshTools($, state) {
+function refreshTools($, state) {
+  // A tool call that arrives while tools are being registered waits for this run.
+  const run = refreshToolsNow($, state).finally(() => { if (state.toolRefresh === run) state.toolRefresh = null; });
+  state.toolRefresh = run;
+  return run;
+}
+
+/** Startup work (preferences, session check, environments and MCP tools) runs once per session, from whichever trigger comes first. */
+function ensureInitialized($, state) {
+  if (state.initPromise) return state.initPromise;
+  state.preferencesLoading = true; update($);
+  state.initPromise = initializeWorkspace($, state).catch(() => { state.initializing = false; state.preferencesLoading = false; update($); });
+  return state.initPromise;
+}
+
+/** A desktop render or a tool call proves the session is live even when session.start named no surface (SDK-hosted Desktop, reloads). */
+function wakeOnDesktop($, state, e) {
+  if (e.surface !== 'desktop' || state.paneFault) return;
+  if (!state.booted && !state.booting) { void ensureBoot($, state, e); return; }
+  if (state.booted && !state.initPromise) void ensureInitialized($, state);
+}
+
+async function toolsReady($, state) {
+  let timer;
+  const limit = new Promise(resolve => { timer = $.clock.after(90000, resolve); });
+  const work = (async () => {
+    await ensureBoot($, state, { surface: 'desktop' });
+    await ensureInitialized($, state);
+    while (state.toolRefresh) await state.toolRefresh;
+  })();
+  try { await Promise.race([work, limit]); } finally { timer?.cancel(); }
+}
+
+async function refreshToolsNow($, state) {
   const revision = state.contextRevision;
   state.mcpTools = {};
   if (!state.fields.mcpEnvironment || state.preferencesLoading) return;
@@ -185,10 +261,10 @@ function environmentLabel(state) {
   return rows(state.results['devtools.mcp-environments']?.data).find(row => row.uid === state.fields.mcpEnvironment)?.name || state.fields.mcpEnvironment;
 }
 function clearMcp($, state) {
-  clearAgents($, state);
-  state.contextRevision++; state.mcpTools = {}; state.selectedMcp = ''; state.confirmation = null;
+  clearAgents($, state); clearOrganizationProjects($, state);
+  state.contextRevision++; state.mcpTools = {}; state.selectedMcp = ''; state.confirmation = null; state.toolsView = 'list';
   state.fields.mcpTool = ''; state.mcpOffset = 0;
-  for (const key of ['mcp-tool', 'mcp-discovered', 'mcp-connected']) delete state.selectPages[key];
+  for (const key of ['mcp-tool', 'mcp-environment']) delete state.selectPages[key];
   for (const key of ['devtools.mcp-discover', 'devtools.mcp-list', 'devtools.mcp-tools', 'devtools.mcp-call', 'mcp.registration']) delete state.results[key];
   for (const op of state.running.values()) if (op.label.startsWith('devtools · mcp-') && op.cancel) void op.cancel().catch(() => {});
   update($);
@@ -206,6 +282,7 @@ async function selectEnvironment($, state, uid, persist = true) {
   // A slow connected server must not hold the directory behind tool registration.
   await Promise.all([refreshTools($, state), runDev($, state, 'mcp-discover')]);
   if (revision === state.contextRevision && state.tab === 'Agents') await loadAgents($, state);
+  if (revision === state.contextRevision && state.tab === 'Projects') await loadOrganizationProjects($, state);
 }
 async function loadEnvironments($, state) {
   if (state.environmentsLoading || state.preferencesLoading) return;
@@ -226,20 +303,51 @@ function actionsFor($, state) {
   return {
     open: () => background(openPane($, state)),
     retryPane: () => { state.paneFault = null; update($); if (!state.booted) background(ensureBoot($, state, { surface: 'desktop' })); },
-    tab: tab => {
-      if (!TABS.includes(tab)) return;
-      state.tab = tab; state.confirmation = null; update($);
-      if (['MCP', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) background(loadEnvironments($, state));
-      else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
-      if (tab === 'Projects' && !state.results['devtools.repositories']) background(loadProjects($, state));
-      if (tab === 'Current Project' && !state.results['devtools.status']) background(runDev($, state, 'status'));
-    },
-    refreshEnvironments: () => background(loadEnvironments($, state)),
     selectPage: (key, page) => { state.selectPages[key] = page; update($); },
+    setup: install => {
+      if ([...state.running.values()].some(op => op.setupTarget === setupKey(state.fields))) return;
+      let input;
+      try { input = devRequest(state, 'setup', { install: !!install }).request; } catch { return; }
+      state.confirmation = { title: install ? 'Set up and install repository' : 'Set up repository',
+        detail: `Set up branch ${input.branch} in ${input.baseDir}${install ? ' and install its dependencies' : ''}.`,
+        callback: () => runDev($, state, 'setup', input) };
+      update($);
+    },
+    tab: tab => {
+      if (!VIEWS.includes(tab)) return;
+      state.tab = tab; state.confirmation = null; update($);
+      // While startup is still resolving the session, initializeWorkspace loads the
+      // environments for whichever section is open; a second load here would clear
+      // and refetch agents, tools and icons.
+      if (['Projects', 'Tools', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) { if (!state.initializing) background(loadEnvironments($, state)); }
+      else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
+      if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
+      if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
+    },
+    openCode: target => background(openCode($, state, target)),
+    closeCode: () => { state.codeDetail = null; state.confirmation = null; update($); },
+    codeFilter: value => { state.codeFilter = value === 'local' ? 'local' : 'all'; update($); },
+    checkHomeStatus: () => background(openCode($, state, { root: state.cwd }, false)),
+    showProjectList: () => { state.projectListView = true; update($); },
+    openAddMcp: () => { state.toolsView = 'add'; state.confirmation = null; update($); if (!state.results['devtools.mcp-discover']) background(runDev($, state, 'mcp-discover', { offset: 0 })); },
+    closeTool: () => { state.toolsView = 'list'; state.confirmation = null; update($); },
+    openTool: uid => { state.selectedMcp = uid; state.toolsView = 'detail'; state.confirmation = null; state.fields.mcpTool = ''; delete state.selectPages['mcp-tool']; delete state.results['devtools.mcp-tools']; delete state.results['devtools.mcp-call']; update($); background(runDev($, state, 'mcp-tools')); },
+    connectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Connect MCP', detail: `Connect ${name} in ${environmentLabel(state)} and register its tools for Claude.`, callback: () => runDev($, state, 'mcp-add') }; update($); },
+    disconnectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Disconnect MCP', detail: `Disconnect ${name} from ${environmentLabel(state)}. Its tools stop being available to Claude.`, callback: () => runDev($, state, 'mcp-remove') }; update($); },
+    askAgent: (uid, message) => background(talkToAgent($, state, uid, false, message)),
+    endAgentConversation: () => background(endAgentConversation($, state)),
+    allowAgentResend: uid => background((async () => {
+      const binding = Object.values(state.agentBindings).find(value => value.agent.uid === uid && current(state, value));
+      if (!binding || binding.busy || !binding.uncertain) return;
+      // The person reviewed the uncertain delivery; only they may clear the marker.
+      binding.uncertain = false; binding.status = binding.sessionUid ? 'selected' : binding.status; binding.error = '';
+      await saveBinding($, state, binding); refresh($);
+    })()),
+    refreshEnvironments: () => background(loadEnvironments($, state)),
     refreshAgents: () => { state.agentIconTimes = {}; background(loadAgents($, state)); },
     nextAgents: () => background(loadAgents($, state, state.agentOffset + 25)),
     previousAgents: () => background(loadAgents($, state, Math.max(0, state.agentOffset - 25))),
-    agentDetails: uid => background(getAgent($, state, uid).then(result => { if (result) { state.agentDetail = result.agent; update($); } })),
+    agentDetails: uid => background(getAgent($, state, uid).then(result => { if (result) { state.agentDetail = result.agent; state.tab = 'Agents'; update($); } })),
     closeAgentDetails: () => { state.agentDetail = null; update($); },
     talkToAgent: uid => background(talkToAgent($, state, uid)),
     cancelAgentPreparation: uid => {
@@ -250,50 +358,34 @@ function actionsFor($, state) {
     newAgentConversation: uid => { state.confirmation = { title: 'Start a new agent conversation', detail: 'The agent starts a separate conversation. An earlier request may still be running; this does not cancel it.', callback: () => talkToAgent($, state, uid, true) }; update($); },
     selectEnvironment: uid => background(selectEnvironment($, state, uid)),
     toggle: key => { state.expanded[key] = !state.expanded[key]; update($); },
-    refreshProjects: () => background(loadProjects($, state)),
-    setup: install => {
-      if ([...state.running.values()].some(op => op.setupTarget === setupKey(state.fields))) return;
-      const input = devRequest(state, 'setup', { install }).request;
-      state.confirmation = { title: install ? 'Set up and install repository' : 'Set up repository',
-        detail: `Set up branch ${input.branch} in ${input.baseDir}${install ? ' and install its dependencies' : ''}.`,
-        callback: () => runDev($, state, 'setup', input) };
-      update($);
-    },
-    chooseRepository: uid => {
-      state.confirmation = null;
-      delete state.selectPages['repository-branch'];
-      state.fields.repositoryUid = uid;
-      const branches = rows(rows(state.results['devtools.repositories']?.data).find(row => row.uid === uid)?.branches);
-      state.fields.branch = branches.length === 1 ? branches[0].repository_branch : '';
-      update($);
-    },
+    refreshOrganizationProjects: () => background(loadOrganizationProjects($, state)),
+    nextProjects: () => background(loadOrganizationProjects($, state, (state.projectPage?.offset || 0) + 25)),
+    previousProjects: () => background(loadOrganizationProjects($, state, Math.max(0, (state.projectPage?.offset || 0) - 25))),
+    chooseProject: uid => { state.projectListView = false; background(chooseOrganizationProject($, state, uid)); },
+    projectLink: (target, branchUid) => background(openProjectLink($, state, target, branchUid)),
+    setupOrganizationProject: () => confirmOrganizationSetup($, state),
+    openOrganizationWorkspace: () => background(openOrganizationWorkspace($, state)),
+    refreshRepositories: () => background(loadRepositories($, state)),
     field: (key, value) => {
       if (Object.hasOwn(state.fields, key)) {
         state.editedSettings.add(key);
         state.fields[key] = String(value);
-        if (['branch', 'baseDir'].includes(key)) state.confirmation = null;
         if (key === 'repositoryUid') state.fields.branch = '';
+        if (['branch', 'baseDir'].includes(key)) state.confirmation = null;
         if (key === 'backend') {
           state.selectPages = {};
           clearMcp($, state); state.fields.mcpEnvironment = '';
-          state.contextRevision++;
+          state.contextRevision++; state.codeDetail = null;
           state.fields.repositoryUid = ''; state.fields.branch = ''; state.fields.organization = ''; state.selectedLocal = '';
           for (const resultKey of Object.keys(state.results)) delete state.results[resultKey];
           state.selectedMcp = ''; state.mcpTools = {}; state.confirmation = null;
         }
-        if (key === 'baseDir') { state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
+        if (key === 'baseDir') { clearOrganizationProjects($, state); state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
         if (key === 'root' || key === 'projectType') { state.contextRevision++; state.confirmation = null; }
         if (key === 'root' || key === 'projectType' || key === 'backend') { delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
       }
       update($);
     },
-    selectLocal: value => { state.selectedLocal = value; update($); },
-    selectMcp: value => {
-      state.selectedMcp = value; state.fields.mcpTool = ''; state.confirmation = null;
-      delete state.selectPages['mcp-tool'];
-      delete state.results['devtools.mcp-tools']; delete state.results['devtools.mcp-call']; update($);
-    },
-    useLocal: () => { state.contextRevision++; state.confirmation = null; state.fields.root = state.selectedLocal; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; state.tab = 'Current Project'; update($); },
     dev: (action, extra) => background(runDev($, state, action, extra)),
     project: (action, extra) => background(runProject($, state, action, extra)),
     refreshTools: () => background(refreshTools($, state)),
@@ -302,13 +394,36 @@ function actionsFor($, state) {
     accept: () => { const confirmation = state.confirmation; state.confirmation = null; update($); if (confirmation) background(confirmation.callback()); },
     cancel: id => { const op = state.operations.find(value => value.id === id); if (op?.cancel) { op.progress = 'Cancelling…'; background(op.cancel()); update($); } },
     saveSettings: () => background(saveSettings($, state)),
+    attachWorkspace: () => background(attachWorkspace($, state)),
   };
+}
+
+/** Open a repository detail. A local folder becomes the operation target; a remote one offers setup. */
+async function openCode($, state, target, show = true) {
+  const repositoryUid = target.repositoryUid ? String(target.repositoryUid) : '';
+  if (show) { state.tab = 'Code'; state.confirmation = null; }
+  if (!target.root) {
+    state.fields.repositoryUid = repositoryUid;
+    const branches = rows(rows(state.results['devtools.repositories']?.data).find(row => String(row.uid) === repositoryUid)?.branches);
+    state.fields.branch = branches.length === 1 ? branches[0].repository_branch : '';
+    state.codeDetail = { root: '', repositoryUid }; update($); return;
+  }
+  const changed = state.fields.root !== target.root;
+  if (changed) { state.contextRevision++; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
+  state.fields.root = target.root; state.selectedLocal = target.root; state.fields.repositoryUid = repositoryUid;
+  if (show) state.codeDetail = { root: target.root, repositoryUid };
+  update($);
+  if (changed || !state.results['devtools.status']) {
+    const revision = state.contextRevision;
+    await runDev($, state, 'status');
+    if (!state.closed && revision === state.contextRevision && !state.results['devtools.sdk-status']) await runDev($, state, 'sdk-status');
+  }
 }
 
 async function saveSettings($, state) {
   const saved = record(await $.store.get('settings'));
   await $.store.set('settings', { ...saved, backend: state.fields.backend, baseDir: state.fields.baseDir,
-    organization: state.fields.organization, nodePath: state.fields.nodePath });
+    organization: state.fields.organization, nodePath: state.fields.nodePath, commandCenterUrl: state.fields.commandCenterUrl });
   $.ui.toast('MainSequence settings saved.');
 }
 
@@ -316,6 +431,7 @@ async function boot($, state, e) {
   state.closed = false;
   state.cwd = await $.session.cwd(); state.fields.root = state.cwd;
   const sessionId = await $.session.id();
+  if (state.sessionId !== sessionId) { state.attachedRepositories = new Set(); state.workspaceAttachment = null; }
   if (state.sessionId && state.sessionId !== sessionId) clearAgents($, state);
   state.sessionId = sessionId;
   const version = await $.session.version();
@@ -328,12 +444,16 @@ async function boot($, state, e) {
   const saved = record(await $.store.get('settings'));
   state.savedSettings = saved;
   state.environmentSelections = record(await $.store.get('mcp-environments'));
-  for (const key of ['backend', 'baseDir', 'organization', 'nodePath']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
-  await $.command.register({ name: 'ms', description: 'Open MainSequence or message a selected agent', argumentHint: '[agent <uid> <message>]', immediate: true });
-  if (e.surface === 'desktop') {
-    state.preferencesLoading = true;
+  for (const key of ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
+  await $.command.register({ name: 'ms', description: 'Open MainSequence or message an agent by handle', argumentHint: '[@agent <message> | agent <uid> <message>]', immediate: true });
+  // Desktop hosts the engine through the SDK: session.start (and a plugin reload) can name no
+  // surface although the session draws on the desktop. Ask the session which surfaces it has.
+  let desktop = e.surface === 'desktop';
+  if (!desktop) { try { desktop = (await $.session.surfaces()).includes('desktop'); } catch { desktop = false; } }
+  state.initPromise = null;
+  if (desktop) {
     // Only a person opens the pane. Startup/reloads must not reopen a closed pane.
-    state.timers.push($.clock.after(0, () => { void initializeWorkspace($, state).catch(() => { state.initializing = false; state.preferencesLoading = false; update($); }); }));
+    state.timers.push($.clock.after(0, () => { void ensureInitialized($, state); }));
   }
   update($);
 }
@@ -349,14 +469,15 @@ async function initializeWorkspace($, state) {
         && typeof preferences.data?.[key] === 'string' && preferences.data[key].trim()) state.fields[key] = preferences.data[key];
     }
     state.preferencesLoading = false; update($);
+    await attachWorkspace($, state);
     await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
-    if (['MCP', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) await loadEnvironments($, state);
+    if ((['Projects', 'Tools', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) && !state.results['devtools.mcp-environments']) await loadEnvironments($, state);
   } finally { state.initializing = false; state.preferencesLoading = false; update($); }
 }
 
-async function loadProjects($, state) {
-  if (state.projectsLoading) return;
-  state.projectsLoading = true; update($);
+async function loadRepositories($, state) {
+  if (state.repositoriesLoading) return;
+  state.repositoriesLoading = true; update($);
   const revision = state.contextRevision;
   try {
     const listed = await runDev($, state, 'repositories');
@@ -364,18 +485,138 @@ async function loadProjects($, state) {
     if (!state.fields.organization && state.fields.backend) await runProject($, state, 'workspace-profile', { backend: state.fields.backend });
     if (state.closed || revision !== state.contextRevision) return;
     if (state.fields.baseDir && state.fields.organization) await runProject($, state, 'local-repositories');
-  } finally { state.projectsLoading = false; update($); }
+  } finally { state.repositoriesLoading = false; update($); }
+}
+
+function clearOrganizationProjects($, state) {
+  state.projectListRevision++; state.projectDetailRevision++;
+  state.projectPage = null; state.projectDetail = null; state.selectedProject = ''; state.projectWorkspace = null;
+  state.projectError = ''; state.projectOpenMessage = ''; state.projectsLoading = false; state.projectLoading = false; state.projectSetupRunning = false;
+  for (const key of Object.keys(state.results)) if (key.startsWith('devtools.organization-project') || key === 'projects.open-project-workspace') delete state.results[key];
+  for (const op of state.running.values()) if (op.label.startsWith('devtools · organization-project') && op.cancel) void op.cancel().catch(() => {});
+}
+async function loadOrganizationProjects($, state, offset = 0) {
+  if (!state.fields.mcpEnvironment || state.preferencesLoading) return;
+  const revision = ++state.projectListRevision, selection = context(state);
+  state.projectsLoading = true; state.projectError = ''; update($);
+  try {
+    const result = await execute($, state, request('devtools', 'organization-projects', { backend: state.fields.backend,
+      environmentUid: state.fields.mcpEnvironment, search: state.fields.projectSearch, limit: 25, offset }));
+    if (state.closed || selection !== context(state) || revision !== state.projectListRevision) return;
+    if (result.status === 'success') state.projectPage = result.data;
+    else { state.projectPage = null; state.projectError = result.summary; }
+  } finally { if (revision === state.projectListRevision) { state.projectsLoading = false; update($); } }
+}
+async function chooseOrganizationProject($, state, uid) {
+  if (!state.projectPage?.results.some(row => row.uid === uid)) return;
+  const revision = ++state.projectDetailRevision, selection = context(state);
+  state.selectedProject = uid; state.projectSetupRunning = false; state.projectDetail = null; state.projectWorkspace = null; state.projectOpenMessage = ''; state.projectError = ''; state.confirmation = null;
+  delete state.results['devtools.organization-project-setup'];
+  state.projectLoading = true; update($);
+  try {
+    const result = await execute($, state, request('devtools', 'organization-project', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment, projectUid: uid }));
+    if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision) return;
+    if (result.status === 'success') state.projectDetail = result.data; else state.projectError = result.summary;
+  } finally { if (revision === state.projectDetailRevision) { state.projectLoading = false; update($); } }
+}
+async function openProjectLink($, state, target, branchUid) {
+  if (!state.projectDetail) return;
+  const revision = state.projectDetailRevision, selection = context(state);
+  const result = await execute($, state, request('devtools', 'organization-project-link', { backend: state.fields.backend,
+    environmentUid: state.fields.mcpEnvironment, projectUid: state.selectedProject, target, branchUid, commandCenterUrl: state.fields.commandCenterUrl }));
+  if (!state.closed && revision === state.projectDetailRevision && selection === context(state) && result.status !== 'success') { state.projectError = result.summary; update($); }
+}
+function confirmOrganizationSetup($, state) {
+  if (!state.projectDetail || state.projectSetupRunning || !state.fields.baseDir) return;
+  const revision = state.projectDetailRevision, selection = context(state);
+  const input = { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment, projectUid: state.selectedProject, baseDir: state.fields.baseDir };
+  state.confirmation = { title: 'Set up project locally', detail: `Prepare missing repositories, create or reuse ${state.projectDetail.project.name}'s local Claude workspace under ${input.baseDir}, and select each assigned branch. Existing changes are preserved.`,
+    callback: async () => {
+      if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision || input.baseDir !== state.fields.baseDir) return;
+      state.projectSetupRunning = true; state.projectOpenMessage = ''; update($);
+      try {
+        const result = await execute($, state, request('devtools', 'organization-project-setup', input));
+        if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision) return;
+        state.results['devtools.organization-project-setup'] = publicValue(result);
+        if (result.status === 'success') { state.projectWorkspace = result.data; await openOrganizationWorkspace($, state); }
+      } finally { if (revision === state.projectDetailRevision) { state.projectSetupRunning = false; update($); } }
+    } };
+  update($);
+}
+async function openOrganizationWorkspace($, state) {
+  const workspace = state.projectWorkspace;
+  if (!workspace || workspace.projectUid !== state.selectedProject || workspace.environmentUid !== state.fields.mcpEnvironment) return;
+  const revision = state.projectDetailRevision, selection = context(state);
+  const prepared = await execute($, state, request('projects', 'read-project-workspace', { root: workspace.root,
+    backend: state.fields.backend, environmentUid: workspace.environmentUid, projectUid: workspace.projectUid }));
+  if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision) return;
+  if (prepared.status !== 'success') { state.projectOpenMessage = prepared.summary; update($); return; }
+  // Store the exact membership selected by the user, not an instruction from an
+  // arbitrary folder's manifest. Only that workspace may attach these paths later.
+  const binding = workspaceBinding(prepared.data);
+  await $.store.set(`project-workspace:${workspace.root}`, binding);
+  if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision) return;
+  if (state.cwd === workspace.root) { await attachWorkspace($, state); return; }
+  const result = await execute($, state, request('projects', 'open-project-workspace', { root: workspace.root,
+    backend: state.fields.backend, environmentUid: workspace.environmentUid, projectUid: workspace.projectUid }));
+  if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision) return;
+  state.projectOpenMessage = result.status === 'success' ? 'Checkouts prepared. Start the Code session in Claude; MainSequence will add every project repository there.' : result.summary; update($);
+}
+
+export async function attachProjectRepositories($, workspace, attached, isCurrent, progress) {
+  workspaceBinding(workspace);
+  for (const row of workspace.repositories) {
+    if (!isCurrent()) return false;
+    if (attached.has(row.path)) continue;
+    progress(`Adding ${row.name} (${row.branch}) to ${workspace.name}…`);
+    const result = await $.command.run({ command: 'add-dir', args: row.path });
+    if (!isCurrent()) return false;
+    const text = String(result?.text || '').replace(/\x1b\[[0-9;]*m/g, '');
+    // /add-dir returns text for errors too. A completed command is not itself
+    // proof of registration; a descendant "already covered" response is not one.
+    if ((result.exitCode !== undefined && result.exitCode !== 0) || !text.includes(row.path)
+      || !(/Added .+ as a working directory/.test(text) || /is already added as a working directory\./.test(text))) {
+      throw new Error(`Claude could not attach ${row.name}. ${text || 'The add-dir command returned no confirmation.'}`);
+    }
+    attached.add(row.path);
+  }
+  return true;
+}
+
+async function attachWorkspace($, state) {
+  if (state.workspaceAttachment?.running || state.closed || !state.ready) return;
+  const sessionId = state.sessionId, root = state.cwd;
+  const isCurrent = () => !state.closed && state.sessionId === sessionId && state.cwd === root;
+  const saved = await $.store.get(`project-workspace:${root}`);
+  if (!saved || saved.root !== root || !isCurrent()) return;
+  state.workspaceAttachment = { running: true, error: false, message: 'Checking project repositories…' }; update($);
+  try {
+    const result = await execute($, state, request('projects', 'read-project-workspace', { root, backend: saved.backend,
+      environmentUid: saved.environmentUid, projectUid: saved.projectUid }), true);
+    if (!isCurrent()) return;
+    if (result.status !== 'success') throw new Error(result.summary);
+    const workspace = result.data;
+    if (JSON.stringify(workspaceBinding(workspace)) !== JSON.stringify(saved)) throw new Error('Project membership changed. Run Set up project locally again to review the new repositories.');
+    const complete = await attachProjectRepositories($, workspace, state.attachedRepositories, isCurrent, message => {
+      state.workspaceAttachment.message = message; update($);
+    });
+    if (complete) state.workspaceAttachment = { running: false, error: false,
+      message: `${workspace.name}: ${workspace.repositories.length} repository checkouts attached to this Claude session.` };
+  } catch (error) {
+    if (isCurrent()) state.workspaceAttachment = { running: false, error: true, message: String(error.message || error) };
+  } finally { if (isCurrent()) { state.workspaceAttachment.running = false; update($); } }
 }
 
 export function register(on, options = {}) {
   const state = initialState(options);
   on('session.start', async ($, e, next) => { await ensureBoot($, state, e); return next(e); });
   on('command.run', { command: 'ms' }, ($, e) => agentCommand($, state, e)).catch(() => ({ text: 'The agent operation could not complete. Check Activity before sending again.' }));
-  on('prompt.submit', { text: /^\/ms\s+(agent|task)\b/ }, ($, e, next) => e.attachments?.length ? { drop: 'MainSequence agent commands accept text only. Keep attachments in ordinary Claude chat.' } : next(e));
+  on('prompt.submit', { text: /^\/ms\s+\S/ }, ($, e, next) => e.attachments?.length ? { drop: 'MainSequence agent commands accept text only. Keep attachments in ordinary Claude chat.' } : next(e));
   // This site belongs to the session footer, so closing our pane does not remove it.
   // Keep the engine/other plugins' footer content and leave terminal rendering alone.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
+    wakeOnDesktop($, state, e);
     const existing = await next(e);
     const ui = $.ui.resolve(e), { Box, Button, Svg } = ui;
     return Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 1,
@@ -390,20 +631,28 @@ export function register(on, options = {}) {
   // SessionMode is flattened into a narrow text slot by Desktop. Use the native
   // composer band for the selected agent's image and readable activity instead.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    wakeOnDesktop($, state, e);
     const existing = await next(e);
     if (e.surface !== 'desktop' || !current(state, state.activeAgent)) return existing;
     const ui = $.ui.resolve(e);
     return ui.Box({ flexDirection: 'column', children: [existing,
-      renderAgentActivity(ui, state, state.activeAgent)].filter(Boolean) });
+      ui.Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [renderAgentActivity(ui, state, state.activeAgent),
+        ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
+          ui.Button({ key: 'agent-switch', label: 'Switch agent', plain: true, dimColor: true, onPress: () => {
+            state.tab = 'Agents'; state.agentDetail = null; update($);
+            void openPane($, state).catch(() => {});
+          } }),
+          ui.Button({ key: 'agent-end', label: 'End', plain: true, dimColor: true, onPress: () => { void endAgentConversation($, state).catch(() => {}); } }),
+        ] })] })].filter(Boolean) });
   });
   // Desktop discovers render sites from static hook metadata before invoking JS.
   // Imported constants become unknown matcher values in that discovery pass.
   on('ui.render', { component: 'Pane', requestId: 'mainsequence' }, async ($, e, next) => {
     if (e.surface !== 'desktop') return next(e);
     const ui = $.ui.resolve(e), actions = actionsFor($, state);
-    if (!state.booted && !state.booting && !state.paneFault) void ensureBoot($, state, e);
+    wakeOnDesktop($, state, e);
     if (state.paneFault) return renderRecovery(ui, state, actions);
-    try { return renderPane(ui, state, actions); }
+    try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
     catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
   });
   on('ui.fault', { component: 'Pane', requestId: 'mainsequence' }, ($, e, next) => {
@@ -437,7 +686,10 @@ export function register(on, options = {}) {
   });
   on('tool.call', { tool: /^mcp__mainsequence__/ }, async ($, e) => {
     if (e.tool.startsWith('mcp__mainsequence__ms_agent_')) return handleAgentTool($, state, e);
-    const entry = state.mcpTools[e.tool];
+    let entry = state.mcpTools[e.tool];
+    // After a reload or right at startup the catalog still names tools this instance has not
+    // registered yet: finish startup and the in-flight registration before refusing.
+    if (!entry) { await toolsReady($, state); entry = state.mcpTools[e.tool]; }
     if (!entry || entry.environmentUid !== state.fields.mcpEnvironment) return { deny: 'This MainSequence MCP tool is no longer connected. Refresh MainSequence tools.' };
     const revision = state.contextRevision;
     const answer = await $.ui.ask(`Run MainSequence tool ${entry.tool} in ${environmentLabel(state)}?`, ['Run tool', 'Cancel']);
@@ -445,7 +697,7 @@ export function register(on, options = {}) {
     if (state.closed || revision !== state.contextRevision || state.mcpTools[e.tool] !== entry) return { deny: 'The selected environment changed. Review the tool in the current environment.' };
     const { tool, tool_use_id, agentId, ...arguments_ } = e;
     const result = await execute($, state, request('devtools', 'mcp-call', { ...entry, arguments: arguments_ }));
-    return { result: publicValue(result), ...(result.status !== 'success' ? { isError: true } : {}) };
+    return toolResult(result);
   }).catch(() => ({ deny: 'MainSequence could not confirm or run this tool call.' }));
   on('session.end', async ($, e, next) => {
     state.closed = true;
@@ -552,16 +804,20 @@ async function loadAgentIcons($, state, uids, includePoses = false) {
         continue;
       }
       for (const uid of batch) {
-        const icon = data.icons?.[uid];
-        if (icon?.images) {
-          const old = state.agentIcons[uid];
-          const images = Object.fromEntries(Object.entries(icon.images).map(([pose, image]) => [pose, image || old?.images?.[pose] || null]));
-          const keepPoses = !includePoses && old?.images?.idle?.source === images.idle?.source;
-          state.agentIcons[uid] = { ...icon, images: { ...(keepPoses ? old.images : {}), ...images },
-            posesLoaded: includePoses || keepPoses && old?.posesLoaded };
-          if (!keepPoses && !includePoses) delete state.agentIconTimes[`${uid}:poses`];
-        } else delete state.agentIcons[uid];
-        state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = icon?.images && !icon.images.idle ? now - 240000 : now;
+        // One agent's malformed or empty record must never cost the others in its batch their icons.
+        try {
+          const icon = data.icons?.[uid];
+          if (icon?.images && typeof icon.images === 'object') {
+            const old = state.agentIcons[uid];
+            const images = Object.fromEntries(Object.entries(icon.images).map(([pose, image]) => [pose, image || old?.images?.[pose] || null]));
+            // An agent without an idle asset has nothing to keep: only reuse poses of the same, present idle image.
+            const keepPoses = !includePoses && !!old?.images && typeof images.idle?.source === 'string' && old.images.idle?.source === images.idle.source;
+            state.agentIcons[uid] = { ...icon, images: { ...(keepPoses ? old.images : {}), ...images },
+              posesLoaded: includePoses || (keepPoses && !!old.posesLoaded) };
+            if (!keepPoses && !includePoses) delete state.agentIconTimes[`${uid}:poses`];
+          } else delete state.agentIcons[uid];
+          state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = icon?.images && !icon.images.idle ? now - 240000 : now;
+        } catch { delete state.agentIcons[uid]; state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = now - 240000; }
       }
       refresh($);
     } catch { /* Presentation failure keeps existing media and never blocks agents. */ }
@@ -610,19 +866,41 @@ async function saveBinding($, state, binding, replace = false) {
   const queued = state.agentSave.then(write); state.agentSave = queued.catch(() => {}); await queued;
 }
 
+const agentPrefix = agent => `/ms ${agent.responseKinds.includes('message') ? '' : 'task '}@${agentHandle(agent.name)} `;
+const bareAgentPrefix = /^\/ms\s+(?:task\s+)?@[A-Za-z0-9._-]+\s*$/;
+
+/** After a reply, keep the empty composer addressed to the same agent until the person ends the conversation. */
+async function keepAgentPrefix($, state, binding) {
+  if (!current(state, binding) || binding.ended || state.agentDrafts[binding.agent.uid] !== binding) return;
+  const draft = await $.prompt.read();
+  if (!current(state, binding) || binding.ended || draft.text.trim()) return;
+  await $.prompt.fill({ text: agentPrefix(binding.agent), mode: 'replace' });
+}
+
+async function endAgentConversation($, state) {
+  const binding = state.activeAgent;
+  if (!binding) return;
+  binding.ended = true; state.activeAgent = null; refresh($);
+  const draft = await $.prompt.read();
+  if (bareAgentPrefix.test(draft.text)) await $.prompt.fill({ text: '', mode: 'replace' });
+}
+
 async function fillAgentDraft($, state, binding, ticket, preparation) {
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   const draft = await $.prompt.read();
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
-  const match = /^\/ms\s+(agent|task)\s+([-a-fA-F0-9]{36})(?:[ \t]|$)/.exec(draft.text);
+  // The command names its target: `/ms @handle <message>`; `/ms agent|task <uid> <message>` stays explicit.
+  const explicit = /^\/ms\s+(agent|task)\s+([-a-fA-F0-9]{36})(?:[ \t]|$)/.exec(draft.text);
+  const handled = !explicit && /^\/ms\s+(?:task\s+)?@[A-Za-z0-9._-]+(?:[ \t]|$)/.exec(draft.text);
+  const bare = !explicit && !handled && /^\/ms(?:[ \t]+|$)(?!(?:agent|task)\b|@)/.exec(draft.text);
+  const match = explicit || handled || bare;
   if (draft.text.trimStart().startsWith('/') && !match) { $.ui.toast('Your existing slash command was kept. Clear it before choosing an agent message.'); return; }
-  const mode = match?.[1] === 'task' && binding.agent.responseKinds.includes('task') ? 'task' : binding.agent.responseKinds.includes('message') ? 'agent' : 'task';
-  const message = match ? draft.text.slice(match[0].length) : draft.text;
-  const filled = await $.prompt.fill({ text: `/ms ${mode} ${binding.agent.uid} ${message}`, mode: 'replace' });
+  const message = typeof preparation?.message === 'string' ? preparation.message : match ? draft.text.slice(match[0].length) : draft.text;
+  const filled = await $.prompt.fill({ text: `${agentPrefix(binding.agent)}${message}`, mode: 'replace' });
   if (!current(state, binding) || ticket !== state.agentSelection || preparation?.cancelled) return;
   if (!filled?.isFilled) { $.ui.toast('Claude Desktop could not fill its chat input. No message was sent.'); return; }
-  state.agentDrafts[binding.agent.uid] = binding;
-  $.ui.toast(`${binding.agent.name} is ready. Write your message in Claude’s input, then send it.`);
+  state.agentDrafts[binding.agent.uid] = binding; binding.ended = false;
+  $.ui.toast(`${binding.agent.name} is ready. Write your message in Claude’s input, then send it. Replies keep the conversation addressed to it until you press End.`);
 }
 
 async function prepareAgent($, state, binding, preparation) {
@@ -650,10 +928,10 @@ async function prepareAgent($, state, binding, preparation) {
   return true;
 }
 
-async function talkToAgent($, state, uid, fresh = false) {
+async function talkToAgent($, state, uid, fresh = false, message = undefined) {
   if (!await ensureAgentHost($, state) || !uuid(uid)) return;
-  if (state.agentPreparing[uid]) { state.agentPreparing[uid].ticket = ++state.agentSelection; return; }
-  const preparation = { ticket: ++state.agentSelection, phase: 'Opening session…', cancelled: false }, revision = state.agentRevision, hostSessionId = state.sessionId;
+  if (state.agentPreparing[uid]) { state.agentPreparing[uid].ticket = ++state.agentSelection; if (typeof message === 'string') state.agentPreparing[uid].message = message; return; }
+  const preparation = { ticket: ++state.agentSelection, phase: 'Opening session…', cancelled: false, message }, revision = state.agentRevision, hostSessionId = state.sessionId;
   const selection = context(state), valid = () => revision === state.agentRevision && hostSessionId === state.sessionId && selection === context(state) && !state.closed;
   state.agentPreparing[uid] = preparation; refresh($);
   let binding;
@@ -747,27 +1025,43 @@ async function runAgentOperation($, state, binding, kind, input, approved = fals
       if (kind === 'send') binding.uncertain = false;
     } else { binding.status = 'failed'; binding.error = answer.summary; if (kind === 'send') binding.uncertain = !!answer.effects; }
     await saveBinding($, state, binding);
-    return { result: { ...publicValue(answer), agentName: binding.agent.name, environment: binding.agent.environmentName,
-      contextChanged: !current(state, binding) }, ...(answer.status !== 'success' ? { isError: true } : {}) };
+    const labelled = { ...answer, data: { ...record(answer.data), agentName: binding.agent.name, environment: binding.agent.environmentName, contextChanged: !current(state, binding) } };
+    // `answer` serves the /ms command transcript; the model tool gets content blocks only.
+    return { ...toolResult(labelled), answer: publicValue(labelled) };
   } finally { binding.busy = false; binding.iconPhase = null; refresh($); }
 }
 
 async function handleAgentTool($, state, e) {
   const entry = state.agentTools[e.tool];
   if (!entry) return { deny: 'This agent conversation is no longer active. Choose an agent in the current environment.' };
-  return runAgentOperation($, state, entry.binding, entry.kind, e);
+  const { deny, result, isError } = await runAgentOperation($, state, entry.binding, entry.kind, e);
+  return deny ? { deny } : { result, ...(isError ? { isError } : {}) };
 }
 
 async function agentCommand($, state, e) {
-  if (!String(e.args || '').trim()) { await openPane($, state); return {}; }
-  const parsed = /^(agent|task)\s+([a-fA-F0-9-]{36})(?:[ \t]|\n)([\s\S]*)$/.exec(String(e.args));
-  if (!parsed || !uuid(parsed[2]) || !parsed[3].trim()) return { text: 'Choose Talk to agent, then write a message after /ms agent <agent-uid>. Use /ms task <agent-uid> <message> for supported longer work.' };
-  const binding = state.agentDrafts[parsed[2]];
-  const result = await runAgentOperation($, state, binding, 'send', { message: parsed[3], responseKind: parsed[1] === 'task' ? 'task' : 'message' }, e.origin?.kind === 'composer');
+  const args = String(e.args || '');
+  if (!args.trim()) { await openPane($, state); return {}; }
+  const prepared = Object.values(state.agentDrafts).filter(binding => current(state, binding));
+  const help = `Name the agent that receives the message: ${prepared.length ? prepared.map(binding => `/ms @${agentHandle(binding.agent.name)} <message>`).join(', ') : 'choose Talk on an agent first, then write after the /ms @agent prefix'}. Use /ms task @agent <message> for longer work, or /ms agent <agent-uid> <message> to address an agent by id.`;
+  const explicit = /^(agent|task)\s+([a-fA-F0-9-]{36})(?:[ \t]|\n)([\s\S]*)$/.exec(args);
+  const handled = !explicit && /^(task\s+)?@([A-Za-z0-9._-]+)(?:[ \t]|\n)([\s\S]*)$/.exec(args);
+  let binding, message, responseKind;
+  if (explicit) {
+    if (!uuid(explicit[2]) || !explicit[3].trim()) return { text: help };
+    binding = state.agentDrafts[explicit[2]]; message = explicit[3]; responseKind = explicit[1] === 'task' ? 'task' : 'message';
+  } else if (handled) {
+    // A handle comes from the agent's name; two prepared agents with one name resolve to the selected one.
+    const matches = prepared.filter(candidate => agentHandle(candidate.agent.name) === handled[2].toLowerCase());
+    binding = matches.length === 1 ? matches[0] : matches.find(candidate => candidate === state.activeAgent);
+    if (!binding || !handled[3].trim()) return { text: help };
+    message = handled[3]; responseKind = handled[1] || !binding.agent.responseKinds.includes('message') ? 'task' : 'message';
+  } else return { text: help };
+  const result = await runAgentOperation($, state, binding, 'send', { message, responseKind }, e.origin?.kind === 'composer');
   if (result.deny) return { text: result.deny };
-  const answer = result.result;
+  const answer = result.answer;
   const text = `${binding.agent.name} · ${binding.agent.environmentName}\n\n${answer.status !== 'success' ? answer.summary + (answer.effects ? '\nThe message may have reached the agent. Do not resend automatically.' : '')
     : answer.data?.responseKind === 'task' ? `Task ${answer.data.taskUid}: ${answer.data.status}` : answer.data?.message || answer.summary}`;
+  if (current(state, binding) && e.origin?.kind === 'composer') { state.activeAgent = binding; await keepAgentPrefix($, state, binding); }
   if (current(state, binding)) {
     const previous = state.agentCommandOutputs.get(text);
     // Identical text from two agents cannot safely identify a historical row.

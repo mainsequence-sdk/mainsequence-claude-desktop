@@ -1,5 +1,99 @@
 # Claude Desktop plugin verification
 
+## 0.4.13 — startup after reload, and a real Back Office conversation (2026-10-20)
+
+In the user's Desktop session, after `/reload-plugins` loaded 0.4.12, a model call to
+the Back Office `get_current_user` tool was refused as "no longer connected". Desktop
+hosts the engine through the SDK, so the reload's `session.start` named no surface and
+the plugin skipped startup, leaving its MCP tools unregistered. 0.4.13 starts from the
+session's reported surfaces, the first desktop draw, or the first MainSequence tool
+call, which waits for registration.
+
+A real end-to-end run used the installed hooks, the installed worker and the local
+backend (only Claude's host APIs were simulated). It passed: signed-in header, saved
+Production environment, 105 MCP tools (35 Back Office, 70 CRM), the Back Office MCP
+listed by name, a real `get_current_user` call returning content blocks, agents with the
+Tutorial Helper icon, Refresh, Talk to Back Office Helper after real session allocation
+and readiness, a two-turn conversation in the same agent session with attributed
+replies, the composer re-addressed after each reply, decorated reply and tool rows, and
+the agent send tool returning content blocks. A separate run talked to Tutorial Helper
+without sending anything and drew its icon in the list, details, composer band and
+running/completed tool rows with its animated poses loaded.
+
+The engine test harness accepts any hook result shape, so it cannot prove what Claude's
+core accepts from a model call; that is verified only by a live call in Desktop.
+
+## 0.4.12 — agent icons with an empty record in the batch (2026-10-20)
+
+After 0.4.11 was installed, agent icons did not appear in the user's Desktop. The
+real worker responses from the local backend were recorded (read-only) and replayed
+through the Node fixture and through Desktop's bundled Code 2.1.299 engine; both
+reproduced the missing icon. Back Office Helper's icon record has `idle: null`, and
+the cache's pose-reuse check then read `images` of a missing previous entry. The
+exception aborted the batch, dropping Tutorial Helper's valid icon. The fix handles
+each agent separately; a regression test covers an empty record ahead of valid ones,
+before and after Refresh. The engine replay then passed the signed-in header, seven
+agents, list/detail/band/tool-row icons, Refresh, Talk with the `@handle` prefix, the
+re-addressed composer after a reply, and Tools. Session, readiness and send responses
+were synthesized, so no backend state was created.
+
+## 0.4.11 — pane redesign (2026-10-20)
+
+The pane now has a status header and five sections (Home, Code, Projects, Agents,
+Tools) with Settings and Activity opened from the header, on top of the 0.4.9 pane
+recovery, select paging and setup progress and the 0.4.10 MCP names; see
+[the proposal](ux-proposal.md). Views draw lists of rows with inline actions, one
+primary button, status colours and disabled-with-reason controls from the host's own
+elements. Confirmations draw above the view. `/ms <message>` reaches the agent most
+recently prepared by Talk. No worker request, backend, credential or configuration
+contract changed; element keys used by the existing tests were kept wherever the
+control still exists.
+
+Automated verification on 2026-10-20:
+
+- Claude: 72 Node tests passed (four new: Home next steps and session status, header
+  gating, Tools rows and Add flow, `/ms <message>` routing and example prefill).
+- Desktop's bundled Code 2.1.299 validated the plugin and passed all seven native
+  simulator tests, including the updated Projects, Settings, cancellation and Agents
+  flows.
+- `npm run release:check` passed, including documentation links, packaging and the
+  standalone worker check.
+
+These checks use fixtures. This build has not been exercised in a signed-in Desktop
+session against a live backend; the live acceptance checklist below still applies.
+
+## 0.4.7 — repositories, MainSequence projects and local workspaces (2026-10-16)
+
+Repository controls are labeled Repositories and Current Repository. The new
+Projects tab reads environment-scoped OrganizationProjects and their exact member
+branches through shared devtools 0.2.8. Local setup prepares missing repositories,
+creates or reuses the project workspace, selects each assigned branch in independent
+checkouts and opens Claude's supported folder link. Existing source checkouts,
+uncommitted changes and workspace instructions are preserved.
+
+Automated verification:
+
+- Shared devtools: 116 tests passed, including real temporary Git clones, repeated
+  setup, renamed project/repository reuse, dirty branch refusal, clean switching,
+  wrong origins, symlink rejection, cancellation and inherited Git overrides.
+- Claude: 54 Node tests passed; typechecking, documentation links, ZIP checksum,
+  portable distribution and standalone worker checks passed.
+- Claude Desktop Code 2.1.295: native validation and all six simulator tests passed.
+  The new populated Projects test exercises environment selection, branch links,
+  setup confirmation and opening the prepared workspace with no submitted prompt.
+- The parallel VS Code implementation passed all 46 tests, including project state,
+  stale account/backend responses, exact links and webview JavaScript parsing.
+  Python metadata coverage used an interpreter with `packaging` installed. Localhost
+  fixture tests ran outside the network-restricted sandbox.
+
+These checks use fixtures and temporary repositories. This change has not been
+installed into a running user session, tested against a live customer project,
+or published to npm or either extension marketplace. Claude controls the final
+folder-trust confirmation and new conversation; the integration does not alter an
+existing conversation's working directory or write Claude's private project store.
+The packaged runtime includes devtools; source builds before its publication use
+the integrity-verified local archive described in the README.
+
 ## Scope
 
 The user approved the five-section browser layout on 2026-10-15. The 0.4.0 baseline
@@ -488,6 +582,23 @@ plugin and passed all five native simulator tests with disposable configuration.
 These checks establish code and packaging behavior; they do not claim live GUI or
 live backend acceptance for this Claude release.
 
+## Local project naming and membership correction (uninstalled candidate)
+
+The first Ontology live attempt prepared two Git checkouts, but opened the
+UID-suffixed parent directory and never registered the checkouts with Claude.
+Its Git reuse evidence does **not** establish native workspace membership.
+
+The correction opens an exactly named child (`Ontology`), preserves the existing
+repository paths alongside it, and runs a native `/add-dir` command for every
+user-selected member when the new workspace session starts. A failed command
+never produces an attached/success state. Regression fixtures use two distinct
+repositories, both on `main`, verify repeated setup and inode preservation, and
+exercise legacy migration, attachment retry and changed-membership refusal.
+
+Desktop control and live installation stopped at the user's request. The corrected
+candidate is checked with temporary Git fixtures and the native engine simulator;
+it has not been installed or accepted in a live Claude workspace.
+
 
 ## Agent icons 0.4.8 — 2026-10-17
 
@@ -543,37 +654,19 @@ and section navigation. MCP catalogs retain entries beyond the generic
 100-element activity-preview limit. Late-response and slow-server regressions
 verify that discovery can finish independently and the selected catalog stays scoped.
 
-In the actual Claude window, the fixed candidate displayed the live catalog as
-`1–63 of 70`, then `64–70 of 70`. The last tool could be selected and its
-description appeared. The pane also remained usable after changing chats and
-returning. The candidate used the supported plugin updater with a temporarily
-staged local catalog; the original marketplace file was restored after each update.
-
 Setup fixtures verify immediate feedback, streamed progress, disabled duplicate
 submissions, context isolation, cancellation, failure, success with folder actions,
-navigation and native remounts. The live repository list was inspected using an
-unsaved temporary destination, but a full real clone was not completed. Authentication
-and provider settings were not edited. No remote MCP tool was called during the
-catalog verification.
-
-The full 0.4.9 release check passed: 67 Node tests, TypeScript, documentation,
-portable distribution, native loader validation and seven native simulator tests.
-The shared dependency remains devtools 0.2.7.
+navigation and native remounts. Authentication and provider settings were not
+edited. No remote MCP tool was called during the catalog verification.
 
 ## MCP names 0.4.10 — 2026-10-20
 
 The user's installed candidate was loaded through the supported plugin updater
-and `/reload-plugins` in the existing test chat. In Production, the actual
-discovered MCP dropdown listed `BackofficeBackend`, `mainsequence-sdk-tutorial`,
-`alpaca-connectors`, `MainSequenceCRMAPI` and `MetaTables`. Selecting Backoffice
-displayed `BackofficeBackend` alone; the environment remained in its own selector.
-The installed worker resolved the existing nameless saved CRM record to
-`MainSequenceCRMAPI`. No connection was added and no remote MCP tool was called.
-
-All 68 Node tests and seven native simulator tests passed, together with native
-loader validation, TypeScript, documentation and portable distribution checks.
-The packaged worker fixture covers two generic `app` releases, paginated metadata,
-exact environment matching, existing nameless saved connections, denied optional
-name lookup, unchanged stored records and exact tool routing. UI tests assert
-name-only labels in both selectors and retain release IDs only as selection values.
-The shared package remains published devtools 0.2.7.
+and `/reload-plugins` in the existing test chat. In Production, the discovered MCP
+list showed `BackofficeBackend`, `mainsequence-sdk-tutorial`, `alpaca-connectors`,
+`MainSequenceCRMAPI` and `MetaTables`. The installed worker resolved the existing
+nameless saved CRM record to `MainSequenceCRMAPI`. No connection was added and no
+remote MCP tool was called. The packaged worker fixture covers two generic `app`
+releases, paginated metadata, exact environment matching, existing nameless saved
+connections, denied optional name lookup, unchanged stored records and exact tool
+routing.

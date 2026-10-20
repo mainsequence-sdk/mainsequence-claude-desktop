@@ -18,18 +18,20 @@ test('large MCP catalogs remain usable within the native Select limit', async ($
   });
   await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
   let ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
-  await clock.settle(); await ui.press({key:'tab-MCP'}); await clock.settle();
+  await clock.settle(); await ui.press({key:'tab-Tools'}); await clock.settle();
   await ui.select({key:'mcp-environment',value:'env'}); await clock.settle();
-  await ui.select({key:'mcp-connected',value:'release'}); await ui.press({key:'mcp-tools'}); await clock.settle();
+  await ui.press({key:'mcp-open-release'}); await clock.settle();
+  expect(await ui.find({key:'tool-crm_tool_129'})).toBeDefined();
+  await ui.press({key:'toggle-tools-advanced'});
   expect(await ui.find({key:'mcp-tool'})).toBeDefined();
   await ui.press({key:'mcp-tool-next'}); await ui.press({key:'mcp-tool-next'});
   await ui.select({key:'mcp-tool',value:'crm_tool_129'});
   await ui.press({key:'mcp-tool-previous'});
-  expect(await ui.find({type:'Text',text:'Tool 129'})).toBeDefined();
+  expect(await ui.find({key:'mcp-tool'})).toBeDefined();
   await ui.unmount();
   ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
   expect(await ui.find({key:'mcp-tool'})).toBeDefined();
-  await ui.press({key:'tab-General'}); await ui.press({key:'tab-MCP'});
+  await ui.press({key:'tab-Home'}); await ui.press({key:'tab-Tools'});
   expect(await ui.find({key:'mcp-tool'})).toBeDefined();
   await ui.unmount();
 });
@@ -51,26 +53,55 @@ test('setup keeps progress beside disabled controls across native pane remounts'
       return {value:{code:0,signal:null}};
     }
     const data = q.action === 'repositories' ? [{uid:'repo-1',code_repository_name:'Research',branches:[{repository_branch:'main'}]}]
-      : q.action === 'local-repositories' ? [] : {};
+      : q.action === 'local-repositories' ? [] : q.action === 'workspace-preferences' ? {backend:'https://fixture.example',baseDir:'/fixture/repos'} : {};
     yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Ready',data}})+'\n'};
     return {value:{code:0,signal:null}};
   });
   await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
   let ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
-  await clock.settle(); await ui.press({key:'tab-Projects'}); await clock.settle();
-  await ui.select({key:'remote-repository',value:'repo-1'}); await clock.settle();
+  await clock.settle(); await ui.press({key:'tab-Code'}); await clock.settle();
+  await ui.press({key:'setup-repository-repo-1'}); await clock.settle();
   await ui.press({key:'setup'}); await ui.press({key:'confirm-action'}); await clock.settle();
   expect(await ui.find({type:'Text',text:'Cloning the registered repository branch…'})).toBeDefined();
   expect(await ui.find({key:'setup'})).toBeDefined();
   await ui.unmount();
   ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
   expect(await ui.find({type:'Text',text:'Cloning the registered repository branch…'})).toBeDefined();
-  await ui.press({key:'tab-General'});
-  expect(await ui.find({key:'show-setup-activity'})).toBeDefined();
-  await ui.press({key:'tab-Projects'}); await ui.press({key:'cancel-setup'}); await clock.settle();
+  await ui.press({key:'tab-Settings'});
+  expect(await ui.find({type:'Button',text:'View progress'})).toBeDefined();
+  await ui.press({key:'tab-Code'}); await ui.press({key:'cancel-setup'}); await clock.settle();
   expect(await ui.find({type:'Text',text:'Setup cancelled'})).toBeDefined();
   expect(setups).toBe(1);
   await ui.unmount();
+});
+
+test('Projects renders native branch links and confirms local setup before opening Claude', async ($, on) => {
+  const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`, requests=[];
+  const project={uid:id(1),name:'Rates project',description:'Research',organization_environment_uid:id(2),code_repository_branch_uids:[id(4)]};
+  on('session.cwd',()=>({value:'/fixture/repository'}));on('session.id',()=>({value:'native-project-test'}));
+  on('session.version',()=>({value:{version:'2.1.295'}}));on('session.start',($,e)=>({cwd:e.cwd}));
+  on('ui.open',()=>({value:undefined}));on('command.register',()=>({value:{command:'ms'}}));
+  on('process.spawn',async function*($,e){
+    const envelope=JSON.parse(e.input),q=envelope.request.request;requests.push(q);let data={};
+    if(q.action==='workspace-preferences')data={backend:'https://fixture.example',baseDir:'/fixture/repos'};
+    if(q.action==='mcp-environments')data=[{uid:id(2),name:'Research'}];
+    if(q.action==='mcp-list'||q.action==='mcp-discover')data=[];
+    if(q.action==='organization-projects')data={results:[project],count:1,limit:25,offset:0};
+    if(q.action==='organization-project')data={project,branches:[{uid:id(4),code_repository_uid:id(3),code_repository_name:'Pricing',repository_branch:'develop',is_initialized:true}]};
+    if(['organization-project-setup','read-project-workspace'].includes(q.action))data={root:'/fixture/repos/project',backend:'https://fixture.example',name:'Rates project',projectUid:id(1),environmentUid:id(2),repositories:[{repositoryUid:id(3),branchUid:id(4),name:'Pricing',path:'/fixture/repos/repositories/Pricing',branch:'develop'}]};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/repository',surface:'desktop',isInteractive:true});await clock.settle();
+  const ui=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await ui.press({key:'tab-Projects'});await clock.settle();await ui.select({key:'mcp-environment',value:id(2)});await clock.settle();
+  await ui.press({key:`project-${id(1)}`});await clock.settle();expect(await ui.find({key:`project-repository-${id(3)}`})).toBeDefined();
+  expect(await ui.find({key:'projects-back'})).toBeDefined();
+  await ui.press({key:`project-branch-${id(4)}`});await clock.settle();expect(requests.find(q=>q.action==='organization-project-link').branchUid).toBe(id(4));
+  await ui.press({key:'project-setup'});expect(requests.filter(q=>q.action==='organization-project-setup')).toHaveLength(0);
+  await ui.press({key:'confirm-action'});await clock.settle();expect(requests.find(q=>q.action==='open-project-workspace').root).toBe('/fixture/repos/project');
+  expect(await ui.find({key:'project-open-local'})).toBeDefined();await ui.unmount();
 });
 
 test('Desktop pane renders native controls and dispatches a confirmed structured action', async ($, on) => {
@@ -94,21 +125,27 @@ test('Desktop pane renders native controls and dispatches a confirmed structured
   await $.session.start({ cwd: '/fixture/project', surface: 'desktop', isInteractive: true });
   const ui = await $.ui.mount({ plugin: 'mainsequence', surface: 'desktop', component: 'Pane', requestId: 'mainsequence', props: {} });
   await clock.settle();
-  expect(await ui.find({ key: 'tab-General' })).toBeDefined();
+  expect(await ui.find({ key: 'tab-Home' })).toBeDefined();
+  expect(await ui.find({ key: 'tab-Settings' })).toBeDefined();
+  await ui.press({ key: 'tab-Settings' });
   await ui.input({ key: 'field-backend', text: 'https://fixture.example' });
   await clock.settle();
   await ui.press({ key: 'auth-status' });
   await clock.settle();
   expect(requests).toContainEqual({ scope: 'devtools', request: { action: 'auth-status', backend: 'https://fixture.example', check: true } });
   expect(await ui.find({ type: 'Text', text: 'fixture@example.test' })).toBeDefined();
-  await ui.press({ key: 'tab-Current-Project' });
+  await ui.press({ key: 'tab-Code' });
+  await clock.settle();
+  await ui.press({ key: 'code-open-session' });
+  await clock.settle();
   await ui.press({ key: 'sync' });
   expect(requests.filter(value => value.request.action === 'sync')).toHaveLength(0);
+  expect(await ui.find({ key: 'tab-Code' }), 'navigation stays visible while confirming').toBeDefined();
   await ui.press({ key: 'confirm-action' });
   await clock.settle();
   expect(requests).toContainEqual({ scope: 'devtools', request: { action: 'sync', root: '/fixture/project', backend: 'https://fixture.example' } });
-  for (const tab of ['Projects', 'MCP', 'Activity', 'General']) await ui.press({ key: `tab-${tab}` });
-  expect(await ui.find({ key: 'tab-Accounts' })).toBeUndefined();
+  for (const tab of ['Projects', 'Tools', 'Activity', 'Home']) await ui.press({ key: `tab-${tab}` });
+  for (const tab of ['General', 'Repositories', 'Current-Repository', 'MCP', 'Accounts']) expect(await ui.find({ key: `tab-${tab}` })).toBeUndefined();
   expect(await ui.find({ key: 'more-tools' })).toBeUndefined();
   await ui.unmount();
 });
@@ -134,8 +171,10 @@ test('Desktop cancellation closes a waiting native process stream without waitin
   await $.session.start({ cwd: '/fixture/project', surface: 'desktop', isInteractive: true });
   const ui = await $.ui.mount({ plugin: 'mainsequence', surface: 'desktop', component: 'Pane', requestId: 'mainsequence', props: {} });
   await clock.settle();
+  await ui.press({ key: 'tab-Settings' });
   await ui.press({ key: 'auth-status' });
   await clock.settle();
+  expect(await ui.find({ type: 'Button', text: '1 running' }), 'the header counts the running operation').toBeDefined();
   await ui.press({ key: 'tab-Activity' });
   const cancel = await ui.find({ type: 'Button', text: 'Cancel operation' });
   expect(cancel, 'Cancel operation button exists').toBeDefined();
@@ -172,7 +211,7 @@ test('MainSequence login uses shared auth while native Claude credentials remain
   const ui=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
   await ui.press({key:'login'}); await clock.settle();
   expect(await ui.find({type:'Text',text:'fixture@example.test'})).toBeDefined();
-  await ui.press({key:'toggle-connection-actions'}); await ui.press({key:'refresh-token'}); await clock.settle();
+  await ui.press({key:'tab-Settings'}); await ui.press({key:'toggle-connection-actions'}); await ui.press({key:'refresh-token'}); await clock.settle();
   expect(requests.filter(r=>r.scope==='accounts')).toHaveLength(0);
   expect(requests.filter(r=>r.scope==='devtools'&&r.request.action==='login')).toHaveLength(1);
   await ui.unmount();
@@ -233,15 +272,17 @@ test('Agents opens a bound session and fills the native draft without submitting
   expect(prompts).toHaveLength(0);
   preparationPending=false;releaseReadiness();await clock.settle();
   expect(prompts,JSON.stringify({requests,toasts,tools})).toHaveLength(0);
-  expect(draft,JSON.stringify({requests,toasts,tools})).toBe(`/ms agent ${uid} My question`);
+  expect(draft,JSON.stringify({requests,toasts,tools})).toBe('/ms @research-assistant My question');
   expect(requests.filter(r=>r.action==='agent-session')).toHaveLength(1);
   expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(0);
   expect(tools.filter(t=>t.name.includes('introduce'))).toHaveLength(0);
-  const reply=await $.command.run({command:'ms',args:`agent ${uid} Explain my portfolio risk`});
+  const reply=await $.command.run({command:'ms',args:'@research-assistant Explain my portfolio risk'});
   expect(JSON.stringify(reply)).toContain('I explain portfolio risk');
+  expect(JSON.stringify(await $.command.run({command:'ms',args:`agent ${uid} Explain my portfolio risk`}))).toContain('I explain portfolio risk');
   const footer=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});
   expect(await footer.find({type:'Text',text:'Existing composer content'})).toBeDefined();
   expect(await footer.find({key:'agent-chat-activity'})).toBeDefined();
+  expect(await footer.find({key:'agent-switch'})).toBeDefined();
   expect(await footer.find({key:`agent-icon-${uid}-24`})).toBeDefined();
   const output=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'CommandOutput',props:{command:'ms',text:`mainsequence: ${reply.text}`}});
   expect(await output.find({key:`agent-icon-${uid}-20`})).toBeDefined();
@@ -251,7 +292,7 @@ test('Agents opens a bound session and fills the native draft without submitting
     expect(await row.find({key:`agent-icon-${uid}-20`})).toBeDefined();await row.unmount();
   }
   await output.unmount();await footer.unmount();
-  expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(1);
+  expect(requests.filter(r=>r.action==='agent-send')).toHaveLength(2);
   expect(requests.find(r=>r.action==='agent-send').waitForReady).toBe(true);
   expect(requests.find(r=>r.action==='agent-send').sessionUid).toBe(id(3));
   expect(requests.find(r=>r.action==='agent-send').message).toBe('Explain my portfolio risk');
@@ -278,4 +319,28 @@ test('Desktop footer survives pane unmount and reopens MainSequence while retain
   await footer.press({ key: 'mainsequence-launcher' });
   expect(opened).toHaveLength(2); expect(opened[1].id).toBe('mainsequence');
   await footer.unmount();
+});
+
+test('Ontology native startup adds both distinct repositories with exact saved paths', async ($, on) => {
+  const clock=mock.clock(on,{now:1000});mock.env(on,{HOME:'/fixture/user'});
+  const root='/fixture/project/Ontology',id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+  const workspace={root,backend:'https://fixture.example',name:'Ontology',projectUid:id(1),environmentUid:id(2),repositories:[
+    {repositoryUid:id(3),branchUid:id(4),name:'Ontology',branch:'main',path:'/fixture/project/repositories/Ontology'},
+    {repositoryUid:id(7),branchUid:id(8),name:'OntologyBackend',branch:'main',path:'/fixture/project/repositories/OntologyBackend'}]};
+  const saved={root,backend:workspace.backend,projectUid:id(1),environmentUid:id(2),repositories:workspace.repositories.map(({repositoryUid,branchUid,branch,path})=>({repositoryUid,branchUid,branch,path}))};
+  on('store.get',($,e)=>({value:e.key===`project-workspace:${root}`?saved:undefined}));
+  on('session.cwd',()=>({value:root}));on('session.id',()=>({value:'ontology-membership-test'}));
+  on('session.version',()=>({value:{version:'2.1.295'}}));on('session.start',($,e)=>({cwd:e.cwd}));
+  on('ui.open',()=>({value:undefined}));on('command.register',()=>({value:{command:'ms'}}));
+  const added=[];
+  on('command.run',{command:'add-dir'},($,e)=>{added.push(e.args);return {text:`Added ${e.args} as a working directory for this session`};});
+  on('process.spawn',async function*($,e){
+    const envelope=JSON.parse(e.input),q=envelope.request.request;
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data:q.action==='read-project-workspace'?workspace:{}}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:root,surface:'desktop',isInteractive:true});await clock.settle();
+  const ui=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  expect(added).toEqual(workspace.repositories.map(r=>r.path));
+  expect(await ui.find({type:'Text',text:'Ontology: 2 repository checkouts attached to this Claude session.'})).toBeDefined();await ui.unmount();
 });

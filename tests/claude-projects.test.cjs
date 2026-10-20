@@ -2,9 +2,33 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const os = require('node:os');
+const cp = require('node:child_process');
 const { createNodeHost } = require('@dev-mainsequence/devtools');
 const { createClaudeProjectActions } = require('../dist/hosts/claudeProjectActions.js');
-const os = require('node:os');
+
+test('opening a prepared Claude workspace validates both memberships and their current branches', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-org-project-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const container = await fs.realpath(temp), root = path.join(container, 'Ontology');await fs.mkdir(root);
+  const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+  const repositories = [];
+  for (const [i,name] of ['Ontology','OntologyBackend'].entries()) {
+    const repo=path.join(container,'repositories',name);await fs.mkdir(repo,{recursive:true});
+    cp.execFileSync('git',['init','-b','main'],{cwd:repo,stdio:'ignore'});
+    repositories.push({repositoryUid:id(i+10),branchUid:id(i+20),name,branch:'main',path:repo});
+  }
+  const manifest = {schemaVersion:2,status:'ready',backend:'https://fixture.example',projectUid:id(1),environmentUid:id(2),root,name:'Ontology',repositories};
+  for(const dir of [container,root])await fs.writeFile(path.join(dir,'.mainsequence-project.json'),JSON.stringify(manifest));
+  const opened=[],host={...createNodeHost(),openBrowser:async url=>{opened.push(url);return true;}},actions=createClaudeProjectActions({host});
+  const request={action:'open-project-workspace',root,backend:manifest.backend,projectUid:id(1),environmentUid:id(2)};
+  const read=await actions.dispatch({...request,action:'read-project-workspace'});assert.equal(read.status,'success',JSON.stringify(read));assert.equal(read.data.repositories.length,2);assert.equal(opened.length,0);
+  assert.equal((await actions.dispatch(request)).status,'success');
+  const url=new URL(opened[0]);assert.equal(url.searchParams.get('folder'),root);assert.equal(path.basename(root),'Ontology');assert.equal(url.searchParams.has('q'),false);
+  assert.equal((await actions.dispatch({...request,projectUid:id(9)})).status,'failure');assert.equal(opened.length,1);
+  cp.execFileSync('git',['symbolic-ref','HEAD','refs/heads/wrong'],{cwd:repositories[1].path});
+  const wrongBranch=await actions.dispatch(request);assert.equal(wrongBranch.status,'failure');assert.match(wrongBranch.summary,/OntologyBackend.*main/);assert.equal(opened.length,1);
+});
 async function localProject(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-native-project-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

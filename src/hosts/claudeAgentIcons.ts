@@ -1,5 +1,6 @@
 import { ActionResult, HostServices, ToolingError, createSessionService, requireBackend } from '@dev-mainsequence/devtools';
 import { claudeFailure } from './claudeProtocol';
+import { shrinkPng } from './claudePng';
 
 type Icon = { rendering: 'mask' | 'color'; imageRendering: 'auto' | 'pixelated'; url: string;
   poses: Record<string, string>; toolPoses: Record<string, string> };
@@ -46,7 +47,20 @@ export function nativeAgentIcon(bytes: Buffer, mime: string, icon: Pick<Icon, 'r
       ':root{color:#202020}@media(prefers-color-scheme:dark){:root{color:#eeeeee}}')
     : wrap(image(data), icon.imageRendering === 'pixelated' ? 'image{image-rendering:pixelated}' : '');
   const stillSource = paint(still);
-  if (stillSource.length > 131072) return null;
+  const oversized = stillSource.length > 131072;
+  // Claude draws icons at 20-32 px; a large PNG (Command Center allows 512 KiB and 512 px) is
+  // shrunk to at most 128 px instead of being dropped, and a heavy static one is shrunk anyway
+  // because its markup crosses into Claude on every redraw. Animated icons keep their frames
+  // while they fit; shrinking would cost the animation.
+  if (mime === 'image/png' && (oversized || (!animated && still.length > 32768))) {
+    for (const size of [128, 96, 64, 48]) {
+      const small = shrinkPng(still, size, icon.imageRendering === 'pixelated');
+      if (!small) break;
+      const fitted = paint(small);
+      if (fitted.length <= 131072) return { source: fitted, stillSource: fitted, animated: false };
+    }
+  }
+  if (oversized) return null;
   const source = animated ? wrap(image(bytes, 'moving') + image(still, 'still'),
     `${icon.imageRendering === 'pixelated' ? 'image{image-rendering:pixelated}' : ''}.still{display:none}@media(prefers-reduced-motion:reduce){.moving{display:none}.still{display:inline}}`) : stillSource;
   return { source: source.length <= 131072 ? source : stillSource, stillSource,

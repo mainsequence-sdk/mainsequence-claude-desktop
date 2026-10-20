@@ -30,7 +30,7 @@ export async function main(): Promise<void> {
     const host = createNodeHost(progress);
     // Reveal is a native OS operation. Changing the Code session's root is a separate host capability.
     host.openFolder = async root => {
-      if (!path.isAbsolute(root) || !(await fs.stat(root)).isDirectory()) throw new ToolingError('INVALID_REQUEST', 'Select an existing project folder.');
+      if (!path.isAbsolute(root) || !(await fs.stat(root)).isDirectory()) throw new ToolingError('INVALID_REQUEST', 'Select an existing repository folder.');
       const executable = process.platform === 'darwin' ? '/usr/bin/open' : 'xdg-open';
       const result = await host.runProcess({ executable, args: [root], cwd: root, signal: controller.signal, timeoutMs: 15_000 });
       if (result.exitCode !== 0) throw new ToolingError('PROCESS_FAILED', 'The system folder viewer could not open.');
@@ -39,7 +39,7 @@ export async function main(): Promise<void> {
     const build = await fs.readFile(path.join(__dirname, '..', 'build-info.json'), 'utf8').then(text => JSON.parse(text)).catch(() => ({}));
     const projects = createClaudeProjectActions({ host, signal: controller.signal, pluginRoot: path.resolve(__dirname, '..'), version: build.version,
       pickFolder: process.platform === 'darwin' ? async () => {
-        const result = await host.runProcess({ executable: '/usr/bin/osascript', args: ['-e', 'POSIX path of (choose folder with prompt "Choose a MainSequence projects folder")'], cwd: process.cwd(), signal: controller.signal, timeoutMs: 120_000 });
+        const result = await host.runProcess({ executable: '/usr/bin/osascript', args: ['-e', 'POSIX path of (choose folder with prompt "Choose a MainSequence repositories folder")'], cwd: process.cwd(), signal: controller.signal, timeoutMs: 120_000 });
         return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
       } : undefined });
     const result = await executeClaudeEnvelope(envelope, { devtools: async request =>

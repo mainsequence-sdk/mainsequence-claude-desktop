@@ -34,6 +34,43 @@ test('native APNG preserves its frames and supplies exact frame zero for history
   assert.throws(() => agentIconStill(bytes.subarray(0, 65)));
 });
 
+test('a large static PNG, like a 512 px Command Center icon, is shrunk to fit instead of dropped', () => {
+  const { decodePng, encodePng } = require('../dist/hosts/claudePng');
+  // 512x512 RGBA pixel art in 8 px cells with per-pixel noise in the alpha channel: about 1 MB raw, well over the limit once embedded.
+  const pixels = Buffer.alloc(512 * 512 * 4);
+  for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
+    const i = (y * 512 + x) * 4, cell = ((x >> 3) * 31 + (y >> 3) * 17) & 255;
+    pixels[i] = cell; pixels[i + 1] = 255 - cell; pixels[i + 2] = (cell * 7) & 255; pixels[i + 3] = 200 + ((x * 13 + y * 29) % 56);
+  }
+  const big = encodePng({ width: 512, height: 512, pixels });
+  assert.ok(Buffer.from(big).toString('base64').length > 131072, 'fixture exceeds the native limit');
+  const image = nativeAgentIcon(big, 'image/png', { rendering: 'color', imageRendering: 'pixelated' });
+  assert.ok(image, 'the icon is kept'); assert.equal(image.animated, false); assert.ok(image.source.length <= 131072);
+  const embedded = Buffer.from(/base64,([^"]+)"/.exec(image.source)[1], 'base64'), decoded = decodePng(embedded);
+  assert.ok(decoded.width <= 128 && decoded.height <= 128, `shrunk to ${decoded.width}x${decoded.height}`);
+  // Nearest-pixel scaling keeps pixel-art colours exact.
+  assert.deepEqual([...decoded.pixels.subarray(0, 3)], [...pixels.subarray(0, 3)]);
+  // A heavy static PNG that would fit is still shrunk; a small one is not.
+  // zlib output differs between Node versions: pick the first square whose PNG is over 32 KiB yet still fits the limit.
+  let heavy;
+  for (let side = 256; side >= 136 && !heavy; side -= 8) {
+    const crop = Buffer.alloc(side * side * 4);
+    for (let y = 0; y < side; y++) pixels.copy(crop, y * side * 4, y * 512 * 4, (y * 512 + side) * 4);
+    const candidate = encodePng({ width: side, height: side, pixels: crop });
+    if (candidate.length > 32768 && Buffer.from(candidate).toString('base64').length < 120000) heavy = candidate;
+  }
+  assert.ok(heavy, 'a heavy PNG that fits the limit exists');
+  const shrunk = nativeAgentIcon(heavy, 'image/png', { rendering: 'color', imageRendering: 'pixelated' });
+  assert.ok(decodePng(Buffer.from(/base64,([^"]+)"/.exec(shrunk.source)[1], 'base64')).width <= 128);
+  // Small icons are embedded unchanged.
+  const small = nativeAgentIcon(animatedIcon(), 'image/png', icon);
+  assert.ok(small.source.includes(animatedIcon().toString('base64')));
+  // Unsupported or corrupt PNGs still draw nothing.
+  const corrupt = Buffer.from(big), idat = corrupt.indexOf('IDAT');
+  corrupt.fill(1, idat + 4, idat + 4 + corrupt.readUInt32BE(idat - 4));
+  assert.equal(nativeAgentIcon(corrupt, 'image/png', icon), null);
+});
+
 test('native size limits gracefully retain a still and oversized static icons fall back', () => {
   const image = nativeAgentIcon(animatedIcon(110000), 'image/png', icon);
   assert.equal(image.animated, false); assert.equal(image.source, image.stillSource);
