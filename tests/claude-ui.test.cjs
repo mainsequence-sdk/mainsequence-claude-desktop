@@ -26,7 +26,7 @@ function fixture(options = {}) {
   const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
   const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
-    if (type === 'Select') assert.ok(props.options.length);
+    if (type === 'Select') assert.ok(props.options.length > 0 && props.options.length <= 64, 'Native Select supports 1–64 options');
     return { type, props };
   }]));
   let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1';
@@ -86,7 +86,7 @@ function fixture(options = {}) {
 test('one native pane has six coordinated sections and no above-prompt launcher', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start', {surface:'desktop'});
   assert.equal(f.calls[0].command.name, 'ms');
-  assert.deepEqual(f.calls.find(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence' });
+  assert.equal(f.calls.some(c => c.pane), false, 'startup must not open a pane');
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
   assert.deepEqual(band, { type: 'engine', ref: 1 });
   for (const tab of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity', 'General']) {
@@ -96,6 +96,117 @@ test('one native pane has six coordinated sections and no above-prompt launcher'
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'Pane', requestId: 'mainsequence', props: {} }), { type: 'engine', ref: 1 });
   await f.emit('command.run', { command: 'ms' }); assert.equal(f.calls.at(-1).pane.id, 'mainsequence');
+});
+
+test('restored panes initialize without session.start and repeated startup never opens the pane', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on);
+  assert.match(JSON.stringify(await f.pane()), /Loading MainSequence/);
+  await flush();
+  assert.ok(f.find(await f.pane(), 'auth-status'));
+  await f.emit('session.start', {surface:'desktop'});
+  await f.emit('session.start', {surface:'desktop'});
+  assert.equal(f.calls.filter(c => c.command).length, 1);
+  assert.equal(f.calls.some(c => c.pane), false);
+});
+
+test('render faults show a retry screen and recover without replaying actions', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start');
+  await f.press('tab-MCP');
+  const requests = f.calls.filter(c => c.request).length;
+  await f.emit('ui.fault', {surface:'desktop', component:'Pane', requestId:'mainsequence', phase:'draw', element:'Svg'});
+  assert.ok(f.find(await f.pane(), 'retry-pane'));
+  await f.press('retry-pane');
+  assert.ok(f.find(await f.pane(), 'mcp-environments'));
+  assert.equal(f.calls.filter(c => c.request).length, requests);
+  const resolve = f.$.ui.resolve;
+  f.$.ui.resolve = () => ({...resolve(), Svg() { throw new Error('private-render-error'); }});
+  assert.ok(f.find(await f.pane(), 'retry-pane'));
+  assert.doesNotMatch(JSON.stringify(await f.pane()), /private-render-error/);
+  f.$.ui.resolve = resolve;
+  await f.press('retry-pane');
+  assert.ok(f.find(await f.pane(), 'tab-MCP'));
+});
+
+test('failed startup can be retried without leaving an empty pane', async () => {
+  const { register } = await load(); const f = fixture(); register(f.on);
+  const get = f.$.store.get;
+  f.$.store.get = async () => { throw new Error('private-store-error'); };
+  await f.emit('session.start', {surface:'desktop'});
+  assert.ok(f.find(await f.pane(), 'retry-pane'));
+  f.$.store.get = get;
+  await f.press('retry-pane');
+  assert.ok(f.find(await f.pane(), 'auth-status'));
+  assert.equal(f.calls.some(c => c.pane), false);
+});
+
+async function setupFixture() {
+  const { register } = await load();
+  const f = fixture({ respond: d => success(d.request.action,
+    d.request.action === 'repositories' ? ['a', 'b'].map(uid => ({uid, code_repository_name: `Repo ${uid}`, branches:[{repository_branch:'main'},{repository_branch:'develop'}]}))
+      : d.request.action === 'local-repositories' ? [] : d.request.action === 'setup' ? {root:'/repos/a'} : {}) });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Projects');
+  f.find(await f.pane(), 'remote-repository').props.onSelect('a'); await flush();
+  f.find(await f.pane(), 'repository-branch').props.onSelect('main'); await flush();
+  const original = f.$.process.spawn;
+  let finish;
+  f.$.process.spawn = input => {
+    const envelope = JSON.parse(input.input);
+    if (envelope.request.request.action !== 'setup') return original(input);
+    f.calls.push(envelope);
+    let done; const result = new Promise(resolve => { done = resolve; });
+    let complete; const gate = new Promise(resolve => { complete = resolve; });
+    const stream = (async function* () {
+      yield {stream:'stdout', text:JSON.stringify({type:'progress', id:envelope.id, message:'Cloning Repo a…'})+'\n'};
+      const answer = await gate;
+      yield {stream:'stdout', text:JSON.stringify({type:'result', id:envelope.id, result:answer})+'\n'};
+      done({code:0,signal:null}); return {code:0,signal:null};
+    })();
+    stream.result = result;
+    finish = complete;
+    stream.return = async () => { done({code:null,signal:'SIGTERM'}); complete({schemaVersion:1,action:'setup',status:'cancelled',summary:'Setup cancelled.'}); return {done:true}; };
+    return stream;
+  };
+  f.finishSetup = answer => finish(answer);
+  return f;
+}
+
+test('setup displays streamed progress, prevents duplicates, and retains target-specific status across navigation', async () => {
+  const f = await setupFixture();
+  // Retain the callback too: a stale click must not bypass the operation guard.
+  const setup = f.find(await f.pane(), 'setup').props.onPress;
+  await f.press('setup'); await f.press('confirm-action');
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /Cloning Repo a/);
+  assert.equal(f.find(tree, 'setup').props.disabled, true);
+  assert.equal(f.find(tree, 'setup-install').props.disabled, true);
+  setup(); await flush(); assert.equal(f.find(await f.pane(), 'confirm-action'), undefined);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'setup').length, 1);
+  await f.press('tab-General'); assert.match(JSON.stringify(await f.pane()), /Cloning Repo a/);
+  await f.press('tab-Projects');
+  f.find(await f.pane(), 'remote-repository').props.onSelect('b'); await flush();
+  assert.doesNotMatch(JSON.stringify(await f.pane()), /Cloning Repo a/);
+  f.find(await f.pane(), 'remote-repository').props.onSelect('a'); await flush();
+  f.find(await f.pane(), 'repository-branch').props.onSelect('main'); await flush();
+  assert.match(JSON.stringify(await f.pane()), /Cloning Repo a/);
+  f.finishSetup(success('setup',{root:'/repos/a'})); await flush();
+  assert.match(JSON.stringify(await f.pane()), /Local setup completed/);
+  assert.ok(f.find(await f.pane(), 'setup-open-folder'));
+  assert.equal(f.find(await f.pane(), 'cancel-setup'), undefined);
+});
+
+test('setup failure and cancellation release controls and never retry the operation automatically', async () => {
+  for (const cancelled of [false, true]) {
+    const f = await setupFixture(); await f.press('setup-install'); await f.press('confirm-action');
+    if (cancelled) await f.press('cancel-setup');
+    else {
+      f.finishSetup({schemaVersion:1,action:'setup',status:'failure',summary:'Dependency installation failed.',effects:{state:'partial-or-uncertain',message:'The cloned folder remains.'}});
+      await flush();
+    }
+    const tree = await f.pane();
+    assert.match(JSON.stringify(tree), cancelled ? /Setup cancelled/ : /The cloned folder remains/);
+    assert.equal(f.find(tree, 'setup').props.disabled, false);
+    assert.equal(f.calls.filter(c => c.request?.request.action === 'setup').length, 1);
+  }
 });
 
 test('Desktop footer launcher survives pane closure and preserves native controls without changing settings', async () => {
@@ -380,6 +491,30 @@ test('late tool registration cannot replace the current environment tool map', a
   assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').at(-1).request.request.environmentUid, 'b');
 });
 
+test('slow MCP tool reads cannot block discovery or replace another selected MCP catalog', async () => {
+  const { register } = await load();
+  const f = fixture({respond: d => {
+    const q = d.request;
+    const connections = ['a','b'].map(uid => ({backend:'https://api.main-sequence.app',resource_release_uid:uid,name:`MCP ${uid}`,mcp_connection:{organization_environment_uid:'env'}}));
+    return success(q.action, q.action === 'mcp-environments' ? [{uid:'env',name:'Research'}]
+      : ['mcp-list','mcp-discover'].includes(q.action) ? connections
+        : q.action === 'mcp-tools' ? {tools:[{name:`lookup_${q.releaseUid}`,inputSchema:{type:'object'}}]} : {});
+  }});
+  register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
+  let finish = delayRequest(f, 'mcp-tools');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  assert.ok(f.find(await f.pane(), 'mcp-discovered'), 'directory loads while tool registration waits');
+  // Let both registration reads finish before exercising explicit tool reads.
+  finish(); await flush(); finish(); await flush();
+  f.find(await f.pane(), 'mcp-connected').props.onSelect('a'); await flush();
+  await f.press('mcp-tools');
+  f.find(await f.pane(), 'mcp-connected').props.onSelect('b'); await flush();
+  finish(); await flush();
+  assert.equal(f.find(await f.pane(), 'mcp-tool'), undefined, 'late A tools are not displayed for B');
+  await f.press('mcp-tools'); finish(); await flush();
+  assert.equal(f.find(await f.pane(), 'mcp-tool').props.options[1].value, 'lookup_b');
+});
+
 const agentId = n => `00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
 const agentEnvironment=agentId(1), agentUid=agentId(2), agentSession=agentId(3), agentTask=agentId(4), secondUid=agentId(6), secondSession=agentId(7);
 async function agentFixture(options={}) {
@@ -625,4 +760,22 @@ test('agent defaults appear beneath the name without exposing or changing provid
  assert.match(JSON.stringify(f.find(await f.pane(),`agent-defaults-${agentUid}`)),/claude-sonnet-test · high/);
  const missing=await agentFixture();assert.match(JSON.stringify(missing.find(await missing.pane(),`agent-defaults-${agentUid}`)),/Not configured · Not configured · Not configured/);
  assert.equal(f.calls.some(c=>c.request?.request.action==='agent-send'||c.request?.request.action==='agent-session'),false);
+});
+
+
+test('paged native selectors retain every catalog entry, selection and valid bounds', async () => {
+  const { selectPage } = await import(pathToFileURL(path.resolve(__dirname, '../manifests/claude/hooks/model.mjs')).href);
+  for (const count of [0, 1, 63, 64, 65, 70, 130]) {
+    const options = Array.from({length:count}, (_, i) => ({value:`item-${i}`,label:`Item ${i}`}));
+    const seen = [];
+    for (let page = 0; page < Math.ceil(count/63); page++) {
+      const result = selectPage(options, 'item-0', page);
+      assert.ok(result.entries.length <= 63);
+      assert.equal(result.selected.value, 'item-0');
+      seen.push(...result.entries);
+    }
+    assert.deepEqual(seen, options);
+    assert.equal(selectPage(options, '', 100).page, Math.max(0, Math.ceil(count/63)-1));
+  }
+  assert.equal(selectPage([{value:'a'},{value:'a'},{value:null}], '', 0).total, 1);
 });

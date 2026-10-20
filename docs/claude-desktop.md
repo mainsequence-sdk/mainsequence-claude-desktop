@@ -20,8 +20,8 @@ MainSequence from `mainsequence-desktop`. The catalog supplies a versioned ZIP w
 a pinned SHA-256. A local build remains unpublished until the release workflow runs.
 You can also upload a built ZIP using **Add plugin → Upload plugin**.
 
-Enable the plugin in a local Code session and start a fresh session. It opens its
-native pane without requesting keyboard focus. The **MainSequence** button in
+Enable the plugin in a local Code session. Click **MainSequence** to open its
+native pane; startup and plugin reloads do not automatically open it. The button in
 the session footer remains available when the pane is closed. Click the
 button to reopen and focus the same pane without typing a command or submitting
 a message. `/ms` remains an optional fallback. The launcher preserves existing
@@ -96,6 +96,12 @@ session restores it. Changing it scopes discovery, connected MCPs, tool inspecti
 and Claude tool calls to that environment. Labels and tool confirmations show the
 environment name. Other environments' connections stay saved.
 
+MCP discovery runs alongside connected-tool registration. Select a connected MCP
+and choose **View tools** to browse its catalog. Large selectors have Previous/Next
+controls, keeping all entries accessible within Claude's 64-option native limit.
+Selecting a tool displays its description. Late results from another MCP cannot
+replace the selected catalog.
+
 The shared devtools API validates the current release environment before exchanging
 credentials or calling an MCP. Switching environments clears pending confirmations,
 cancels outstanding MCP workers, and immediately denies stale registered tools. An
@@ -112,6 +118,12 @@ Activity shows actual operations from the session, their running/completed/faile
 cancelled status, progress text, outcome and partial-effect warnings. Result details
 are collapsed. Cancellation stops the worker stream; it does not promise rollback.
 When there are no operations, the empty state links to Projects and MCP.
+
+Local setup shows its current progress beside the repository controls immediately
+after confirmation. Setup buttons stay disabled for that destination while work
+runs. You can cancel there, follow progress from another section, and open or manage
+the resulting folder on completion. Failure and cancellation release the controls;
+retry is explicit and never replays automatically.
 
 The browser preview used illustrative operations and setup steps. Production uses
 real worker progress messages: no fabricated percentages, step counts or sample

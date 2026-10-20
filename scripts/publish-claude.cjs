@@ -65,7 +65,14 @@ try {
     devtools: lock.version, archiveSha256: catalog.plugins[0].source.sha256, sourceRevision: revision }, null, 2) + '\n');
   run('git', ['add', '--', catalogFile, 'mainsequence-distribution.json'], checkout);
   if (run('git', ['diff', '--cached', '--name-only'], checkout, true)) {
-    run('git', ['-c', 'user.name=MainSequence Release', '-c', 'user.email=release@mainsequence.io', 'commit', '-m', `Publish Claude Desktop ${pkg.version} catalog`], checkout);
+    // Carry the source checkout's configured identity into the temporary clone.
+    // CI without a configured identity retains the established release defaults.
+    const identity = [];
+    for (const [key, fallback] of [['user.name', 'MainSequence Release'], ['user.email', 'release@mainsequence.io']]) {
+      const configured = spawnSync('git', ['config', '--get', key], { cwd: root, encoding: 'utf8' });
+      identity.push('-c', `${key}=${configured.stdout?.trim() || fallback}`);
+    }
+    run('git', [...identity, 'commit', '-m', `Publish Claude Desktop ${pkg.version} catalog\n\nCo-authored-by: Codex <codex@openai.com>`], checkout);
     run('git', ['-c', 'credential.helper=!gh auth git-credential', 'push', 'origin', `HEAD:${remote.defaultBranchRef.name}`], checkout);
   }
   console.log(`Published https://github.com/${repository}/releases/tag/${tag}`);
