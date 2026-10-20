@@ -21,10 +21,61 @@ const flush = async () => {
 };
 const success = (action, data) => ({ schemaVersion: 1, action, status: 'success', summary: `${action} completed.`, data });
 
+const projectId = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+function projectFixture() {
+  const project = { uid: projectId(1), name: 'Rates research', description: 'Price curves', organization_environment_uid: projectId(2), code_repository_branch_uids: [projectId(4),projectId(5)] };
+  return fixture({ respond: ({request:q}) => {
+    let data = {};
+    if (q.action === 'mcp-environments') data = [{uid:projectId(2),name:'Research'},{uid:projectId(9),name:'Production'}];
+    if (q.action === 'mcp-list' || q.action === 'mcp-discover') data = [];
+    if (q.action === 'organization-projects') data = { results:[project],count:30,limit:25,offset:q.offset };
+    if (q.action === 'organization-project') data = { project,branches:['main','feature/risk'].map((branch,index)=>({uid:projectId(4+index),code_repository_uid:projectId(3),code_repository_name:'Pricing',repository_branch:branch,is_initialized:true})) };
+    if (['organization-project-setup','read-project-workspace'].includes(q.action)) data = {root:'/repos/project-workspace',backend:'https://api.main-sequence.app',name:project.name,projectUid:project.uid,environmentUid:projectId(2),repositories:[{repositoryUid:projectId(3),branchUid:projectId(4),name:'Pricing',path:'/repos/repositories/Pricing',branch:'main'},{repositoryUid:projectId(7),branchUid:projectId(5),name:'Backend',path:'/repos/repositories/Backend',branch:'main'}]};
+    return success(q.action,data);
+  }});
+}
+async function selectFixtureProject(f) {
+  await f.press('tab-Projects');f.find(await f.pane(),'mcp-environment').props.onSelect(projectId(2));await flush();
+  await f.press(`project-${projectId(1)}`);
+}
+
+test('MainSequence Projects displays real memberships, pagination and exact resource links',async()=>{
+  const {register}=await load();const f=projectFixture();register(f.on);await f.emit('session.start');await selectFixtureProject(f);
+  let tree=await f.pane();assert.ok(f.find(tree,`project-repository-${projectId(3)}`));assert.ok(f.find(tree,`project-branch-${projectId(5)}`));
+  assert.equal(f.calls.some(call=>call.request?.request.action==='repositories'),false);
+  await f.press(`project-branch-${projectId(5)}`);
+  const link=f.calls.find(call=>call.request?.request.action==='organization-project-link').request.request;
+  assert.equal(link.branchUid,projectId(5));assert.equal(link.environmentUid,projectId(2));assert.equal(link.projectUid,projectId(1));
+  await f.press('projects-back');await f.press('projects-next');assert.equal(f.calls.filter(call=>call.request?.request.action==='organization-projects').at(-1).request.request.offset,25);
+});
+test('project setup confirms the selected project and opens its prepared Claude workspace without sending a prompt',async()=>{
+  const {register}=await load();const f=projectFixture();register(f.on);await f.emit('session.start');await selectFixtureProject(f);
+  await f.press('project-setup');assert.equal(f.calls.some(call=>call.request?.request.action==='organization-project-setup'),false);
+  await f.press('confirm-action');
+  const setup=f.calls.find(call=>call.request?.request.action==='organization-project-setup').request.request;
+  assert.equal(setup.projectUid,projectId(1));assert.equal(setup.environmentUid,projectId(2));assert.equal(setup.baseDir,'/fixture/home/mainsequence');
+  const open=f.calls.find(call=>call.request?.request.action==='open-project-workspace').request.request;
+  assert.equal(open.root,'/repos/project-workspace');assert.equal(open.projectUid,projectId(1));assert.equal(f.calls.some(call=>call.submitted),false);
+  await f.press('project-open-local');assert.equal(f.calls.filter(call=>call.request?.request.action==='organization-project-setup').length,1);
+});
+test('changing environment dismisses project setup and clears the previous workspace',async()=>{
+  const {register}=await load();const f=projectFixture();register(f.on);await f.emit('session.start');await selectFixtureProject(f);
+  await f.press('project-setup');f.find(await f.pane(),'mcp-environment').props.onSelect(projectId(9));await flush();
+  assert.equal(f.find(await f.pane(),'confirm-action'),undefined);assert.equal(f.find(await f.pane(),'project-open-local'),undefined);
+  assert.equal(f.calls.some(call=>call.request?.request.action==='organization-project-setup'),false);
+});
+test('a setup finishing after an environment change never opens the old workspace',async()=>{
+  const {register}=await load();const f=projectFixture();register(f.on);await f.emit('session.start');await selectFixtureProject(f);
+  const finish=delayRequest(f,'organization-project-setup');await f.press('project-setup');await f.press('confirm-action');
+  f.find(await f.pane(),'mcp-environment').props.onSelect(projectId(9));await flush();finish();await flush();
+  assert.equal(f.calls.some(call=>call.request?.request.action==='open-project-workspace'),false);
+  assert.equal(f.find(await f.pane(),'project-open-local'),undefined);
+});
+
 function fixture(options = {}) {
   const stores = options.stores || new Map();
   const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
-  const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg'].map(type => [type, props => {
+  const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg', 'Link'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
     if (type === 'Select') assert.ok(props.options.length);
     return { type, props };
@@ -37,12 +88,12 @@ function fixture(options = {}) {
   };
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
-    session: { cwd: async () => '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }) },
+    session: { cwd: async () => options.cwd || '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }) },
     store: { get: async key => stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined, set: async (key, value) => { stores.set(key, value); calls.push({ store: key, value }); } },
     prompt: { read: async () => ({ text: draft, cursor: draft.length }), fill: async value => { calls.push({ filled: value }); if (options.refuseFill) return { isFilled: false }; draft = value.text; return { isFilled: true, text: draft, cursor: draft.length }; }, submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
-    command: { register: async spec => { calls.push({ command: spec }); } },
+    command: { register: async spec => { calls.push({ command: spec }); }, run: async spec => { calls.push({runCommand:spec}); return options.commandResult ? options.commandResult(spec) : {text:`Added ${spec.args} as a working directory for this session`}; } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
-      toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool' },
+      toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool', status: value => { calls.push({ status: value }); } },
     tool: { register: async spec => { tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
     clock: { now: async () => 1000, after: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; } },
     env: { get: async key => env.get(key), set: async (key, value) => { value === undefined ? env.delete(key) : env.set(key, value); } },
@@ -52,7 +103,7 @@ function fixture(options = {}) {
       spawn: input => {
         assert.ok(input.input && !Object.hasOwn(input, 'stdin'));
         assert.deepEqual(input.argv, ['node', '/plugin/dist/claudeRunner.js']);
-        assert.equal(input.cwd, '/work/repo');
+        assert.equal(input.cwd, options.cwd || '/work/repo');
         const envelope = JSON.parse(input.input); calls.push(envelope);
         const result = options.respond ? options.respond(envelope.request) : success(envelope.request.request.action, {});
         const line = JSON.stringify({ type: 'result', id: envelope.id, result }) + '\n';
@@ -83,16 +134,21 @@ function fixture(options = {}) {
   return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; } };
 }
 
-test('one native pane has six coordinated sections and no above-prompt launcher', async () => {
+test('one native pane has five sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start', {surface:'desktop'});
   assert.equal(f.calls[0].command.name, 'ms');
   assert.deepEqual(f.calls.find(c => c.pane).pane, { id: 'mainsequence', title: 'MainSequence' });
   const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
-  assert.equal(band, undefined);
-  for (const tab of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity', 'General']) {
+  assert.deepEqual(band, { type: 'engine', ref: 1 });
+  for (const tab of ['Home', 'Code', 'Projects', 'Agents', 'Tools', 'Settings', 'Activity', 'Home']) {
     await f.press(`tab-${tab}`); const tree = await f.pane();
-    for (const name of ['General', 'Projects', 'Current-Project', 'MCP', 'Agents', 'Activity']) assert.equal(f.find(tree, `tab-${name}`).props.dimColor, name !== tab);
-    assert.equal(f.find(tree, 'more-tools'), undefined); assert.equal(f.find(tree, 'tab-Accounts'), undefined);
+    for (const name of ['Home', 'Code', 'Projects', 'Agents', 'Tools']) {
+      const button = f.find(tree, `tab-${name}`);
+      assert.equal(button.props.variant === 'primary', name === tab); assert.equal(!!button.props.dimColor, name !== tab);
+    }
+    assert.ok(f.find(tree, 'tab-Settings')); assert.ok(f.find(tree, 'tab-Activity')); assert.ok(f.find(tree, 'login'));
+    for (const name of ['General', 'Repositories', 'Current-Repository', 'MCP', 'Accounts']) assert.equal(f.find(tree, `tab-${name}`), undefined);
+    assert.equal(f.find(tree, 'more-tools'), undefined);
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'Pane', requestId: 'mainsequence', props: {} }), { type: 'engine', ref: 1 });
   await f.emit('command.run', { command: 'ms' }); assert.equal(f.calls.at(-1).pane.id, 'mainsequence');
@@ -110,7 +166,7 @@ test('Desktop footer launcher survives pane closure and preserves native control
     assert.match(JSON.stringify(tree), /MainSequence emblem/);
     const launcher = f.find(tree, 'mainsequence-launcher'); assert.ok(launcher);
     launcher.props.onPress(); await flush();
-    assert.deepEqual(f.calls.at(-1).pane, { id: 'mainsequence', title: 'MainSequence', focus: true });
+    assert.deepEqual(f.calls.at(-1).pane, { id: 'mainsequence', title: 'MainSequence', focus: true, closeOnEscape: true });
     await f.emit('ui.close', { id: 'mainsequence', origin: { kind: 'person' } });
     assert.ok(f.find(await footer(), 'mainsequence-launcher'));
   }
@@ -125,15 +181,17 @@ test('Desktop footer launcher survives pane closure and preserves native control
 
 test('native forms run structured actions without model APIs; mutating actions require explicit confirmation', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start');
-  await f.field('backend', 'https://backend.example'); await f.press('auth-status');
+  await f.press('tab-Settings'); await f.field('backend', 'https://backend.example'); await f.press('auth-status');
   assert.deepEqual(f.calls.find(c => c.request)?.request, { scope: 'devtools', request: { action: 'auth-status', backend: 'https://backend.example', check: true } });
-  await f.press('tab-Current-Project'); await f.field('root', '/work/selected');
+  await f.press('tab-Code'); await f.press('code-open-session'); await f.field('root', '/work/selected');
   const before = f.calls.filter(c => c.request).length;
   await f.press('sync'); assert.equal(f.calls.filter(c => c.request).length, before);
+  assert.ok(f.find(await f.pane(), 'tab-Code'), 'navigation stays visible while confirming');
   await f.press('dismiss-confirmation'); assert.equal(f.calls.filter(c => c.request).length, before);
   await f.press('sync'); await f.press('confirm-action');
   assert.deepEqual(f.calls.find(c => c.request?.request.action === 'sync').request.request, { action: 'sync', backend: 'https://backend.example', root: '/work/selected' });
   assert.equal(f.calls.filter(c => c.request).at(-1).request.request.action, 'status');
+  assert.deepEqual(f.calls.filter(c => 'status' in c).map(c => c.status).slice(0, 2), ['MainSequence: 1 running', undefined]);
   await f.press('tab-Activity'); const tree = JSON.stringify(await f.pane());
   assert.doesNotMatch(tree, /private-error-token/); assert.match(tree, /sync completed/);
 });
@@ -141,7 +199,7 @@ test('native forms run structured actions without model APIs; mutating actions r
 test('preview binds the exact container image and digest to the later write', async () => {
   const { register } = await load(); const f = fixture({ respond: domain => domain.request.action === 'devcontainer-preview'
     ? success('devcontainer-preview', { path: '/work/repo/.devcontainer/devcontainer.json', before: '{}', after: '{"image":"my:image"}', expectedDigest: 'digest-123' }) : success(domain.request.action, {}) });
-  register(f.on); await f.emit('session.start'); await f.press('tab-Current-Project'); await f.field('image', 'my:image');
+  register(f.on); await f.emit('session.start'); await f.press('tab-Code'); await f.press('code-open-session'); await f.press('toggle-code-container'); await f.field('image', 'my:image');
   await f.press('devcontainer-preview'); await f.press('confirm-action');
   const request = f.calls.filter(c => c.request).at(-1).request;
   assert.equal(request.scope, 'projects'); assert.equal(request.request.action, 'devcontainer-write');
@@ -156,7 +214,7 @@ test('MCP tools refresh from exact releases, use flattened hook arguments, and c
     if (domain.request.action === 'mcp-tools') return success('mcp-tools', { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] });
     return success(domain.request.action, {});
   } });
-  register(f.on); await f.emit('session.start'); await f.press('tab-MCP'); f.find(await f.pane(),'mcp-environment').props.onSelect('env-1'); await flush();
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools'); f.find(await f.pane(),'mcp-environment').props.onSelect('env-1'); await flush();
   assert.equal(f.tools.length, 1);
   const full = 'mcp__mainsequence__' + f.tools[0].name;
   await f.emit('tool.call', { tool: full, tool_use_id: 'call-1', query: 'hello' });
@@ -177,12 +235,16 @@ test('MCP labels and tool descriptions use the release UID when display names ar
       if (action === 'mcp-tools') return success(action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
       return success(action, {});
     } });
-    register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
+    register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
     f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
     const display = name === 'Named project' ? name : 'release-1';
-    const tree = await f.pane();
-    assert.equal(f.find(tree, 'mcp-connected').props.options.find(option => option.value === 'release-1').label, `${display} · Research`);
-    assert.equal(f.find(tree, 'mcp-discovered').props.options.find(option => option.value === 'release-1').label, 'Discovered project · Research');
+    let tree = await f.pane();
+    assert.equal(f.find(tree, 'mcp-open-release-1').props.label, display);
+    assert.match(JSON.stringify(f.find(tree, 'mcp-connected-release-1')), /1 tools/);
+    await f.press('tools-add'); tree = await f.pane();
+    assert.match(JSON.stringify(f.find(tree, 'mcp-discovered-release-1')), /Discovered project/);
+    assert.equal(f.find(tree, 'mcp-add-release-1'), undefined, 'an already connected release shows a badge, not Connect');
+    await f.press('tools-back');
     assert.equal(f.tools.length, 1);
     assert.equal(f.tools[0].description, `MainSequence ${display} [Research]: lookup`);
     const tool = 'mcp__mainsequence__' + f.tools[0].name;
@@ -207,21 +269,38 @@ test('older bundled engines show a guard instead of running worker operations', 
   assert.match(JSON.stringify(await f.pane()), /Update Claude Desktop/); assert.equal(f.calls.filter(c => c.request).length, 0);
 });
 
-test('repository selections do not display an unselected first item and branch choices come from the API', async () => {
-  const { register } = await load(); const f = fixture({ respond: domain => success(domain.request.action,
-    [{ uid: 'repo-1', code_repository_name: 'Real project', branches: [{ uid: 'branch-1', repository_branch: 'develop' }] }]) });
-  register(f.on); await f.emit('session.start'); await f.field('baseDir', '/repos'); await f.press('tab-Projects'); await f.press('list-repositories');
-  let choice = f.find(await f.pane(), 'remote-repository'); assert.equal(choice.props.value, '');
-  assert.equal(choice.props.options[1].label, 'Real project'); choice.props.onSelect('repo-1'); await flush();
-  choice = f.find(await f.pane(), 'repository-branch'); assert.equal(choice.props.value, 'develop');
-  choice.props.onSelect('develop'); await f.press('setup'); await f.press('confirm-action');
+test('repositories list remote and local copies as rows; setup opens a detail whose branch comes from the API', async () => {
+  const { register } = await load(); let cloned = false;
+  const f = fixture({ respond: domain => {
+    const action = domain.request.action;
+    if (action === 'repositories') return success(action, [{ uid: 'repo-1', code_repository_name: 'Real project', branches: [{ uid: 'branch-1', repository_branch: 'develop' }] },
+      { uid: 'repo-2', code_repository_name: 'Local project', branches: [{ uid: 'branch-2', repository_branch: 'main' }, { uid: 'branch-3', repository_branch: 'next' }] }]);
+    if (action === 'workspace-profile') return success(action, { organization: 'acme' });
+    if (action === 'local-repositories') return success(action, [{ name: 'Local project', path: '/repos/acme/projects/Local project-repo-2', repositoryUid: 'repo-2', isGitRepository: true },
+      ...(cloned ? [{ name: 'Real project', path: '/repos/acme/projects/Real project-repo-1', repositoryUid: 'repo-1', isGitRepository: true }] : [])]);
+    if (action === 'setup') cloned = true;
+    return success(action, {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  let tree = await f.pane();
+  assert.ok(f.find(tree, 'code-session'), 'the session folder is listed first');
+  assert.ok(f.find(tree, 'setup-repository-repo-1')); assert.equal(f.find(tree, 'open-repository-repo-1'), undefined);
+  assert.ok(f.find(tree, 'open-repository-repo-2')); assert.match(JSON.stringify(f.find(tree, 'repository-repo-2')), /Local/);
+  await f.press('code-filter-local'); tree = await f.pane(); assert.equal(f.find(tree, 'repository-repo-1'), undefined); assert.ok(f.find(tree, 'repository-repo-2'));
+  await f.press('code-filter-all'); await f.press('setup-repository-repo-1');
+  const choice = f.find(await f.pane(), 'repository-branch'); assert.equal(choice.props.value, 'develop');
+  assert.equal(f.find(await f.pane(), 'setup').props.variant, 'primary');
+  await f.press('setup'); await f.press('confirm-action');
   assert.equal(f.calls.find(c => c.request?.request.action === 'setup').request.request.branch, 'develop');
+  tree = await f.pane(); assert.ok(f.find(tree, 'sync'), 'after setup the detail shows the local repository');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'status').at(-1).request.request.root, '/repos/acme/projects/Real project-repo-1');
+  await f.press('code-back'); assert.ok(f.find(await f.pane(), 'open-repository-repo-1'));
 });
 
 test('SDK update is unavailable unless fresh status explicitly supports and offers an update', async () => {
   const { register } = await load(); let supported = false;
   const f = fixture({ respond: domain => success(domain.request.action, { updateAvailable: true, updateSupported: supported }) });
-  register(f.on); await f.emit('session.start'); await f.press('tab-Current-Project');
+  register(f.on); await f.emit('session.start'); await f.press('tab-Code'); await f.press('code-open-session');
   assert.equal(f.find(await f.pane(), 'update-sdk'), undefined); await f.press('sdk-status');
   assert.equal(f.find(await f.pane(), 'update-sdk'), undefined); supported = true; await f.press('sdk-status');
   assert.ok(f.find(await f.pane(), 'update-sdk')); await f.field('root', '/different');
@@ -241,8 +320,8 @@ test('MainSequence login, renewal and logout remain available without touching C
   f.$.env.set = f.$.fs.read = f.$.process.run = async () => assert.fail('Claude credential APIs must never be used');
   register(f.on); await f.emit('session.start');
   await f.press('login'); assert.match(JSON.stringify(await f.pane()), /fixture@example.test/);
-  await f.press('toggle-connection-actions'); await f.press('refresh-token');
-  await f.press('logout'); await f.press('confirm-action'); assert.ok(f.find(await f.pane(), 'login'));
+  await f.press('tab-Settings'); await f.press('toggle-connection-actions'); await f.press('refresh-token');
+  await f.press('logout'); await f.press('confirm-action'); assert.ok(f.find(await f.pane(), 'login')); assert.ok(f.find(await f.pane(), 'settings-login'));
   await f.press('save-settings'); const stored = f.calls.find(c => c.store).value;
   assert.deepEqual(stored.provider, saved.provider); assert.equal(stored.claudeExecutable, saved.claudeExecutable);
   for (const event of ['turn.start','turn.step','turn.complete','session.measure','classic.StopFailure']) assert.equal(f.hooks.some(h => h.event === event), false, event);
@@ -255,7 +334,7 @@ test('Activity has useful empty state navigation, real operation results and col
   const { register } = await load(); const f=fixture(); register(f.on); await f.emit('session.start');
   await f.press('tab-Activity'); assert.match(JSON.stringify(await f.pane()), /No activity yet/);
   await f.press('activity-mcp'); assert.ok(f.find(await f.pane(),'mcp-environments'));
-  await f.press('tab-General'); await f.press('auth-status'); await f.press('tab-Activity');
+  await f.press('tab-Settings'); await f.press('auth-status'); await f.press('tab-Activity');
   let tree=await f.pane(); assert.match(JSON.stringify(tree),/Check MainSequence connection/); assert.match(JSON.stringify(tree),/Completed/);
   assert.doesNotMatch(JSON.stringify(tree),/"type":"Code"/);
   await f.press('toggle-activity-' + f.calls.find(c=>c.request?.request.action==='auth-status').id); assert.match(JSON.stringify(await f.pane()),/"type":"Code"/);
@@ -265,7 +344,7 @@ test('startup reads existing MainSequence session without saving or rotating cre
   const {register}=await load(); const f=fixture({ respond: domain => success(domain.request.action, domain.request.action==='workspace-preferences' ? {backend:'https://saved.example',baseDir:'/existing/repos'} : {backend:'https://saved.example',authenticated:true,username:'saved@example.test'}) });
   register(f.on); await f.emit('session.start',{surface:'desktop'});
   for(const timer of f.timers.filter(t=>t.ms===0))timer.callback(); await flush();
-  const tree=await f.pane(); assert.match(JSON.stringify(tree),/saved@example.test/);
+  assert.match(JSON.stringify(await f.pane()),/saved@example.test/); await f.press('tab-Settings'); const tree=await f.pane();
   assert.equal(f.find(tree,'field-backend').props.value,'https://saved.example');
   assert.equal(f.find(tree,'field-baseDir').props.value,'/existing/repos');
   assert.equal(f.calls.some(c=>c.store),false);
@@ -275,7 +354,7 @@ test('startup reads existing MainSequence session without saving or rotating cre
 
 test('late repository results cannot restore a previous backend selection', async () => {
   const {register}=await load();const f=fixture();register(f.on);await f.emit('session.start');
-  await f.field('backend','https://old.example');
+  await f.press('tab-Settings'); await f.field('backend','https://old.example');
   const originalSpawn=f.$.process.spawn;let finish;
   f.$.process.spawn=input=>{
     const envelope=JSON.parse(input.input);
@@ -284,8 +363,8 @@ test('late repository results cannot restore a previous backend selection', asyn
     const stream=(async function*(){await gate;yield{stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:success('repositories',[{uid:'old',code_repository_name:'Old backend repository',branches:[]}])})+'\n'};})();
     stream.result=Promise.resolve({code:0});return stream;
   };
-  await f.press('tab-Projects');await f.press('tab-General');await f.field('backend','https://new.example');finish();await flush();
-  f.$.process.spawn=originalSpawn;await f.press('tab-Projects');
+  await f.press('tab-Code');await f.press('tab-Settings');await f.field('backend','https://new.example');finish();await flush();
+  f.$.process.spawn=originalSpawn;await f.press('tab-Code');
   assert.doesNotMatch(JSON.stringify(await f.pane()),/Old backend repository/);
 });
 
@@ -293,7 +372,7 @@ test('late repository results cannot restore a previous backend selection', asyn
 test('actual defaults are editable before initialization and usable without saving even when login fails',async()=>{
  const {register}=await load();
  const f=fixture({respond:domain=>domain.request.action==='workspace-preferences'?success('workspace-preferences',{backend:'https://api.main-sequence.app',baseDir:'/fixture/home/mainsequence'}):{schemaVersion:1,action:domain.request.action,status:'failure',summary:'No saved session'}});
- register(f.on);await f.emit('session.start',{surface:'desktop'});
+ register(f.on);await f.emit('session.start',{surface:'desktop'});await f.press('tab-Settings');
  let tree=await f.pane();assert.equal(f.find(tree,'field-backend').props.value,'https://api.main-sequence.app');assert.equal(f.find(tree,'field-backend').props.placeholder,'');assert.equal(f.find(tree,'field-baseDir').props.value,'/fixture/home/mainsequence');
  for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
  await f.press('auth-status');assert.equal(f.calls.filter(c=>c.request).at(-1).request.request.backend,'https://api.main-sequence.app');
@@ -301,7 +380,7 @@ test('actual defaults are editable before initialization and usable without savi
 });
 test('saved and user-edited settings win over late defaults, with unknown saved fields retained',async()=>{
  const {register}=await load();const saved={backend:'https://existing.example',baseDir:'/existing',provider:{name:'keep'}};
- const f=fixture({saved,respond:d=>success(d.request.action,{backend:'https://discovered.example',baseDir:'/discovered'})});register(f.on);await f.emit('session.start',{surface:'desktop'});
+ const f=fixture({saved,respond:d=>success(d.request.action,{backend:'https://discovered.example',baseDir:'/discovered'})});register(f.on);await f.emit('session.start',{surface:'desktop'});await f.press('tab-Settings');
  await f.field('baseDir','/edited');for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
  const tree=await f.pane();assert.equal(f.find(tree,'field-backend').props.value,saved.backend);assert.equal(f.find(tree,'field-baseDir').props.value,'/edited');
  assert.equal(f.calls.some(c=>c.store),false);await f.press('save-settings');assert.deepEqual(f.calls.find(c=>c.store==='settings').value.provider,saved.provider);
@@ -314,7 +393,7 @@ test('environment selection scopes tools and denies stale calls, including chang
   if(q.action==='mcp-list')return success(q.action,[{backend:'https://api.main-sequence.app',resource_release_uid:'release-'+q.environmentUid,name:'Same project',mcp_connection:{organization_environment_uid:q.environmentUid}}]);
   if(q.action==='mcp-tools')return success(q.action,{tools:[{name:'lookup',inputSchema:{type:'object'}}]});
   return success(q.action,{count:0,results:[]});
- }});register(f.on);await f.emit('session.start');await f.press('tab-MCP');
+ }});register(f.on);await f.emit('session.start');await f.press('tab-Tools');
  assert.equal(f.tools.length,0);
  f.find(await f.pane(),'mcp-environment').props.onSelect('research');await flush();
  const old='mcp__mainsequence__'+f.tools[0].name;
@@ -340,14 +419,14 @@ test('saved MCP environment restores only its tools in a new session without cha
   return success(q.action,{});
  }});register(f.on);await f.emit('session.start',{surface:'desktop'});for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
  assert.equal(f.tools.length,1);assert.match(f.tools[0].description,/Research/);assert.equal(f.calls.some(c=>c.store),false);
- assert.equal(f.find(await f.pane(),'field-backend').props.value,backend);
+ await f.press('tab-Settings');assert.equal(f.find(await f.pane(),'field-backend').props.value,backend);
 });
 
 test('a folder chosen during startup survives preferences resolution without saving', async () => {
   const { register } = await load();
   const f = fixture({ respond: d => success(d.request.action, d.request.action === 'pick-folder'
     ? { path: '/chosen/repos' } : { backend: 'https://default.example', baseDir: '/default/repos' }) });
-  register(f.on); await f.emit('session.start', { surface: 'desktop' });
+  register(f.on); await f.emit('session.start', { surface: 'desktop' }); await f.press('tab-Settings');
   await f.press('pick-base');
   for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback();
   await flush();
@@ -371,7 +450,7 @@ test('late tool registration cannot replace the current environment tool map', a
     if (spec.description.includes('[A]')) await new Promise(resolve => { finish = resolve; });
     return result;
   };
-  register(f.on); await f.emit('session.start'); await f.press('tab-MCP');
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
   f.find(await f.pane(), 'mcp-environment').props.onSelect('a'); await flush();
   f.find(await f.pane(), 'mcp-environment').props.onSelect('b'); await flush();
   finish(); await flush();
@@ -419,16 +498,76 @@ function delayRequest(f,action,uid) {
  };
  return ()=>{assert.ok(release,'request started');release();};
 }
+const iconImage = pose => ({ source: `<svg xmlns="http://www.w3.org/2000/svg"><text>${pose}</text></svg>`, stillSource: `<svg xmlns="http://www.w3.org/2000/svg"><text>${pose}-still</text></svg>`, animated: true });
+const iconResponse = r => r.action === 'agent-icons' ? success(r.action, { environmentUid: r.environmentUid, account: 'agent-user@example.test',
+  icons: Object.fromEntries(r.agentUids.map(uid => [uid, { images: { idle: iconImage('idle'), ...(r.includePoses ? { thinking: iconImage('thinking'), error: iconImage('error') } : {}) }, toolPoses: {}, posesLoaded: r.includePoses }])) }) : undefined;
+const svgNodes = tree => !tree || typeof tree !== 'object' ? [] : [...(tree.type === 'Svg' ? [tree] : []), ...(tree.props?.children || []).flatMap(svgNodes)];
+
+test('agent icons appear in list, details, composer activity and historical command output with shared caching', async () => {
+ const f = await agentFixture({ respond: iconResponse });
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.width === 20 && node.props.source.includes('idle')));
+ await f.press(`agent-details-${agentUid}`);
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.width === 32));
+ await f.press('agents-back'); await f.startTalk();
+ const mediaCalls = f.calls.filter(call => call.request?.request.action === 'agent-icons').length;
+ await f.startTalk(); assert.equal(f.calls.filter(call => call.request?.request.action === 'agent-icons').length, mediaCalls);
+ const finish = delayRequest(f, 'agent-send'), pending = f.send(); await flush();
+ let footer = await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} });
+ assert.ok(svgNodes(footer).some(node => node.props.source.includes('thinking') && node.props.isInteractive === false));
+ const row = await f.emit('ui.render', { component: 'ToolUse', surface: 'desktop', props: { tool: f.tool('send'), isRunning: true } });
+ assert.ok(svgNodes(row).some(node => node.props.source.includes('thinking')));
+ finish(); const reply = await pending;
+ const historical = await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'ms', text: reply.text } });
+ assert.ok(svgNodes(historical).some(node => node.props.source.includes('idle-still') && !node.props.isInteractive));
+ const prefixed = await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'ms', text: `mainsequence: ${reply.text}` } });
+ assert.ok(svgNodes(prefixed).some(node => node.props.source.includes('idle-still')));
+ assert.equal((await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'ms', text: `other-plugin: ${reply.text}` } })).type, 'engine');
+ assert.equal((await f.emit('ui.render', { component: 'CommandOutput', surface: 'desktop', props: { command: 'other', text: reply.text } })).type, 'engine');
+ assert.doesNotMatch(JSON.stringify(await f.emit('ui.render', { component: 'ToolUse', surface: 'terminal', props: { tool: f.tool('send'), isRunning: true } })), /idle|thinking/);
+ await f.press('tab-Activity'); assert.doesNotMatch(JSON.stringify(await f.pane()), /agent-icons|idle-still|thinking-still/);
+});
+
+test('media avoids text truncation, is never persisted and cannot survive an environment change', async () => {
+ const longSource = `<svg xmlns="http://www.w3.org/2000/svg"><!--${'x'.repeat(20000)}--></svg>`;
+ const f = await agentFixture({ respond: r => {
+   const result = iconResponse(r); if (result) for (const icon of Object.values(result.data.icons)) icon.images.idle.source = longSource;
+   return result;
+ } });
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.source === longSource));
+ assert.doesNotMatch(JSON.stringify([...f.stores.values()]), /<svg|data:image/);
+ const finish = delayRequest(f, 'agent-icons'); await f.press('agents-refresh');
+ f.find(await f.pane(), 'mcp-environment').props.onSelect(agentId(9)); await flush(); finish(); await flush();
+ assert.equal(svgNodes(await f.pane()).filter(node => node.props.source === longSource).length, 0);
+ assert.equal(f.find(await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} }), 'agent-chat-activity'), undefined);
+});
+
+test('icon delivery failure leaves Talk and direct messaging available', async () => {
+ const f = await agentFixture({ respond: r => r.action === 'agent-icons' ? { ...success(r.action), status: 'failure', summary: 'Optional media unavailable' } : undefined });
+ await f.startTalk(); assert.match((await f.send()).text, /Reply from Research/);
+ assert.ok(f.find(await f.pane(), `agent-talk-${agentUid}`));
+});
+
+test('failed media revalidation retains a displayed icon', async () => {
+ let unavailable = false;
+ const f = await agentFixture({ respond: r => {
+   const result = iconResponse(r);
+   if (unavailable && result) for (const icon of Object.values(result.data.icons)) icon.images.idle = null;
+   return result;
+ } });
+ unavailable = true; await f.press('agents-refresh');
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.source.includes('<text>idle</text>')));
+});
+
 test('Talk resolves a session and prefills an editable draft with no auto-send or introduction',async()=>{
  const f=await agentFixture({draft:'What is the exposure?'});
  assert.doesNotMatch(JSON.stringify(await f.pane()),/Explain portfolio risk/);
  await f.press(`agent-details-${agentUid}`);assert.match(JSON.stringify(await f.pane()),/Explain portfolio risk/);await f.press('agents-back');
- await f.startTalk();assert.equal(f.draft,`/ms agent ${agentUid} What is the exposure?`);
+ await f.startTalk();assert.equal(f.draft,'/ms What is the exposure?');
  assert.equal(f.calls.filter(c=>c.submitted||c.suggested).length,0);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-send').length,0);
  const opened=f.calls.find(c=>c.request?.request.action==='agent-session').request.request;
  assert.match(opened.handleId,/^claude_[a-f0-9]+_.*_default$/);assert.equal(opened.expectedAccount,'agent-user@example.test');assert.equal(opened.parentSessionUid,undefined);
- await f.startTalk();assert.equal(f.draft,`/ms agent ${agentUid} What is the exposure?`);assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session').length,1);
+ await f.startTalk();assert.equal(f.draft,'/ms What is the exposure?');assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session').length,1);
  f.$.ui.ask=async()=>{throw new Error('Explicit user submission must not ask twice')};
  assert.match((await f.send('Only my message')).text,/Reply from Research/);
  const sent=f.calls.find(c=>c.request?.request.action==='agent-send').request.request;
@@ -437,15 +576,15 @@ test('Talk resolves a session and prefills an editable draft with no auto-send o
 });
 test('draft retargeting keeps its text; unrelated slash commands and refused filling are preserved',async()=>{
  const f=await agentFixture({twoAgents:true,draft:'Keep\nall my text'});await f.startTalk();await f.startTalk(secondUid);
- assert.equal(f.draft,`/ms agent ${secondUid} Keep\nall my text`);
+ assert.equal(f.draft,'/ms Keep\nall my text');
  f.draft='/review something';await f.startTalk();assert.equal(f.draft,'/review something');
  const blocked=await agentFixture({refuseFill:true,draft:'Keep this'});await blocked.startTalk();assert.equal(blocked.draft,'Keep this');assert.match(blocked.calls.at(-1).toast,/could not fill/);
  assert.equal(blocked.calls.some(c=>c.submitted),false);
 });
 test('preparation and waiting affect only the correct card; changing selection keeps the original request valid',async()=>{
  const f=await agentFixture({twoAgents:true});const finishOpen=delayRequest(f,'agent-session',agentUid);
- await f.startTalk();let tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-status-${agentUid}`)),/Opening session/);assert.equal(f.find(tree,`agent-status-${secondUid}`),undefined);assert.equal(f.find(tree,`agent-talk-${agentUid}`).props.label,'💬');assert.equal(f.find(tree,`agent-talk-${secondUid}`).props.label,'💬');
- await f.startTalk(secondUid);finishOpen();await flush();assert.equal(f.draft,`/ms agent ${secondUid} `);
+ await f.startTalk();let tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-status-${agentUid}`)),/Opening session/);assert.equal(f.find(tree,`agent-status-${secondUid}`),undefined);assert.equal(f.find(tree,`agent-talk-${agentUid}`).props.label,'Talk');assert.equal(f.find(tree,`agent-talk-${secondUid}`).props.label,'Talk');
+ await f.startTalk(secondUid);finishOpen();await flush();assert.equal(f.draft,'/ms ');
  await f.startTalk(agentUid);const finish=delayRequest(f,'agent-send',agentUid);const pending=f.send('Wait for this');await flush();
  await f.startTalk(secondUid);tree=await f.pane();assert.match(JSON.stringify(f.find(tree,`agent-${agentUid}`)),/Waiting for agent/);assert.doesNotMatch(JSON.stringify(f.find(tree,`agent-${secondUid}`)),/Waiting for agent/);
  assert.match((await f.send('Other agent',secondUid)).text,/CRM assistant/);finish();assert.match((await pending).text,/Research assistant/);
@@ -500,7 +639,7 @@ test('duplicate submissions to the same agent are refused while its request is p
 });
 test('failed resolution and tool registration can retry without any message or introduction',async()=>{
  const f=await agentFixture();const register=f.$.tool.register;f.$.tool.register=async()=>{throw new Error('host not ready')};await f.startTalk();assert.match(JSON.stringify(await f.pane()),/needs attention/);
- f.$.tool.register=register;await f.startTalk();assert.equal(f.draft,`/ms agent ${agentUid} `);assert.equal(f.calls.filter(c=>c.submitted||c.request?.request.action==='agent-send').length,0);
+ f.$.tool.register=register;await f.startTalk();assert.equal(f.draft,'/ms ');assert.equal(f.calls.filter(c=>c.submitted||c.request?.request.action==='agent-send').length,0);
  const unavailable=await agentFixture({respond:r=>r.action==='agent-session'?{schemaVersion:1,action:r.action,status:'failure',summary:'Model configuration required'}:null});await unavailable.startTalk();
  assert.equal(unavailable.draft,'');assert.match(unavailable.calls.at(-1).toast,/Model configuration/);
 });
@@ -509,7 +648,7 @@ test('failed resolution and tool registration can retry without any message or i
 test('returning to an agent that is still opening makes it the final selection without duplicate allocation', async () => {
  const f=await agentFixture({twoAgents:true}); const finish=delayRequest(f,'agent-session',agentUid);
  await f.startTalk(); await f.startTalk(secondUid); await f.startTalk(agentUid); finish(); await flush();
- assert.equal(f.draft,`/ms agent ${agentUid} `);
+ assert.equal(f.draft,'/ms ');
  assert.match(JSON.stringify(f.find(await f.pane(),`agent-status-${agentUid}`)),/Agent ready/);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-session'&&c.request.request.agentUid===agentUid).length,1);
  const message='  Keep leading spaces\nand a second line  '; await f.send(message);
@@ -524,13 +663,13 @@ test('Talk preserves the current draft while readiness waits, then fills once wi
  assert.equal(f.calls.some(c=>c.filled||c.submitted||c.request?.request.action==='agent-send'),false);
  assert.match((await f.send()).text,/still being prepared|no longer active/);
  f.draft='Keep my edited question';finish();await flush();
- assert.equal(f.draft,`/ms agent ${agentUid} Keep my edited question`);
+ assert.equal(f.draft,'/ms Keep my edited question');
  assert.equal(f.calls.filter(c=>c.filled).length,1);assert.equal(f.calls.some(c=>c.submitted),false);
 });
 test('late ready cannot replace another selected agent; resumed Talk checks again',async()=>{
  const f=await agentFixture({twoAgents:true});const finish=delayRequest(f,'agent-readiness',agentUid);
  await f.startTalk();await f.startTalk(secondUid);finish();await flush();
- assert.equal(f.draft,`/ms agent ${secondUid} `);
+ assert.equal(f.draft,'/ms ');
  await f.startTalk(secondUid);
  assert.equal(f.calls.filter(c=>c.request?.request.action==='agent-readiness'&&c.request.request.agentUid===secondUid).length,2);
  await f.send('Only my text',secondUid);
@@ -551,11 +690,11 @@ test('environment change during readiness never fills a stale draft',async()=>{
  assert.equal(f.draft,'Unchanged');assert.equal(f.calls.some(c=>c.filled||c.submitted),false);
 });
 
-test('session renewal belongs to General and never appears in either project section',async()=>{
- const f=await agentFixture();await f.press('tab-General');
+test('session renewal belongs to Settings and never appears in Code or Projects',async()=>{
+ const f=await agentFixture();await f.press('tab-Settings');
  await f.press('toggle-connection-actions');assert.ok(f.find(await f.pane(),'refresh-token'));
- for(const tab of ['Projects','Current-Project']){await f.press(`tab-${tab}`);assert.equal(f.find(await f.pane(),'refresh-token'),undefined);}
- await f.press('tab-General');assert.ok(f.find(await f.pane(),'refresh-token'));
+ for(const tab of ['Code','Projects','Home']){await f.press(`tab-${tab}`);assert.equal(f.find(await f.pane(),'refresh-token'),undefined);}
+ await f.press('tab-Settings');assert.ok(f.find(await f.pane(),'refresh-token'));
 });
 
 test('agent defaults appear beneath the name without exposing or changing provider configuration',async()=>{
@@ -563,6 +702,125 @@ test('agent defaults appear beneath the name without exposing or changing provid
  assert.match(JSON.stringify(f.find(await f.pane(),`agent-defaults-${agentUid}`)),/anthropic · claude-sonnet-test · high/);
  await f.press(`agent-details-${agentUid}`);
  assert.match(JSON.stringify(f.find(await f.pane(),`agent-defaults-${agentUid}`)),/claude-sonnet-test · high/);
- const missing=await agentFixture();assert.match(JSON.stringify(missing.find(await missing.pane(),`agent-defaults-${agentUid}`)),/Not configured · Not configured · Not configured/);
+ const missing=await agentFixture();assert.equal(missing.find(await missing.pane(),`agent-defaults-${agentUid}`),undefined,'absent defaults draw nothing');
+ assert.doesNotMatch(JSON.stringify(await missing.pane()),/Not configured/);
  assert.equal(f.calls.some(c=>c.request?.request.action==='agent-send'||c.request?.request.action==='agent-session'),false);
+});
+
+test('opening the named workspace attaches both saved memberships, retries failures, and ignores unrelated sessions',async()=>{
+  const {register}=await load(); const {workspaceBinding}=await import('../manifests/claude/hooks/workspace.mjs');
+  const w={root:'/repos/project/Ontology',backend:'https://fixture.example',projectUid:projectId(1),environmentUid:projectId(2),name:'Ontology',repositories:[
+    {repositoryUid:projectId(3),branchUid:projectId(4),name:'Ontology',branch:'main',path:'/repos/project/repositories/Ontology'},
+    {repositoryUid:projectId(7),branchUid:projectId(8),name:'OntologyBackend',branch:'main',path:'/repos/project/repositories/OntologyBackend'}]};
+  const stores=new Map([[`project-workspace:${w.root}`,workspaceBinding(w)]]);let fail=true;
+  const f=fixture({cwd:w.root,stores,respond:({request:q})=>success(q.action,q.action==='read-project-workspace'?w:{}),commandResult:spec=>({text:fail&&spec.args.endsWith('OntologyBackend')?'Path was not found.':`Added ${spec.args} as a working directory for this session`})});
+  register(f.on);await f.emit('session.start',{surface:'desktop'});for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
+  assert.deepEqual(f.calls.filter(c=>c.runCommand).map(c=>c.runCommand.args),w.repositories.map(r=>r.path));
+  assert.ok(f.find(await f.pane(),'workspace-attach-retry'));fail=false;await f.press('workspace-attach-retry');
+  assert.equal(f.calls.filter(c=>c.runCommand).length,3);assert.equal(f.calls.filter(c=>c.runCommand).at(-1).runCommand.args,w.repositories[1].path);
+  assert.equal(f.find(await f.pane(),'workspace-attach-retry'),undefined);assert.match(JSON.stringify(await f.pane()),/Ontology: 2 repository checkouts attached/);
+  assert.equal(f.calls.some(c=>c.submitted),false);
+  const unrelated=fixture({stores});register(unrelated.on);await unrelated.emit('session.start',{surface:'desktop'});for(const timer of unrelated.timers.filter(t=>t.ms===0))timer.callback();await flush();
+  assert.equal(unrelated.calls.some(c=>c.runCommand),false);
+});
+test('attachment rejects covered descendants and unconfirmed native command results',async()=>{
+  const {attachProjectRepositories}=await load();
+  const w={root:'/p/Ontology',backend:'https://fixture.example',projectUid:'p',environmentUid:'e',name:'Ontology',repositories:[{path:'/p/repos/ontology',name:'Ontology',branch:'main'}]};
+  for(const text of ['', 'Path /p/repos/ontology was not found.', '/p/repos/ontology is inside the current working directory /p']) {
+    const attached=new Set();await assert.rejects(attachProjectRepositories({command:{run:async()=>({text})}},w,attached,()=>true,()=>{}),/could not attach/);assert.equal(attached.size,0);
+  }
+});
+test('changed workspace membership is never automatically attached',async()=>{
+  const {register}=await load(),{workspaceBinding}=await import('../manifests/claude/hooks/workspace.mjs');
+  const w={root:'/p/Ontology',backend:'https://fixture.example',projectUid:'p',environmentUid:'e',name:'Ontology',repositories:[{path:'/p/repos/ontology',name:'Ontology',branch:'main',repositoryUid:'r',branchUid:'b'}]};
+  const stores=new Map([[`project-workspace:${w.root}`,workspaceBinding(w)]]);
+  const f=fixture({cwd:w.root,stores,respond:({request:q})=>success(q.action,q.action==='read-project-workspace'?{...w,repositories:[{...w.repositories[0],path:'/p/repos/other'}]}:{})});
+  register(f.on);await f.emit('session.start',{surface:'desktop'});for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
+  assert.equal(f.calls.some(c=>c.runCommand),false);assert.match(JSON.stringify(await f.pane()),/membership changed/);
+});
+
+test('Home shows next steps until sign-in, environment and folder are settled, then session status on request', async () => {
+  const { register } = await load(); let signedIn = false;
+  const f = fixture({ env: { HOME: '' }, respond: d => {
+    const q = d.request;
+    if (q.action === 'workspace-preferences') return success(q.action, { backend: 'https://api.main-sequence.app' });
+    if (q.action === 'login') signedIn = true;
+    if (q.action === 'auth-status') return success(q.action, { authenticated: signedIn, username: 'home@example.test' });
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Research' }]);
+    if (q.action === 'status') return success(q.action, { project: { root: '/work/repo', branch: 'main', commit: 'abcdef1234', projectType: 'python' }, capabilities: [] });
+    if (q.action === 'sdk-status') return success(q.action, { installed: '1.8.2', latest: '1.9.0', updateAvailable: true, updateSupported: true });
+    if (q.action === 'pick-folder') return success(q.action, { path: '/chosen' });
+    return success(q.action, { count: 0, results: [] });
+  } });
+  register(f.on); await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await flush();
+  let tree = await f.pane(); assert.ok(f.find(tree, 'step-login')); assert.ok(f.find(tree, 'step-folder')); assert.equal(f.find(tree, 'step-row-environment'), undefined);
+  assert.ok(f.find(tree, 'login'), 'header offers sign-in'); assert.equal(f.find(tree, 'mcp-environment'), undefined);
+  await f.press('step-login'); tree = await f.pane(); assert.equal(f.find(tree, 'step-login'), undefined); assert.ok(f.find(tree, 'step-row-environment'));
+  assert.match(JSON.stringify(tree), /home@example.test/);
+  await f.press('step-environments'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+  await f.press('step-folder'); tree = await f.pane(); assert.equal(f.find(tree, 'step-row-environment'), undefined); assert.equal(f.find(tree, 'step-folder'), undefined);
+  assert.equal(f.find(tree, 'step-login'), undefined);
+  assert.equal(f.calls.some(c => c.request?.request.action === 'status'), false, 'status is not spawned until requested');
+  await f.press('home-status'); tree = await f.pane();
+  assert.match(JSON.stringify(tree), /"Branch".*"main"/); assert.match(JSON.stringify(tree), /1\.8\.2 → 1\.9\.0 available/); assert.ok(f.find(tree, 'home-update-sdk'));
+  assert.match(JSON.stringify(f.find(tree, 'tab-Activity')), /Activity/);
+  assert.ok(f.find(tree, 'recent-' + f.calls.find(c => c.request?.request.action === 'status').id));
+});
+
+test('the header blocks Projects, Agents and Tools until an environment is chosen, without hiding navigation', async () => {
+  const { register } = await load();
+  const f = fixture({ respond: d => success(d.request.action, d.request.action === 'auth-status' ? { authenticated: true, username: 'u' } : d.request.action === 'mcp-environments' ? [{ uid: 'env-1', name: 'Research' }] : {}) });
+  register(f.on); await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await flush();
+  for (const tab of ['Projects', 'Agents', 'Tools']) {
+    await f.press(`tab-${tab}`); const tree = await f.pane();
+    assert.match(JSON.stringify(tree), /Choose an organization environment/); assert.ok(f.find(tree, 'tab-Home'));
+    assert.equal(f.find(tree, 'tools-add'), undefined); assert.equal(f.find(tree, 'field-agentSearch'), undefined); assert.equal(f.find(tree, 'field-projectSearch'), undefined);
+  }
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+  const tree = await f.pane(); assert.doesNotMatch(JSON.stringify(tree), /Choose an organization environment/); assert.ok(f.find(tree, 'tools-add'));
+});
+
+test('Tools lists connections as rows, adds MCPs through search with confirmation, and keeps the explorer under Advanced', async () => {
+  const { register } = await load(); const connected = [];
+  const f = fixture({ respond: d => {
+    const q = d.request;
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Research' }]);
+    if (q.action === 'mcp-list') return success(q.action, connected.map(uid => ({ resource_release_uid: uid, name: `MCP ${uid}`, backend: 'https://api.main-sequence.app', mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Research' } })));
+    if (q.action === 'mcp-discover') return success(q.action, { count: 2, results: ['r1', 'r2'].map(uid => ({ resource_release_uid: uid, name: `MCP ${uid}`, mcp_connection: { organization_environment_uid: 'env-1' } })) });
+    if (q.action === 'mcp-add') connected.push(q.releaseUid);
+    if (q.action === 'mcp-remove') connected.splice(connected.indexOf(q.releaseUid), 1);
+    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', description: 'Find things', inputSchema: { type: 'object' } }] });
+    return success(q.action, {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+  let tree = await f.pane(); assert.match(JSON.stringify(tree), /No MCPs connected/); assert.equal(f.find(tree, 'mcp-call'), undefined);
+  await f.press('tools-add'); tree = await f.pane(); assert.ok(f.find(tree, 'mcp-add-r1')); assert.ok(f.find(tree, 'mcp-add-r2'));
+  await f.press('mcp-add-r2'); assert.equal(f.calls.some(c => c.request?.request.action === 'mcp-add'), false);
+  assert.match(JSON.stringify(await f.pane()), /Connect MCP r2 in Research/);
+  await f.press('confirm-action');
+  assert.equal(f.calls.find(c => c.request?.request.action === 'mcp-add').request.request.releaseUid, 'r2');
+  assert.equal(f.tools.length, 1, 'tools register after connecting');
+  tree = await f.pane(); assert.equal(f.find(tree, 'mcp-add-r2'), undefined); assert.ok(f.find(tree, 'mcp-add-r1'));
+  await f.press('tools-back'); tree = await f.pane(); assert.ok(f.find(tree, 'mcp-connected-r2')); assert.match(JSON.stringify(f.find(tree, 'mcp-connected-r2')), /1 tools/);
+  await f.press('mcp-open-r2'); tree = await f.pane(); assert.ok(f.find(tree, 'tool-lookup')); assert.equal(f.find(tree, 'mcp-call'), undefined);
+  await f.press('toggle-tools-advanced'); tree = await f.pane(); assert.ok(f.find(tree, 'mcp-call')); assert.ok(f.find(tree, 'mcp-register'));
+  await f.press('tools-back'); await f.press('mcp-remove-r2'); await f.press('confirm-action');
+  assert.equal(f.calls.find(c => c.request?.request.action === 'mcp-remove').request.request.releaseUid, 'r2');
+  assert.match(JSON.stringify(await f.pane()), /No MCPs connected/);
+});
+
+test('/ms <message> reaches the selected agent, keywords stay explicit, and example questions prefill the draft', async () => {
+  const f = await agentFixture({ draft: 'Keep this' }); await f.startTalk(); assert.equal(f.draft, '/ms Keep this');
+  assert.match((await f.emit('command.run', { command: 'ms', args: 'What is my exposure?', origin: { kind: 'composer' } })).text, /Reply from Research/);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').at(-1).request.request.message, 'What is my exposure?');
+  assert.match((await f.emit('command.run', { command: 'ms', args: 'agent not-a-uid hello', origin: { kind: 'composer' } })).text, /Choose Talk/);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-send').length, 1);
+  await f.press(`agent-details-${agentUid}`); await f.press(`agent-example-${agentUid}-0`);
+  assert.equal(f.draft, '/ms Explain exposure'); assert.equal(f.calls.some(c => c.submitted), false);
+  const band = await f.emit('ui.render', { surface: 'desktop', component: 'AbovePrompt', props: {} });
+  assert.ok(f.find(band, 'agent-switch')); f.find(band, 'agent-switch').props.onPress(); await flush();
+  assert.equal(f.calls.at(-1).pane.focus, true); assert.equal(f.find(await f.pane(), `agent-talk-${agentUid}`).props.variant, 'primary');
+  const taskOnly = await agentFixture({ agent: { responseKinds: ['task'] } }); await taskOnly.startTalk(); assert.equal(taskOnly.draft, `/ms task ${agentUid} `);
+  const fresh = await agentFixture(); assert.match((await fresh.emit('command.run', { command: 'ms', args: 'hello', origin: { kind: 'composer' } })).text, /Choose Talk/);
+  assert.equal(fresh.calls.some(c => c.request?.request.action === 'agent-send'), false);
 });

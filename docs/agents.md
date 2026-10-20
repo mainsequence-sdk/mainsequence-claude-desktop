@@ -6,20 +6,29 @@ Claude accounts or provider configuration are changed.
 
 ## Choose an agent and write a message
 
-Compact rows show the agent name, **ⓘ** and **💬** Talk on one aligned row.
-Conversation progress appears only beneath the agent it belongs to. The controls
+Compact rows show the agent’s custom icon, its name (press it for details) and **Talk** on
+one aligned row; Talk is the primary button for the selected agent and is disabled, with
+the reason beneath the name, for agents that cannot be messaged.
+Conversation progress appears beneath the agent it belongs to and in the selected
+conversation’s composer activity band. The controls
 inherit Claude’s theme; there are no custom gold colors, initial badges or nested
-button frames. The environment
+button frames. [Agent icons](agent-icons.md) use the platform’s colour or mask
+assets; animated icons respect the operating system’s reduced-motion preference. The environment
 is already selected above; environment/branch and deployment metadata are shown
-only in **ⓘ**, alongside the description, public skills and examples. “Deployment
-up to date” means the active deployed commit matches the backend's latest recorded
+only in the details, alongside the description (rendered as Markdown), public skills
+and example questions that fill Claude's input when pressed. “Up to date” means the active deployed commit matches the backend's latest recorded
 branch commit. It is not a connection health check.
 
-**💬 Talk to agent** creates or resumes an empty MainSequence agent conversation and
-waits for the agent to be ready, then fills Claude's existing input with `/ms agent <agent-uid> `. It does not send an
-introduction or start a model turn. Write your question after the prefix and submit
-it yourself. The plugin sends your text directly to the selected agent and shows
-the reply with its agent/environment label in Claude's command transcript.
+**Talk** creates or resumes an empty MainSequence agent conversation and waits for
+the agent to be ready, then fills Claude's existing input with `/ms ` (or
+`/ms task <agent-uid> ` for task-only agents). It does not send an introduction or
+start a model turn. Write your question after the prefix and submit it yourself. A
+bare `/ms <message>` goes to the agent most recently prepared by Talk, which the band
+above the composer names; `/ms agent <agent-uid> <message>` and
+`/ms task <agent-uid> <message>` address an agent explicitly. The plugin sends your
+text directly to that agent and shows the reply with its agent/environment label in
+Claude's command transcript. **Switch agent** in the composer band reopens the pane
+on Agents.
 
 Existing draft text is preserved. Choosing another agent changes the routing prefix
 and keeps the message. Repeated clicks do not duplicate the prefix. An unrelated
@@ -54,7 +63,7 @@ itself uses no runtime-access request or agent message. Talk then calls the exis
 `runtime_interaction.can_submit`. Opening session, Checking agent and Starting agent
 are shown only for that conversation. Only readiness success permits draft prefilling.
 Cancel stops the local wait without cancelling the platform wake. Failure preserves
-the session and draft and offers Try again. Renew session stays in General →
+the session and draft and offers Try again. Renew session stays in Settings →
 MainSequence account → Manage account, never in Projects or Current Project. Missing provider/model defaults
 are reported without changing them. A saved session that is unavailable is not
 silently replaced.
@@ -65,7 +74,7 @@ Reloading the same Claude chat resolves the saved sessions. Renaming/compacting 
 chat that retains its ID keeps its mappings; a new or branched chat with a different
 ID gets separate mappings. Full Claude history is not transferred to the agent.
 
-**ⓘ → Start new conversation…** asks for confirmation, then opens a new session
+**Details → New conversation…** asks for confirmation, then opens a new session
 handle for that agent. It preserves earlier remote history and does not cancel old
 work. A late old reply cannot overwrite the new conversation mapping.
 
@@ -127,4 +136,4 @@ uncertain and is never automatically replayed. Tokens and runtime URLs from the 
 response stay private to the worker and are discarded. The wait follows platform
 retry guidance and stops at its deadline, cancellation or a terminal decision.
 
-The compact line beneath each agent name shows only the values of its default provider, model and thinking setting, in that order, separated by middle dots (for example `openai-codex · gpt-5.6-luna · medium`). It wraps at the pane width, uses Claude’s muted theme text and labels absent defaults “Not configured.” These are agent defaults, not overrides or the resolved configuration of an existing session. Displaying them does not change credentials, providers, settings or the backend.
+The compact line beneath each agent name shows only the values of its default provider, model and thinking setting, in that order, separated by middle dots (for example `openai-codex · gpt-5.6-luna · medium`). It wraps at the pane width, uses Claude’s muted theme text and is omitted when no default is configured. These are agent defaults, not overrides or the resolved configuration of an existing session. Displaying them does not change credentials, providers, settings or the backend.

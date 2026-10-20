@@ -1,67 +1,80 @@
 import { clean, record, rows } from './model.mjs';
+import { primitives } from './primitives.mjs';
+import { renderAgentIcon } from './agentIcon.mjs';
+
+const RUNTIME = { current: 'Up to date', not_deployed: 'Not deployed', updating: 'Updating', update_required: 'Update available', update_failed: 'Update failed', unknown: 'Status unknown' };
 
 export function renderAgents(ui, state, actions) {
-  const { Box, Text, Button, Input } = ui;
-  const text = (value, props = {}) => Text({ ...props, children: [clean(value)] });
-  const muted = value => text(value, { dimColor: true });
-  const column = children => Box({ flexDirection: 'column', gap: 1, children: children.filter(Boolean) });
-  const row = children => Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: children.filter(Boolean) });
-  const button = (key, label, onPress) => Button({ key, label, onPress });
-  const section = (key, children) => Box({ key, flexDirection: 'column', paddingY: 1, gap: 1, children: children.filter(Boolean) });
-  const status = agent => ({ current: 'Deployment up to date', not_deployed: 'Not deployed', updating: 'Updating', update_required: 'Update available', update_failed: 'Update failed', unknown: 'Status unknown' }[agent.runtimeState] || 'Status unknown');
-  const defaults = agent => text(`${clean(agent.defaults?.provider) || 'Not configured'} · ${clean(agent.defaults?.model) || 'Not configured'} · ${clean(agent.defaults?.thinking) || 'Not configured'}`, { key: `agent-defaults-${agent.uid}`, dimColor: true, wrap: 'wrap' });
-  const identity = (agent, showDetails = false) => column([
-    text(agent.name, { bold: true, wrap: 'wrap' }),
-    showDetails && defaults(agent),
-    showDetails && muted(`${agent.environmentName} · ${agent.repositoryBranch || 'Branch unavailable'}`),
-  ]);
+  const p = primitives(ui, state, actions);
+  const { Box, Input, text, muted, caption, heading, title, status, column, inline, buttons, button, row, badge, markdown, empty } = p;
+  const defaults = agent => {
+    const values = [agent.defaults?.provider, agent.defaults?.model, agent.defaults?.thinking].map(value => clean(value)).filter(Boolean);
+    return values.length ? caption(values.join(' · '), { key: `agent-defaults-${agent.uid}` }) : null;
+  };
   const bindingFor = agent => state.agentBindings[JSON.stringify([state.fields.backend, state.fields.mcpEnvironment, state.agentAccount, agent.uid])];
-  const conversationStatus = binding => binding?.uncertain && !binding.busy ? 'Delivery needs review' : ({ opening: 'Opening session…', selected: 'Agent ready · no message sent', waiting: 'Waiting for agent…', ready: 'Reply received', working: 'Agent task in progress', failed: 'Conversation needs attention' })[binding?.status];
   const canTalk = agent => agent.runtimeState !== 'not_deployed' && agent.responseKinds?.some(kind => ['message', 'task'].includes(kind));
-  const talk = (agent, compact = false) => canTalk(agent) ? button(`agent-talk-${agent.uid}`, compact ? '💬' : 'Talk to agent', () => actions.talkToAgent(agent.uid)) : null;
-  const unavailable = agent => !canTalk(agent) && muted(agent.runtimeState === 'not_deployed' ? 'Deploy this agent to start a conversation.' : 'This agent does not advertise messaging support.');
-  const agentStatus = agent => state.agentPreparing[agent.uid] ? state.agentPreparing[agent.uid].phase : conversationStatus(bindingFor(agent));
-  const auth = state.results['devtools.auth-status'];
-  if (auth?.data?.authenticated === false || auth?.error?.code === 'NOT_AUTHENTICATED') return section('agents-sign-in', [text('Sign in to discover agents', { bold: true }), muted('Use your MainSequence account to see the agents available to you.'), button('agents-login', 'Go to MainSequence login', () => actions.tab('General'))]);
-  if (!state.fields.mcpEnvironment) return section('agents-select-environment', [text('Choose an environment', { bold: true }), muted('The environment above controls both agents and MCP tools.')]);
+  const isActive = agent => state.activeAgent?.agent?.uid === agent.uid;
+  const unavailableReason = agent => agent.runtimeState === 'not_deployed' ? 'Deploy this agent to start a conversation.' : 'This agent does not advertise messaging support.';
+  const talk = agent => button(`agent-talk-${agent.uid}`, 'Talk', () => actions.talkToAgent(agent.uid), { primary: isActive(agent), available: canTalk(agent) });
+  /** One status line per agent: preparation phase, then the conversation's own state. */
+  const agentStatus = agent => {
+    const preparing = state.agentPreparing[agent.uid], binding = bindingFor(agent);
+    if (preparing) return ['warning', preparing.phase];
+    if (!binding) return null;
+    if (binding.uncertain && !binding.busy) return ['error', 'Delivery needs review'];
+    return ({ opening: ['warning', 'Opening session…'], selected: ['success', 'Agent ready · no message sent'], waiting: ['warning', 'Waiting for agent…'],
+      ready: ['success', 'Reply received'], working: ['warning', 'Agent task in progress'], failed: ['error', 'Conversation needs attention'] })[binding.status] || null;
+  };
+  const statusRow = agent => {
+    const value = agentStatus(agent), binding = bindingFor(agent), preparing = state.agentPreparing[agent.uid];
+    if (!value) return null;
+    return inline([status(value[0], value[1], { key: `agent-status-${agent.uid}` }),
+      preparing && button(`agent-prepare-cancel-${agent.uid}`, 'Cancel', () => actions.cancelAgentPreparation(agent.uid), { plain: true, dim: true }),
+      !preparing && binding?.status === 'failed' && button(`agent-prepare-retry-${agent.uid}`, 'Try again', () => actions.talkToAgent(agent.uid), { plain: true })], { flexWrap: 'wrap' });
+  };
+  const notes = agent => {
+    const binding = bindingFor(agent), preparing = state.agentPreparing[agent.uid];
+    return [!preparing && binding?.error && caption(binding.error, { color: 'error' }),
+      binding?.task && caption(`Task ${binding.task.status}${binding.task.cancellationRequested ? ' · cancellation requested' : ''}`),
+      binding?.uncertain && caption('The previous request may have reached the agent. Review Activity before sending again.')].filter(Boolean);
+  };
   const detail = state.agentDetail;
-  if (detail) return column([
-    button('agents-back', '← All agents', actions.closeAgentDetails),
-    section('agent-details', [identity(detail, true), muted(status(detail)), text(detail.description), text('Capabilities', { bold: true }),
-      ...(detail.skills?.length ? detail.skills.map(skill => column([text(skill.name, { bold: true }), muted(skill.description)])) : [muted('The agent card does not list individual skills. Ask the agent for details.')]),
-      text('Example questions', { bold: true }), ...((detail.skills || []).flatMap(skill => skill.examples || []).slice(0, 8).map(example => text(`“${example}”`))),
-      muted('Talk opens or resumes this agent’s session, waits until it is ready, then prepares Claude’s input. Only the message you submit is sent.'), talk(detail), unavailable(detail),
-      button('agent-new-conversation', 'Start new conversation…', () => actions.newAgentConversation(detail.uid)),
-    ]),
-  ]);
+  if (detail) {
+    const examples = (detail.skills || []).flatMap(skill => skill.examples || []).slice(0, 8);
+    return column([
+      button('agents-back', '← Agents', actions.closeAgentDetails, { plain: true, dim: true }),
+      inline([renderAgentIcon(ui, state, detail.uid, { size: 32 }), heading(detail.name)]),
+      defaults(detail),
+      inline([badge(RUNTIME[detail.runtimeState] || RUNTIME.unknown, detail.runtimeState === 'current' ? 'success' : detail.runtimeState === 'not_deployed' || detail.runtimeState === 'update_failed' ? 'error' : undefined),
+        caption(`${detail.environmentName} · ${detail.repositoryBranch || 'Branch unavailable'}`)]),
+      detail.description && markdown(detail.description),
+      statusRow(detail) || (!canTalk(detail) ? caption(unavailableReason(detail)) : null), ...notes(detail),
+      buttons([talk(detail), button('agent-new-conversation', 'New conversation…', () => actions.newAgentConversation(detail.uid), { plain: true, dim: true })]),
+      caption('Talk opens or resumes this agent’s conversation and prepares Claude’s input. Only the message you submit is sent.'),
+      title('Skills'),
+      ...(detail.skills?.length ? detail.skills.map(skill => column([text(skill.name, { weight: 'medium' }), skill.description && caption(skill.description)], { gap: 0 })) : [muted('The agent card does not list individual skills. Ask the agent for details.')]),
+      examples.length ? title('Try asking') : null,
+      ...examples.map((example, index) => button(`agent-example-${detail.uid}-${index}`, `“${example}”`, () => actions.askAgent(detail.uid, example), { plain: true, available: canTalk(detail) })),
+    ]);
+  }
   const result = state.results['devtools.agents-list'], page = record(result?.data);
   const agents = rows(page).filter(agent => agent.environmentUid === state.fields.mcpEnvironment);
   return column([
-    row([text('Agents', { bold: true }), button('agents-refresh', state.agentsLoading ? 'Loading…' : 'Refresh', actions.refreshAgents)]),
-    column([text('Search agents'), Box({ flexDirection: 'row', alignItems: 'center', gap: 1, children: [
-      Box({ flexGrow: 1, flexShrink: 1, minWidth: 0, children: [Input({ key: 'field-agentSearch', value: state.fields.agentSearch, placeholder: 'Name or capability', onInput: value => actions.field('agentSearch', value), onSubmit: value => { actions.field('agentSearch', value); actions.refreshAgents(); } })] }),
-      Box({ flexShrink: 0, children: [button('agents-search', 'Search', actions.refreshAgents)] }),
-    ] })]),
-    result?.status === 'failure' && section('agents-error', [text('Agents couldn’t be loaded', { bold: true }), muted(result.summary), button('agents-retry', 'Try again', actions.refreshAgents)]),
+    inline([Box({ flexGrow: 1, flexShrink: 1, minWidth: 0, children: [Input({ key: 'field-agentSearch', value: state.fields.agentSearch, placeholder: 'Search agents', autoFocus: true, onInput: value => actions.field('agentSearch', value), onSubmit: value => { actions.field('agentSearch', value); actions.refreshAgents(); } })] }),
+      button('agents-search', 'Search', actions.refreshAgents, { plain: true }),
+      button('agents-refresh', state.agentsLoading ? 'Loading…' : 'Refresh', actions.refreshAgents, { plain: true, dim: true, available: !state.agentsLoading })]),
+    result?.status === 'failure' && column([status('error', result.summary), button('agents-retry', 'Try again', actions.refreshAgents, { plain: true })]),
     state.agentsLoading && muted('Loading agents from this environment…'),
-    result?.status === 'success' && !agents.length && section('agents-empty', [text(state.fields.agentSearch.trim() ? 'No matching agents' : 'No agents in this environment', { bold: true }), muted('Try another search or choose another environment above.')]),
-    result?.status === 'success' && agents.length && muted(page.semantic ? `${agents.length} matching agents` : `${page.count} agents · showing ${state.agentOffset + 1}–${state.agentOffset + agents.length}`),
-    ...agents.map(agent => section(`agent-${agent.uid}`, [
-      Box({ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
-        Box({ flexDirection: 'column', flexGrow: 1, flexShrink: 1, minWidth: 0, children: [identity(agent)] }),
-        Box({ key: `agent-actions-${agent.uid}`, flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
-          button(`agent-details-${agent.uid}`, 'ⓘ', () => actions.agentDetails(agent.uid)), talk(agent, true),
-        ].filter(Boolean) }),
-      ] }),
-      defaults(agent),
-      agentStatus(agent) && text(agentStatus(agent), { key: `agent-status-${agent.uid}`, dimColor: true }),
-      state.agentPreparing[agent.uid] && button(`agent-prepare-cancel-${agent.uid}`, 'Cancel', () => actions.cancelAgentPreparation(agent.uid)),
-      !state.agentPreparing[agent.uid] && bindingFor(agent)?.error && muted(bindingFor(agent).error),
-      bindingFor(agent)?.status === 'failed' && !state.agentPreparing[agent.uid] && button(`agent-prepare-retry-${agent.uid}`, 'Try again', () => actions.talkToAgent(agent.uid)),
-      bindingFor(agent)?.task && muted(`Task: ${bindingFor(agent).task.status}${bindingFor(agent).task.cancellationRequested ? ' · Cancellation requested' : ''}`),
-      bindingFor(agent)?.uncertain && muted('The previous request may have reached the agent. Review Activity before sending again.'),
-      unavailable(agent),
-    ])),
-    !page.semantic && row([state.agentOffset > 0 && button('agents-previous', 'Previous page', actions.previousAgents), state.agentOffset + agents.length < page.count && button('agents-next', 'Next page', actions.nextAgents)]),
+    result?.status === 'success' && !agents.length && empty(state.fields.agentSearch.trim() ? 'No matching agents' : 'No agents in this environment', 'Try another search or choose another environment.'),
+    result?.status === 'success' && agents.length ? caption(page.semantic ? `${agents.length} matching agents` : `${page.count} agents · showing ${state.agentOffset + 1}–${state.agentOffset + agents.length}`) : null,
+    ...agents.map(agent => column([
+      row(`agent-${agent.uid}`, [
+        inline([renderAgentIcon(ui, state, agent.uid, { size: 20 }), button(`agent-details-${agent.uid}`, agent.name, () => actions.agentDetails(agent.uid), { plain: true })]),
+        defaults(agent),
+        statusRow(agent) || (!canTalk(agent) ? caption(unavailableReason(agent)) : null),
+        ...notes(agent),
+      ], [talk(agent)]),
+    ], { gap: 0 })),
+    !page.semantic && agents.length ? inline([state.agentOffset > 0 && button('agents-previous', 'Previous', actions.previousAgents, { plain: true }), state.agentOffset + agents.length < page.count && button('agents-next', 'Next', actions.nextAgents, { plain: true })]) : null,
   ]);
 }

@@ -1,14 +1,23 @@
 # MainSequence for Claude Desktop Code
 
-MainSequence adds one native developer-tools pane with **General, Projects,
-Current Project, MCP, Agents and Activity**. General keeps MainSequence browser login,
-session renewal, connection checks and workspace settings. The pane uses the
-MainSequence emblem and one coordinated section selection; it adds no strip above
-the prompt.
+MainSequence adds one native developer-tools pane with a status header and five
+sections: **Home, Code, Projects, Agents and Tools**. The header shows the signed-in
+account, the organization environment, running operations (which open **Activity**)
+and **Settings**, where MainSequence browser login, session renewal, connection checks
+and workspace settings live. The pane uses the MainSequence emblem and Claude's own
+theme; it adds no strip above the prompt.
+
+[Version **0.4.8**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.8)
+is the [pane redesign](docs/ux-proposal.md): lists of rows instead of dropdowns, one
+primary action per view, status colours, disabled-with-reason controls, confirmations
+that keep the navigation visible, and `/ms <message>` for the selected agent.
+
+The current local build adds [animated agent icons](docs/agent-icons.md) to the
+directory, details and conversation UI, using the platform’s existing icon assets.
 
 [Version **0.4.4**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.4)
-uses Claude's native theme and compact agent rows: name, **ⓘ** information and **💬**
-Talk on the same row. Section buttons have no surrounding cards or custom colors.
+uses Claude's native theme and compact agent rows: name, details and Talk on the
+same row. Section buttons have no surrounding cards or custom colors.
 Talk opens or resumes the selected agent's session using Claude's session ID and
 prefills the existing input without sending. Each agent keeps its own status.
 
@@ -76,7 +85,7 @@ before prefilling Claude's existing input. Per-agent progress, cancellation and 
 preserve drafts; no message is sent automatically. Explicit sends recheck readiness.
 Each agent also shows its default provider, model and thinking setting beneath its name.
 The shared implementation is devtools 0.2.6. MainSequence session renewal remains
-under General → MainSequence account → Manage account. Accounts, provider choices,
+under Settings → MainSequence account → Manage account. Accounts, provider choices,
 saved settings and backend contracts require no migration.
 
 ### 0.4.6 — MCP release connections
@@ -85,3 +94,43 @@ Claude bundles devtools 0.2.7 so releases whose detail responses omit `name` can
 connect, register tools and receive tool calls. Saved connections without a display
 name use the release UID in selectors, tool descriptions and availability errors.
 Connection identity, environment scoping and tool-call confirmations remain intact.
+
+### 0.4.7 — repositories and MainSequence projects
+
+Repository setup and SDK actions now live in **Code** (called Repositories and
+Current Repository in 0.4.7). **Projects** lists real MainSequence projects in the environment
+shared with MCP and Agents, with links to their repositories and exact branches.
+Set the optional Command Center URL in Settings for platform links; otherwise
+repository links use the authorized GitHub binding.
+
+**Projects → select a project → Set up project locally** prepares missing
+repositories, creates or reuses its local Claude workspace and selects each
+assigned branch in an independent checkout. Existing edits are preserved and
+dirty branch switches stop with an explanation. Claude then opens the workspace
+through its native folder link, where you confirm the folder. Its displayed name
+matches the MainSequence project exactly. The enabled plugin then adds every
+repository to the new session using local `/add-dir` commands, without a model turn.
+See [local project setup](docs/claude-desktop.md#mainsequence-projects).
+
+This version bundles devtools **0.2.8**. Before that package is published, install
+the prepared, integrity-checked archive with
+`node scripts/use-local-devtools.cjs /absolute/path/dev-mainsequence-devtools-0.2.8.tgz`
+using the already installed development dependencies, then run `npm run release:check`.
+The ZIP includes the complete runtime; end users need no sibling checkout.
+
+### 0.4.8 — pane redesign
+
+The pane has a persistent header (account, environment, running operations,
+Settings) and five sections: **Home** (next steps, this session's repository status,
+recent activity), **Code** (one list of remote and local repositories with a detail
+view that is the operation target), **Projects**, **Agents** and **Tools** (connected
+MCPs first; Add MCP searches releases; the tool explorer sits under Advanced).
+Confirmations appear above the view instead of replacing it, unavailable actions are
+shown disabled with a reason, results and statuses use Claude's success, warning and
+error colours, and the running count also appears in Claude's status line. Talk fills
+Claude's input with `/ms ` so the message goes to the selected agent; the explicit
+`/ms agent <uid> <message>` and `/ms task <uid> <message>` forms still work, and
+example questions in an agent's details fill the input when pressed. The composer band
+above the prompt gains **Switch agent**. No worker, backend, credential or
+configuration contract changes. See [the proposal](docs/ux-proposal.md) and its
+[mockup](docs/ux-proposal-mockup.html).

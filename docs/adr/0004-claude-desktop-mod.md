@@ -29,7 +29,11 @@ generated dependency output, not a separately maintained implementation.
 
 ## Native UI and transport
 
-One pane contains General, Projects, Current Project, MCP and Activity. Two aligned
+As of 0.4.8, one pane has a status header (account, environment, running operations,
+Settings) and five sections: Home, Code, Projects, Agents and Tools; Activity opens
+from the header. In 0.4.7 the pane contained General, Repositories, Current Repository, Projects,
+MCP, Agents and Activity. Projects contains actual MainSequence organization
+projects and their repository branch memberships. Two aligned
 navigation rows share one selected section. Native Box, Button, Text, Input, Select,
 Svg and Code elements implement the approved grouping without DOM injection. The
 pane opens on Desktop session startup without stealing focus. A `SessionMode`
@@ -38,7 +42,7 @@ preserving the existing footer tree. `/ms` also opens it on
 request. No AbovePrompt hook is registered. Claude controls native placement and
 widget chrome; there is no supported custom right-toolbar registration in use.
 
-MainSequence login and workspace settings live in General. Advanced runtime settings
+MainSequence login and workspace settings live in Settings (General before 0.4.8). Advanced runtime settings
 and technical results are collapsed. Activity uses real progress/results and an
 explicit empty state. Worker progress is textual, so the implementation does not
 invent percentages or reuse fictional preview data.
@@ -76,6 +80,29 @@ of legacy account requests, and public dependency boundaries. Native engine
 validation/simulator tests supplement Node tests. ZIP checks verify portability,
 checksums, documentation and standalone execution.
 
-Signed native terminals, changing Claude's session root and launching container
-sessions remain unsupported. The [verification record](../claude-desktop-verification.md)
+Signed native terminals, changing an existing Claude session's root and launching container
+sessions remain unsupported. Project setup can create or reuse a local multi-repository
+workspace with the project's exact name and open it through Claude's supported
+`claude://code/new?folder=...` link. The link opens one folder; it does not register
+repository membership. The plugin stores the user's selected memberships, validates
+them in the new session and invokes native `/add-dir` for each sibling checkout.
+The UI reports attachment separately and offers a retry after a failed command.
+Claude owns folder trust and starting the conversation. The [verification record](../claude-desktop-verification.md)
 distinguishes these limitations and live GUI checks from automated fixture results.
+
+
+## Agent icon media adapter (2026-10-16)
+
+The approved icon integration uses the platform’s existing environment projection
+and authenticated icon/pose routes. `src/hosts/claudeAgentIcons.ts` adapts binary
+responses through the public session service’s injected fetch transport; token
+selection, rotation and persistence remain in devtools. It neither imports private
+devtools modules nor adds a chat-package dependency. This desktop-specific adapter
+is needed because the pinned session service exposes a JSON request method while
+the native renderer needs embedded media.
+
+The hooks retain media only in account/environment-scoped memory. Native Svg
+widgets draw isolated, non-executable image content. The native AbovePrompt,
+CommandOutput and ToolUse/ToolResult render sites carry the icons while preserving
+the engine’s content. No backend route, worker protocol version, stored settings
+or conversation-binding format changes. See [agent icon behavior and limits](../agent-icons.md).
