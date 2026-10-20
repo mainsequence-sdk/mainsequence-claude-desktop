@@ -37,7 +37,7 @@ function operationTitle(action) {
 
 async function execute($, state, domain, quiet = false, observer = {}) {
   const action = domain.request.action;
-  const contextRevision = state.contextRevision;
+  const contextRevision = state.contextRevision, backend = state.fields.backend;
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
   const setupTarget = action === 'setup' ? setupKey(domain.request) : null;
   if (setupTarget && [...state.running.values()].some(op => op.setupTarget === setupTarget)) {
@@ -64,7 +64,10 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   state.running.delete(id);
   if (!quiet) statusLine($, state);
   const currentMcp = !['mcp-tools', 'mcp-call'].includes(action) || domain.request.releaseUid === state.selectedMcp;
-  if (contextRevision === state.contextRevision && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  // Session results depend on the backend alone: an environment or folder change while
+  // the sign-in check is in flight must not discard it.
+  const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
+  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
 }
@@ -256,7 +259,10 @@ function actionsFor($, state) {
     tab: tab => {
       if (!VIEWS.includes(tab)) return;
       state.tab = tab; state.confirmation = null; update($);
-      if (['Projects', 'Tools', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) background(loadEnvironments($, state));
+      // While startup is still resolving the session, initializeWorkspace loads the
+      // environments for whichever section is open; a second load here would clear
+      // and refetch agents, tools and icons.
+      if (['Projects', 'Tools', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) { if (!state.initializing) background(loadEnvironments($, state)); }
       else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
       if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
       if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
@@ -396,7 +402,7 @@ async function initializeWorkspace($, state) {
     state.preferencesLoading = false; update($);
     await attachWorkspace($, state);
     await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
-    if (['Projects', 'Tools', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) await loadEnvironments($, state);
+    if ((['Projects', 'Tools', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) && !state.results['devtools.mcp-environments']) await loadEnvironments($, state);
   } finally { state.initializing = false; state.preferencesLoading = false; update($); }
 }
 

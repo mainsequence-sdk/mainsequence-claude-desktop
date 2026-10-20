@@ -1028,3 +1028,31 @@ test('paged native selectors retain every catalog entry, selection and valid bou
   }
   assert.equal(selectPage([{value:'a'},{value:'a'},{value:null}], '', 0).total, 1);
 });
+
+test('pressing Agents during startup keeps the signed-in account, the saved environment and agent icons', async () => {
+  const { register } = await load(); const backend = 'https://api.main-sequence.app';
+  const f = fixture({ environments: { [backend]: agentEnvironment }, respond: r => {
+    const q = r.request;
+    if (q.action === 'workspace-preferences') return success(q.action, { backend, baseDir: '/repos' });
+    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'agent-user@example.test' });
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: agentEnvironment, name: 'Research' }]);
+    if (q.action === 'mcp-list' || q.action === 'mcp-discover') return success(q.action, []);
+    if (q.action === 'agents-list') return success(q.action, { account: 'agent-user@example.test', results: [{ uid: agentUid, name: 'Research assistant', environmentUid: agentEnvironment, environmentName: 'Research', runtimeState: 'current', runtimeReleaseUid: agentId(5), responseKinds: ['message'], skills: [] }], count: 1 });
+    return iconResponse({ ...q, agentUids: q.agentUids || [] }) || success(q.action, {});
+  } });
+  register(f.on); await f.emit('session.start', { surface: 'desktop' });
+  const finishAuth = delayRequest(f, 'auth-status');
+  f.timers.find(t => t.ms === 0).callback();
+  // Preferences resolve, the sign-in check is still in flight, and the person opens Agents.
+  await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+  await f.press('tab-Agents');
+  finishAuth(); await flush(); await flush();
+  const tree = await f.pane();
+  assert.match(JSON.stringify(tree), /agent-user@example.test/, 'signed-in account survives the environment change');
+  assert.equal(f.find(tree, 'login'), undefined);
+  assert.equal(f.find(tree, 'mcp-environment').props.value, agentEnvironment);
+  assert.ok(f.find(tree, `agent-${agentUid}`)); assert.ok(f.find(tree, `agent-icon-${agentUid}-20`), 'icon drawn in the list');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agents-list').length, 1, 'agents load once');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-environments').length, 1, 'environments load once');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-icons').length, 1, 'icons load once');
+});
