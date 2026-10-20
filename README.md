@@ -135,3 +135,8 @@ example questions in an agent's details fill the input when pressed. The compose
 above the prompt gains **Switch agent**. No worker, backend, credential or
 configuration contract changes. See [the proposal](docs/ux-proposal.md) and its
 [mockup](docs/ux-proposal-mockup.html).
+
+### 0.4.12 — agent icons
+
+Agents with valid Command Center icons now show them even when another agent in the
+same batch has an empty icon record. See the [release notes](docs/releases/0.4.12.md).

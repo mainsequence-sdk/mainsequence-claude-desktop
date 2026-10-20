@@ -1,5 +1,19 @@
 # Claude Desktop plugin verification
 
+## 0.4.12 — agent icons with an empty record in the batch (2026-10-20)
+
+After 0.4.11 was installed, agent icons did not appear in the user's Desktop. The
+real worker responses from the local backend were recorded (read-only) and replayed
+through the Node fixture and through Desktop's bundled Code 2.1.299 engine; both
+reproduced the missing icon. Back Office Helper's icon record has `idle: null`, and
+the cache's pose-reuse check then read `images` of a missing previous entry. The
+exception aborted the batch, dropping Tutorial Helper's valid icon. The fix handles
+each agent separately; a regression test covers an empty record ahead of valid ones,
+before and after Refresh. The engine replay then passed the signed-in header, seven
+agents, list/detail/band/tool-row icons, Refresh, Talk with the `@handle` prefix, the
+re-addressed composer after a reply, and Tools. Session, readiness and send responses
+were synthesized, so no backend state was created.
+
 ## 0.4.11 — pane redesign (2026-10-20)
 
 The pane now has a status header and five sections (Home, Code, Projects, Agents,

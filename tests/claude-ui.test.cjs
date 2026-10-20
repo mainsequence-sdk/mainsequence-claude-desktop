@@ -1119,3 +1119,31 @@ test('a conversation stays addressed to the agent after each reply until the per
   await model.emit('command.run', { command: 'ms', args: `agent ${agentUid} From a plugin`, origin: { kind: 'plugin', name: 'other' } });
   assert.equal(model.draft, '', 'only composer submissions keep the prefix');
 });
+
+test('an agent without an idle icon never costs the other agents in its batch their icons, before or after Refresh', async () => {
+  const uids = [agentId(2), agentId(6), agentId(7), agentId(8), agentId(10)];
+  const agents = uids.map((uid, i) => ({ uid, name: `Agent ${i}`, environmentUid: agentEnvironment, environmentName: 'Research', runtimeState: 'current', runtimeReleaseUid: agentId(5), responseKinds: ['message'], skills: [] }));
+  const f = fixture({ respond: r => {
+    const q = r.request;
+    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'agent-user@example.test' });
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: agentEnvironment, name: 'Research' }]);
+    if (q.action === 'mcp-list' || q.action === 'mcp-discover') return success(q.action, []);
+    if (q.action === 'agents-list') return success(q.action, { account: 'agent-user@example.test', results: agents, count: agents.length });
+    // Real backend shape: agent 1 has a projection without an idle asset; agents 3 and 4 have icons.
+    if (q.action === 'agent-icons') return success(q.action, { environmentUid: q.environmentUid, account: 'agent-user@example.test', icons: Object.fromEntries(q.agentUids.flatMap(uid =>
+      uid === uids[1] ? [[uid, { rendering: 'color', toolPoses: {}, images: { idle: null }, posesLoaded: false }]]
+        : [uids[3], uids[4]].includes(uid) ? [[uid, { rendering: 'color', toolPoses: {}, images: { idle: iconImage('idle') }, posesLoaded: false }]] : [])) });
+    return success(q.action, {});
+  } });
+  const { register } = await load(); register(f.on); await f.emit('session.start', { surface: 'desktop' });
+  f.timers.find(t => t.ms === 0).callback(); await flush();
+  await f.press('tab-Agents'); f.find(await f.pane(), 'mcp-environment').props.onSelect(agentEnvironment); await flush(); await flush();
+  let tree = await f.pane();
+  for (const uid of [uids[3], uids[4]]) assert.ok(f.find(tree, `agent-icon-${uid}-20`), `icon for ${uid}`);
+  for (const uid of [uids[0], uids[1], uids[2]]) assert.equal(f.find(tree, `agent-icon-${uid}-20`), undefined);
+  const lists = f.calls.filter(c => c.request?.request.action === 'agents-list').length;
+  await f.press('agents-refresh'); await flush(); await flush();
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'agents-list').length, lists + 1, 'Refresh reloads the list');
+  tree = await f.pane();
+  for (const uid of [uids[3], uids[4]]) assert.ok(f.find(tree, `agent-icon-${uid}-20`), `icon for ${uid} after Refresh`);
+});

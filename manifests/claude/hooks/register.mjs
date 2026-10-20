@@ -750,16 +750,20 @@ async function loadAgentIcons($, state, uids, includePoses = false) {
         continue;
       }
       for (const uid of batch) {
-        const icon = data.icons?.[uid];
-        if (icon?.images) {
-          const old = state.agentIcons[uid];
-          const images = Object.fromEntries(Object.entries(icon.images).map(([pose, image]) => [pose, image || old?.images?.[pose] || null]));
-          const keepPoses = !includePoses && old?.images?.idle?.source === images.idle?.source;
-          state.agentIcons[uid] = { ...icon, images: { ...(keepPoses ? old.images : {}), ...images },
-            posesLoaded: includePoses || keepPoses && old?.posesLoaded };
-          if (!keepPoses && !includePoses) delete state.agentIconTimes[`${uid}:poses`];
-        } else delete state.agentIcons[uid];
-        state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = icon?.images && !icon.images.idle ? now - 240000 : now;
+        // One agent's malformed or empty record must never cost the others in its batch their icons.
+        try {
+          const icon = data.icons?.[uid];
+          if (icon?.images && typeof icon.images === 'object') {
+            const old = state.agentIcons[uid];
+            const images = Object.fromEntries(Object.entries(icon.images).map(([pose, image]) => [pose, image || old?.images?.[pose] || null]));
+            // An agent without an idle asset has nothing to keep: only reuse poses of the same, present idle image.
+            const keepPoses = !includePoses && !!old?.images && typeof images.idle?.source === 'string' && old.images.idle?.source === images.idle.source;
+            state.agentIcons[uid] = { ...icon, images: { ...(keepPoses ? old.images : {}), ...images },
+              posesLoaded: includePoses || (keepPoses && !!old.posesLoaded) };
+            if (!keepPoses && !includePoses) delete state.agentIconTimes[`${uid}:poses`];
+          } else delete state.agentIcons[uid];
+          state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = icon?.images && !icon.images.idle ? now - 240000 : now;
+        } catch { delete state.agentIcons[uid]; state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = now - 240000; }
       }
       refresh($);
     } catch { /* Presentation failure keeps existing media and never blocks agents. */ }
