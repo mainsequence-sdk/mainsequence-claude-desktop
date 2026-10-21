@@ -8,7 +8,7 @@ and workspace settings live. The pane uses the MainSequence emblem and Claude's 
 theme; it adds no strip above the prompt.
 
 [Version **0.4.11**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.11)
-is the [pane redesign](docs/ux-proposal.md): lists of rows instead of dropdowns, one
+is the pane redesign: lists of rows instead of dropdowns, one
 primary action per view, status colours, disabled-with-reason controls, confirmations
 that keep the navigation visible, and `/ms @agent <message>` naming the receiving agent.
 
@@ -133,8 +133,7 @@ the message; the explicit `/ms agent <uid> <message>` and `/ms task <uid> <messa
 forms still work, a bare `/ms <message>` is refused with the prepared handles, and
 example questions in an agent's details fill the input when pressed. The composer band
 above the prompt gains **Switch agent**. No worker, backend, credential or
-configuration contract changes. See [the proposal](docs/ux-proposal.md) and its
-[mockup](docs/ux-proposal-mockup.html).
+configuration contract changes.
 
 ### 0.4.12 — agent icons
 

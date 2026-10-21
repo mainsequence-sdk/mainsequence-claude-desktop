@@ -142,7 +142,7 @@ were synthesized, so no backend state was created.
 The pane now has a status header and five sections (Home, Code, Projects, Agents,
 Tools) with Settings and Activity opened from the header, on top of the 0.4.9 pane
 recovery, select paging and setup progress and the 0.4.10 MCP names; see
-[the proposal](ux-proposal.md). Views draw lists of rows with inline actions, one
+the redesign analysis kept outside the repository. Views draw lists of rows with inline actions, one
 primary button, status colours and disabled-with-reason controls from the host's own
 elements. Confirmations draw above the view. `/ms <message>` reaches the agent most
 recently prepared by Talk. No worker request, backend, credential or configuration

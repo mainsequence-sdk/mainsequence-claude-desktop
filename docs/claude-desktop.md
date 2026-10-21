@@ -6,7 +6,7 @@ MainSequence provides a native pane in local Claude Desktop Code sessions. Since
 environment, a running-operations counter that opens **Activity**, and **Settings**.
 There is no Accounts page, rotation configuration or launcher strip above the chat.
 Earlier releases used seven peer sections (General, Repositories, Current Repository,
-Projects, MCP, Agents, Activity); the [redesign proposal](ux-proposal.md) records why
+Projects, MCP, Agents, Activity); the redesign analysis, kept outside the repository, records why
 they were merged. The MainSequence emblem
 comes from MainSequencePublic.
 
