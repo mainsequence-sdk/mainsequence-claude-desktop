@@ -966,6 +966,68 @@ test('MCP rows show repository names and route by exact release without environm
   assert.equal(f.calls.filter(call => call.request?.request.action === 'mcp-tools').at(-1).request.request.releaseUid, 'release-0');
 });
 
+test('a backend blip during an MCP refresh keeps the remembered name and the earlier tools; a removed MCP loses its tools', async () => {
+  const { register } = await load();
+  const connected = ['crm', 'other']; let degraded = false;
+  const labels = { crm: 'MainSequenceCRMAPI', other: 'alpaca-connectors' };
+  const f = fixture({ respond: d => {
+    const q = d.request;
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env', name: 'Production' }]);
+    // The name is an optional backend lookup: while the backend restarts the listing comes back without it.
+    if (q.action === 'mcp-list') return success(q.action, connected.map(uid => ({ backend: 'https://api.main-sequence.app', resource_release_uid: uid,
+      ...(degraded ? {} : { display_name: labels[uid] }), mcp_connection: { organization_environment_uid: 'env' } })));
+    if (q.action === 'mcp-tools') return degraded ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The backend could not be reached.' }
+      : success(q.action, { tools: [{ name: `lookup_${q.releaseUid}`, inputSchema: { type: 'object' } }] });
+    if (q.action === 'mcp-remove') connected.splice(connected.indexOf(q.releaseUid), 1);
+    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: 'ok' }] });
+    return success(q.action, {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  assert.equal(f.tools.length, 2);
+  const crmTool = 'mcp__mainsequence__' + f.tools.find(tool => tool.description.includes('MainSequenceCRMAPI')).name;
+  const otherTool = 'mcp__mainsequence__' + f.tools.find(tool => tool.description.includes('alpaca-connectors')).name;
+  degraded = true;
+  await f.press('mcp-remove-other'); await f.press('confirm-action');
+  assert.equal(f.calls.find(c => c.request?.request.action === 'mcp-remove').request.request.releaseUid, 'other');
+  let tree = await f.pane();
+  assert.equal(f.find(tree, 'mcp-open-crm').props.label, 'MainSequenceCRMAPI', 'the last resolved name stays while the lookup is unavailable');
+  assert.doesNotMatch(JSON.stringify(tree), /Unnamed MCP/);
+  assert.equal(f.find(tree, 'mcp-connected-other'), undefined);
+  assert.match(JSON.stringify(tree), /MainSequenceCRMAPI could not be read now; its earlier tools stay registered/);
+  assert.equal((await f.emit('tool.call', { tool: crmTool, tool_use_id: 'call-1' })).isError, undefined, 'the remaining MCP keeps its earlier tools');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').at(-1).request.request.releaseUid, 'crm');
+  assert.match((await f.emit('tool.call', { tool: otherTool, tool_use_id: 'call-2' })).deny, /no longer connected/, 'the removed MCP loses its tools');
+  assert.equal(f.tools.length, 2, 'nothing was re-registered under a different name');
+  // The next successful refresh re-reads the catalog and clears the warning.
+  degraded = false;
+  await f.press('mcp-open-crm'); await f.press('toggle-tools-advanced'); await f.press('mcp-register'); await f.press('tools-back');
+  tree = await f.pane();
+  assert.doesNotMatch(JSON.stringify(tree), /could not be read/);
+  assert.equal(f.find(tree, 'mcp-open-crm').props.label, 'MainSequenceCRMAPI');
+  assert.equal((await f.emit('tool.call', { tool: crmTool, tool_use_id: 'call-3' })).isError, undefined);
+});
+
+test('a failed MCP listing during a refresh keeps the current environment tools and reports the failure', async () => {
+  const { register } = await load(); let listingFails = false;
+  const f = fixture({ respond: d => {
+    const q = d.request;
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env', name: 'Production' }]);
+    if (q.action === 'mcp-list') return listingFails ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The backend could not be reached.' }
+      : success(q.action, [{ backend: 'https://api.main-sequence.app', resource_release_uid: 'crm', display_name: 'MainSequenceCRMAPI', mcp_connection: { organization_environment_uid: 'env' } }]);
+    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
+    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: 'ok' }] });
+    return success(q.action, {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
+  f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
+  const tool = 'mcp__mainsequence__' + f.tools[0].name;
+  listingFails = true;
+  await f.press('mcp-open-crm'); await f.press('toggle-tools-advanced'); await f.press('mcp-register');
+  assert.match(JSON.stringify(await f.pane()), /could not be reached/);
+  assert.equal((await f.emit('tool.call', { tool, tool_use_id: 'call-1' })).isError, undefined, 'tools registered before the failed listing still work');
+});
+
 test('slow MCP tool reads cannot block discovery or replace another selected MCP catalog', async () => {
   const { register } = await load();
   const f = fixture({respond: d => {

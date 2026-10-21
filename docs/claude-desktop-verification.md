@@ -1,5 +1,41 @@
 # Claude Desktop plugin verification
 
+## 0.4.17 — MCP refresh tolerates a briefly unreachable backend (2026-10-21)
+
+Reported: after disconnecting one MCP, the remaining CRM MCP showed as **Unnamed MCP**
+and its tools stopped working. Cause: the disconnect's refresh (saved-connection listing
+with its optional name lookup, then each connection's tool catalog) ran while the local
+backend container (`tsorm_web_local`, a Django development server reloading on code
+changes every one to three minutes, resetting connections for about twenty seconds each
+time) was restarting; the listing came back without `display_name`, and the catalog read
+failed, so the connection was relabelled and its tools dropped from the tool map until the
+next refresh. The pane now remembers the last resolved name per backend and release
+(`rememberMcpNames`), retains a connection's previously registered tools when its
+catalog cannot be read and names it in a warning, keeps the environment's tools when
+the listing itself fails, and the worker labels a connection with the release's own
+name when its repository cannot be read (`src/hosts/claudeMcpNames.ts`).
+
+Automated verification on 2026-10-21 (`npm run release:check`):
+
+- 97 Node tests passed. New: a disconnect during a degraded backend (remembered name,
+  no "Unnamed MCP", warning text, the remaining MCP's tool call still routed to its
+  release, the removed MCP's tool denied, no duplicate registration, the next
+  successful refresh clearing the warning), a failed listing keeping the registered
+  tools, and the packaged-worker naming test extended with the projection's release
+  name and a 503 from the branch endpoint.
+- Ten native simulator tests and loader validation passed on Desktop's bundled Code
+  2.1.304; documentation links, packaging and distribution checks passed.
+
+Live check (read-only) on 2026-10-21 against the local backend `http://127.0.0.1:8000`
+with the saved MainSequenceCRMAPI connection (environment `18595d12-…`, Production):
+the rebuilt worker's `mcp-list` returned `name: "crm"` and `display_name:
+"MainSequenceCRMAPI"` on three consecutive runs, and `mcp-tools` read its catalog in about
+ten seconds once the container was up. Before the fix, the same listing during a restart
+window returned the row with neither label, and the branch endpoint answered
+`ECONNRESET` for every request for about twenty seconds. The branch-unreadable fallback
+was verified by the packaged-worker test (503 from the branch endpoint), and the pane by
+the hook tests, not by Desktop's window.
+
 ## 0.4.16 — deployments in the pane and the `ms_deployment_status` tool (2026-10-21)
 
 A local repository's Code detail gains a **Deploys** card, a run detail (SVG step

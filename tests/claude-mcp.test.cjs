@@ -72,10 +72,11 @@ test('packaged Claude worker discovers, connects and calls MCPs with nameless re
       const offset = Number(new URL(req.url, backend).searchParams.get('offset'));
       return res.end(JSON.stringify({ count: 102, results: offset === 0
         ? [{ uid: releaseUid, code_repository_branch_uid: 'wrong', mcp_connection: { organization_environment_uid: 'different' } }]
-        : [releaseUid, otherUid].map((uid, i) => ({ uid, code_repository_branch_uid: `branch-${i}`,
+        : [releaseUid, otherUid].map((uid, i) => ({ uid, code_repository_branch_uid: `branch-${i}`, name: i === 0 ? 'crm' : 'app',
           mcp_connection: { organization_environment_uid: state.namesEnvironment } })) }));
     }
     if (req.url.startsWith('/api/v1/code-repository-branches/')) {
+      if (state.branchesDenied) return res.writeHead(503).end('{}');
       const uid = req.url.split('/').at(-2);
       assert.ok(['branch-0', 'branch-1'].includes(uid), 'only exact environment matches are resolved');
       return res.end(JSON.stringify({ uid, code_repository_uid: `repo-${uid}`,
@@ -137,7 +138,15 @@ require(${JSON.stringify(path.join(packageRoot, 'dist/claudeRunner.js'))}).main(
   const listed = await run('mcp-list');
   assert.equal(listed.data.length, 1);
   assert.equal(listed.data[0].display_name, 'BackofficeBackend', 'old nameless saved connections get the same name');
+  assert.equal(listed.data[0].name, 'crm', 'the release name from the projection labels a nameless saved connection');
+  assert.deepEqual((await run('mcp-discover')).data.results.map(row => row.name), ['app', 'app'], 'a name the directory gave is kept');
   assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'display_name'), false, 'presentation names do not rewrite connection storage');
+  assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'name'), false, 'release names do not rewrite connection storage either');
+  state.branchesDenied = true;
+  const unresolved = await run('mcp-list');
+  assert.equal(unresolved.data[0].display_name, undefined);
+  assert.equal(unresolved.data[0].name, 'crm', 'the release name remains when its repository cannot be read');
+  state.branchesDenied = false;
   state.namesDenied = true;
   const unavailableNames = await run('mcp-list');
   assert.equal(unavailableNames.status, 'success');
