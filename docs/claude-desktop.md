@@ -227,9 +227,14 @@ are available from the next prompt. Exact release identities remain pinned.
 
 Connecting or disconnecting an MCP re-reads the environment's saved connections and
 each one's tool catalog (since 0.4.17, a refresh tolerates a backend that is briefly
-unreachable, such as a local development server restarting). An MCP's row keeps the
-last name the backend resolved for it while the name lookup is unavailable, and the
-release's own name labels a connection whose repository cannot be read. A connection
+unreachable, such as a local development server restarting). Since 0.4.18 a connection's
+names are stored with it: connecting an MCP reads the release's name and its repository's
+name and saves them in `mcp-connections.json` as `name`, `display_name` and
+`code_repository_branch_uid`, so a listing labels the connection without a backend
+request, and a connection saved by an earlier version is completed by the first listing
+that can read its names. A name that cannot be read is left out and never makes a working
+MCP unavailable; the row then keeps the last name the pane resolved for it, or the
+release's own name when only its repository could not be read. A connection
 whose catalog cannot be read right now keeps the tools registered by the previous
 refresh and is named in a warning under the list; **Refresh** or **Re-register tools**
 reads it again. Only a disconnected MCP loses its tools, and a failed listing keeps the

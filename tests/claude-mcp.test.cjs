@@ -13,7 +13,8 @@ test('packaged Claude worker discovers, connects and calls MCPs with nameless re
   const otherUid = 'b0a5ee29-f649-46ab-a040-38504838a132';
   const environmentUid = 'ba034541-73b4-4c5b-81ad-16516d8a8f94';
   const platformToken = 'fixture-platform-token', releaseToken = 'fixture-release-token';
-  const state = { denied: false, noMcp: false, namesDenied: false, namesEnvironment: environmentUid,
+  const branches = ['c1d2e3f4-0000-4000-8000-000000000000', 'c1d2e3f4-0000-4000-8000-000000000001'];
+  const state = { denied: false, noMcp: false, namesDenied: false, branchesDenied: false,
     endpoint: undefined, detailUid: releaseUid, exchanged: 0, invoked: 0 };
   const calls = [];
   async function listen(handler) {
@@ -60,27 +61,25 @@ test('packaged Claude worker discovers, connects and calls MCPs with nameless re
       if (initialized(res, message)) return;
       assert.equal(message.params.name, 'resource_release.mcp_endpoints');
       return reply(res, message.id, { content: [], structuredContent: { count: 2, results: [
-        { resource_release_uid: releaseUid, name: 'app', mcp_connection: metadata(releaseUid) },
-        { resource_release_uid: otherUid, name: 'app', mcp_connection: metadata(otherUid) },
+        { resource_release_uid: releaseUid, name: 'app', code_repository_branch_uid: branches[0], mcp_connection: metadata(releaseUid) },
+        { resource_release_uid: otherUid, name: 'app', code_repository_branch_uid: branches[1], mcp_connection: metadata(otherUid) },
       ] } });
     }
     res.setHeader('Content-Type', 'application/json');
     if (req.url.startsWith('/api/v1/resource-releases/?')) {
+      // The directory projection names a release and its repository branch; the detail below does not.
       if (state.namesDenied) return res.writeHead(403).end('{}');
-      // Exact matching must find entries after the first collection page and
-      // ignore metadata for the same release in another environment.
-      const offset = Number(new URL(req.url, backend).searchParams.get('offset'));
-      return res.end(JSON.stringify({ count: 102, results: offset === 0
-        ? [{ uid: releaseUid, code_repository_branch_uid: 'wrong', mcp_connection: { organization_environment_uid: 'different' } }]
-        : [releaseUid, otherUid].map((uid, i) => ({ uid, code_repository_branch_uid: `branch-${i}`, name: i === 0 ? 'crm' : 'app',
-          mcp_connection: { organization_environment_uid: state.namesEnvironment } })) }));
+      const search = new URL(req.url, backend).searchParams.get('search') || '';
+      assert.ok(search, 'the worker looks a release up by its UID');
+      return res.end(JSON.stringify({ count: 1, results: [releaseUid, otherUid].filter(uid => uid.includes(search)).map(uid => ({ uid,
+        code_repository_branch_uid: branches[uid === releaseUid ? 0 : 1], name: uid === releaseUid ? 'crm' : 'app', mcp_connection: metadata(uid) })) }));
     }
     if (req.url.startsWith('/api/v1/code-repository-branches/')) {
       if (state.branchesDenied) return res.writeHead(503).end('{}');
       const uid = req.url.split('/').at(-2);
-      assert.ok(['branch-0', 'branch-1'].includes(uid), 'only exact environment matches are resolved');
+      assert.ok(branches.includes(uid), 'only branches the directory named are resolved');
       return res.end(JSON.stringify({ uid, code_repository_uid: `repo-${uid}`,
-        code_repository_name: uid === 'branch-0' ? 'BackofficeBackend' : 'alpaca-connectors',
+        code_repository_name: uid === branches[0] ? 'BackofficeBackend' : 'alpaca-connectors',
         repository_branch: 'main', is_initialized: true }));
     }
     if (req.url === '/api/v1/resource-releases/' + releaseUid + '/') return res.end(JSON.stringify({
@@ -125,40 +124,48 @@ require(${JSON.stringify(path.join(packageRoot, 'dist/claudeRunner.js'))}).main(
     });
   }
 
+  const lookups = () => calls.filter(call => call.server === 'platform' && call.path !== '/mcp').length;
+  const saved = () => fs.readFile(store, 'utf8').then(JSON.parse);
   const discovered = await run('mcp-discover');
   assert.equal(discovered.status, 'success');
   assert.deepEqual(discovered.data.results.map(row => row.name), ['app', 'app']);
-  assert.deepEqual(discovered.data.results.map(row => row.display_name), ['BackofficeBackend', 'alpaca-connectors']);
+  assert.deepEqual(discovered.data.results.map(row => row.display_name), ['BackofficeBackend', 'alpaca-connectors'], 'discovery rows are labelled from their branch');
   const added = await run('mcp-add');
   assert.equal(added.status, 'success', added.summary);
   assert.equal(added.data.tools[0].name, 'lookup');
-  assert.equal(Object.hasOwn(added.data.connection, 'name'), false);
-  const saved = await fs.readFile(store, 'utf8');
-  assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'name'), false);
+  assert.deepEqual([added.data.connection.name, added.data.connection.display_name, added.data.connection.code_repository_branch_uid],
+    ['crm', 'BackofficeBackend', branches[0]]);
+  assert.deepEqual([(await saved())[0].name, (await saved())[0].display_name], ['crm', 'BackofficeBackend'], 'the names are stored with the connection');
+  let before = lookups();
   const listed = await run('mcp-list');
   assert.equal(listed.data.length, 1);
-  assert.equal(listed.data[0].display_name, 'BackofficeBackend', 'old nameless saved connections get the same name');
-  assert.equal(listed.data[0].name, 'crm', 'the release name from the projection labels a nameless saved connection');
-  assert.deepEqual((await run('mcp-discover')).data.results.map(row => row.name), ['app', 'app'], 'a name the directory gave is kept');
-  assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'display_name'), false, 'presentation names do not rewrite connection storage');
-  assert.equal(Object.hasOwn(JSON.parse(saved)[0], 'name'), false, 'release names do not rewrite connection storage either');
+  assert.equal(listed.data[0].display_name, 'BackofficeBackend');
+  assert.equal(lookups(), before, 'a saved connection is listed without a backend request');
+  // A connection saved by an earlier plugin version has no names: the first listing that can read them stores them.
+  const legacy = { backend, resource_release_uid: releaseUid, mcp_connection: added.data.connection.mcp_connection };
+  await fs.writeFile(store, JSON.stringify([legacy]));
   state.branchesDenied = true;
   const unresolved = await run('mcp-list');
   assert.equal(unresolved.data[0].display_name, undefined);
   assert.equal(unresolved.data[0].name, 'crm', 'the release name remains when its repository cannot be read');
   state.branchesDenied = false;
+  assert.equal((await run('mcp-list')).data[0].display_name, 'BackofficeBackend', 'old nameless saved connections get the same name');
+  assert.equal((await saved())[0].display_name, 'BackofficeBackend', 'and keep it');
+  before = lookups();
+  await run('mcp-list');
+  assert.equal(lookups(), before, 'a completed connection is not looked up again');
+  await fs.writeFile(store, JSON.stringify([legacy]));
   state.namesDenied = true;
   const unavailableNames = await run('mcp-list');
   assert.equal(unavailableNames.status, 'success');
   assert.equal(unavailableNames.data[0].display_name, undefined, 'optional name lookup cannot break a saved connection');
-  state.namesDenied = false; state.namesEnvironment = 'different';
-  assert.equal((await run('mcp-list')).data[0].display_name, undefined, 'names from another environment cannot leak');
-  state.namesEnvironment = environmentUid;
+  state.namesDenied = false;
+  assert.equal((await run('mcp-list')).data[0].display_name, 'BackofficeBackend');
   assert.equal((await run('mcp-tools')).data.tools[0].name, 'lookup');
   const called = await run('mcp-call', { tool: 'lookup', arguments: { value: 42 } });
   assert.equal(called.status, 'success'); assert.equal(called.data.structuredContent.value, 42);
 
-  const exchanged = state.exchanged, executed = calls.filter(call => call.server === 'project').length;
+  const exchanged = state.exchanged, executed = calls.filter(call => call.server === 'project').length, stored = await fs.readFile(store, 'utf8');
   state.denied = true;
   assert.equal((await run('mcp-tools')).error.code, 'AUTH_REJECTED');
   state.denied = false; state.endpoint = 'https://changed.example/mcp';
@@ -169,7 +176,7 @@ require(${JSON.stringify(path.join(packageRoot, 'dist/claudeRunner.js'))}).main(
   assert.equal((await run('mcp-tools')).error.code, 'API_ERROR');
   assert.equal(state.exchanged, exchanged); assert.equal(state.invoked, 1);
   assert.equal(calls.filter(call => call.server === 'project').length, executed);
-  assert.equal(await fs.readFile(store, 'utf8'), saved, 'failures preserve saved metadata');
+  assert.equal(await fs.readFile(store, 'utf8'), stored, 'failures preserve saved metadata');
   assert.ok(calls.filter(call => call.server === 'project').every(call => call.authorization === 'Bearer ' + releaseToken));
   assert.ok(calls.filter(call => call.server === 'platform').every(call => call.authorization === 'Bearer ' + platformToken));
 });
