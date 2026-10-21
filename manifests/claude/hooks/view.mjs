@@ -1,7 +1,8 @@
-import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget } from './model.mjs';
 import { primitives, OPERATION_STATUS, OPERATION_KIND } from './primitives.mjs';
 import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
+import { renderDeployCard, renderDeployments, renderHomeDeployLine } from './deploymentView.mjs';
 import { EMBLEM } from './branding.mjs';
 
 const VIEW_NOUN = { Code: 'your repositories', Projects: 'its projects', Agents: 'its agents', Tools: 'its MCP tools' };
@@ -108,10 +109,12 @@ export function renderPane(ui, state, actions, options = {}) {
           button('home-open-code', 'Open in Code', () => actions.openCode({ root: state.cwd }), { plain: true })]),
         forSession && context.branch && line('Branch', context.branch),
         forSession && sdkLine && line('SDK', sdkLine[1], sdkLine[0]),
+        forSession && renderHomeDeployLine(p, state, actions, deployTarget(state, { root: state.cwd })),
         forSession && !state.results['devtools.status'] && caption(busy('devtools', 'status') ? 'Checking the repository…' : 'Repository status has not been checked yet.'),
         !forSession && caption(`Code is targeting ${f.root}.`),
         buttons([button('home-status', busy('devtools', 'status') ? 'Checking…' : 'Check status', actions.checkHomeStatus, { available: !busy('devtools', 'status') }),
-          forSession && sdk.updateAvailable === true && sdk.updateSupported === true && button('home-update-sdk', 'Update SDK', mut('Update MainSequence SDK', dev('update-sdk')), { primary: true })]),
+          forSession && sdk.updateAvailable === true && sdk.updateSupported === true && button('home-update-sdk', 'Update SDK', mut('Update MainSequence SDK', dev('update-sdk')), { primary: true }),
+          signedIn && f.mcpEnvironment && button('home-deployments', 'All deployments', () => actions.openDeployments('home'), { plain: true, dim: true })]),
         forSession && result('devtools.status'),
       ]),
       card('Recent', recent.length ? [
@@ -121,7 +124,7 @@ export function renderPane(ui, state, actions, options = {}) {
     ]);
   }
 
-  if (state.tab === 'Code') body = renderCode(p, state, actions, { dev, project, mut, busy, gated });
+  if (state.tab === 'Code') body = renderCode(p, state, actions, { dev, project, mut, busy, gated, environment });
 
   if (state.tab === 'Projects') body = gated ? null : renderProjects(ui, state, actions);
   if (state.tab === 'Agents') body = gated ? null : renderAgents(ui, state, actions);
@@ -186,9 +189,11 @@ export function renderPane(ui, state, actions, options = {}) {
   return page([confirmation, Box({ key: 'section-content', children: [body].filter(Boolean) })]);
 }
 
-function renderCode(p, state, actions, { dev, project, mut, busy, gated }) {
+function renderCode(p, state, actions, { dev, project, mut, busy, gated, environment }) {
   const { Code, text, muted, caption, heading, title, status, column, inline, buttons, line, card, button, toggle, input, select, row, badge, result, empty } = p;
   const f = state.fields;
+  // Deployments are remote state drawn in place of the Code body: the environment-wide list or one run.
+  if (state.deployView) return renderDeployments(p, state, actions, environment);
   const listed = state.results['devtools.repositories'];
   const remote = rows(listed?.data);
   const locals = rows(state.results['projects.local-repositories']?.data);
@@ -246,6 +251,7 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated }) {
           button('sdk-status', 'Check SDK', dev('sdk-status'), { plain: true }), button('project-resolve', 'Detect repository', dev('resolve'), { plain: true, dim: true })]),
         result('devtools.status'), result('devtools.sdk-status'),
       ]),
+      renderDeployCard(p, state, actions, deployTarget(state, detail)),
       card('Dependencies', [
         buttons([button('sync', 'Sync dependencies', mut('Sync dependencies', dev('sync')), { primary: true, available: available('sync'), reason: reason('sync') }),
           button('install', 'Install dependencies', mut('Install dependencies', dev('install')), { available: available('install'), reason: reason('install') }),

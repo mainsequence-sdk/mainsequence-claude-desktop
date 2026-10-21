@@ -1,14 +1,16 @@
-import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle } from './model.mjs';
+import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget } from './model.mjs';
 import { renderPane, renderRecovery } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
+import { HIDDEN_DEPLOYMENT, isActiveRun, defaultStep, failedStep, logSource, describeRun, logTimestamp, stateLabel, kindLabel, stepLabel } from './deploymentView.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
 
 async function openPane($, state) {
   await $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true });
+  state.paneOpen = true; syncDeploymentPolling($, state);
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
 }
@@ -32,7 +34,8 @@ function operationTitle(action) {
     'agent-task-get': 'Check agent task', 'agent-task-wait': 'Wait for agent task', 'agent-task-cancel': 'Cancel agent task',
     'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
     'organization-project-setup': 'Set up project locally', 'open-project-workspace': 'Open project in Claude',
-    'local-repositories': 'Discover local repositories' })[action] || action.replaceAll('-', ' ');
+    'local-repositories': 'Discover local repositories', 'deployment-history': 'Read deployment history', 'deployment-run': 'Read deployment run',
+    'deployment-logs': 'Read deployment logs' })[action] || action.replaceAll('-', ' ');
 }
 
 async function execute($, state, domain, quiet = false, observer = {}) {
@@ -67,7 +70,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   // Session results depend on the backend alone: an environment or folder change while
   // the sign-in check is in flight must not discard it.
   const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
-  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons'].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
 }
@@ -231,37 +234,45 @@ async function refreshToolsNow($, state) {
   const environmentUid = state.fields.mcpEnvironment;
   const listed = await execute($, state, devRequest(state, 'mcp-list'), true);
   if (state.closed || revision !== state.contextRevision) return;
-  if (listed.status !== 'success') { state.results['mcp.registration'] = publicValue(listed); update($); return; }
-  const next = {};
-  const unavailable = [];
-  for (const connection of rows(listed.data)) {
-    if (connection.mcp_connection?.organization_environment_uid !== environmentUid) continue;
-    const releaseUid = connection.resource_release_uid;
-    const backend = connection.backend;
-    const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, environmentUid, releaseUid }), true);
-    if (state.closed || revision !== state.contextRevision) return;
-    if (answer.status !== 'success') { unavailable.push(mcpDisplayName(connection)); continue; }
-    for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
-      const name = toolName(backend, environmentUid, releaseUid, tool.name);
-      const full = `mcp__${$.plugin.name}__${name}`;
-      next[full] = { backend, environmentUid, releaseUid, tool: tool.name };
-      await $.tool.register({ name, description: clean(`MainSequence ${mcpDisplayName(connection)} [${environmentLabel(state)}]: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
+  if (listed.status !== 'success') { state.results['mcp.registration'] = publicValue(listed); update($); }
+  else {
+    const next = {};
+    const unavailable = [];
+    for (const connection of rows(listed.data)) {
+      if (connection.mcp_connection?.organization_environment_uid !== environmentUid) continue;
+      const releaseUid = connection.resource_release_uid;
+      const backend = connection.backend;
+      const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, environmentUid, releaseUid }), true);
       if (state.closed || revision !== state.contextRevision) return;
+      if (answer.status !== 'success') { unavailable.push(mcpDisplayName(connection)); continue; }
+      for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
+        const name = toolName(backend, environmentUid, releaseUid, tool.name);
+        const full = `mcp__${$.plugin.name}__${name}`;
+        next[full] = { backend, environmentUid, releaseUid, tool: tool.name };
+        await $.tool.register({ name, description: clean(`MainSequence ${mcpDisplayName(connection)} [${environmentLabel(state)}]: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
+        if (state.closed || revision !== state.contextRevision) return;
+      }
     }
+    // Removed servers' previously registered names are refused by the handler below.
+    if (state.closed || revision !== state.contextRevision) return;
+    state.mcpTools = next;
+    state.results['mcp.registration'] = { schemaVersion: 1, action: 'mcp-registration', status: 'success',
+      summary: `${Object.keys(next).length} MainSequence tools available from the next prompt.`, data: { unavailable } };
+    update($);
   }
-  // Removed servers' previously registered names are refused by the handler below.
-  if (state.closed || revision !== state.contextRevision) return;
-  state.mcpTools = next;
-  state.results['mcp.registration'] = { schemaVersion: 1, action: 'mcp-registration', status: 'success',
-    summary: `${Object.keys(next).length} MainSequence tools available from the next prompt.`, data: { unavailable } };
-  update($);
+  // The deployment status tool is registered once per environment selection. It reads only, and the
+  // handler denies it while no environment is selected, so a failed MCP listing must not withhold it.
+  await $.tool.register({ name: DEPLOY_TOOL, description: clean(`MainSequence deployments [${environmentLabel(state)}]: read the latest deployment or workflow run of a repository branch (default: this session's checkout), or one run by uid, with its steps, states and timings. logs: true adds the last 80 log lines of the first failed step. Read-only.`),
+    inputSchema: { type: 'object', properties: { repository: { type: 'string', description: 'MainSequence repository name or uid; defaults to the session folder\'s repository' },
+      branch: { type: 'string', description: 'Branch name; defaults to the checked-out branch' }, runUid: { type: 'string', description: 'A deployment or workflow run uid, instead of repository and branch' },
+      logs: { type: 'boolean', description: 'Include the last 80 log lines of the first failed step' } }, additionalProperties: false } });
 }
 
 function environmentLabel(state) {
   return rows(state.results['devtools.mcp-environments']?.data).find(row => row.uid === state.fields.mcpEnvironment)?.name || state.fields.mcpEnvironment;
 }
 function clearMcp($, state) {
-  clearAgents($, state); clearOrganizationProjects($, state);
+  clearAgents($, state); clearOrganizationProjects($, state); clearDeployments($, state);
   state.contextRevision++; state.mcpTools = {}; state.selectedMcp = ''; state.confirmation = null; state.toolsView = 'list';
   state.fields.mcpTool = ''; state.mcpOffset = 0;
   for (const key of ['mcp-tool', 'mcp-environment']) delete state.selectPages[key];
@@ -283,6 +294,7 @@ async function selectEnvironment($, state, uid, persist = true) {
   await Promise.all([refreshTools($, state), runDev($, state, 'mcp-discover')]);
   if (revision === state.contextRevision && state.tab === 'Agents') await loadAgents($, state);
   if (revision === state.contextRevision && state.tab === 'Projects') await loadOrganizationProjects($, state);
+  if (revision === state.contextRevision) await ensureLatestDeployments($, state);
 }
 async function loadEnvironments($, state) {
   if (state.environmentsLoading || state.preferencesLoading) return;
@@ -315,7 +327,9 @@ function actionsFor($, state) {
     },
     tab: tab => {
       if (!VIEWS.includes(tab)) return;
-      state.tab = tab; state.confirmation = null; update($);
+      state.tab = tab; state.confirmation = null;
+      // Remote-run polling follows the section: timers for a run no longer shown are cancelled here.
+      syncDeploymentPolling($, state); update($);
       // While startup is still resolving the session, initializeWorkspace loads the
       // environments for whichever section is open; a second load here would clear
       // and refetch agents, tools and icons.
@@ -323,9 +337,19 @@ function actionsFor($, state) {
       else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
       if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
       if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
+      if (tab === 'Home' || tab === 'Code') background(ensureLatestDeployments($, state));
     },
     openCode: target => background(openCode($, state, target)),
-    closeCode: () => { state.codeDetail = null; state.confirmation = null; update($); },
+    closeCode: () => { state.codeDetail = null; state.confirmation = null; syncDeploymentPolling($, state); update($); },
+    openDeployment: (uid, kind, origin) => background(openDeployment($, state, uid, kind, origin)),
+    openDeployments: origin => background(openDeploymentList($, state, origin)),
+    closeDeployments: () => closeDeployments($, state),
+    deployBack: () => background(deployBack($, state)),
+    selectDeployStep: id => background(selectDeployStep($, state, id)),
+    deployLogsNewer: () => { const logs = state.deployLogs; if (logs?.nextCursor) background(loadDeploymentLogs($, state, { cursor: logs.nextCursor, previous: [...logs.previous, logs.cursor] })); },
+    deployLogsOlder: () => { const logs = state.deployLogs; if (logs?.previous.length) background(loadDeploymentLogs($, state, { cursor: logs.previous.at(-1), previous: logs.previous.slice(0, -1) })); },
+    refreshDeployments: () => background(refreshDeployments($, state)),
+    moreDeployments: () => background(loadDeploymentList($, state, { offset: state.deployList?.entries.length || 0, limit: 25 })),
     codeFilter: value => { state.codeFilter = value === 'local' ? 'local' : 'all'; update($); },
     checkHomeStatus: () => background(openCode($, state, { root: state.cwd }, false)),
     showProjectList: () => { state.projectListView = true; update($); },
@@ -416,8 +440,9 @@ async function openCode($, state, target, show = true) {
   if (changed || !state.results['devtools.status']) {
     const revision = state.contextRevision;
     await runDev($, state, 'status');
+    if (!state.closed && revision === state.contextRevision) await ensureLatestDeployments($, state);
     if (!state.closed && revision === state.contextRevision && !state.results['devtools.sdk-status']) await runDev($, state, 'sdk-status');
-  }
+  } else await ensureLatestDeployments($, state);
 }
 
 async function saveSettings($, state) {
@@ -485,6 +510,8 @@ async function loadRepositories($, state) {
     if (!state.fields.organization && state.fields.backend) await runProject($, state, 'workspace-profile', { backend: state.fields.backend });
     if (state.closed || revision !== state.contextRevision) return;
     if (state.fields.baseDir && state.fields.organization) await runProject($, state, 'local-repositories');
+    if (state.closed || revision !== state.contextRevision) return;
+    await ensureLatestDeployments($, state);
   } finally { state.repositoriesLoading = false; update($); }
 }
 
@@ -651,9 +678,16 @@ export function register(on, options = {}) {
     if (e.surface !== 'desktop') return next(e);
     const ui = $.ui.resolve(e), actions = actionsFor($, state);
     wakeOnDesktop($, state, e);
+    // A pane draw proves the pane is open: remote-run polling resumes for the section shown.
+    if (!state.paneOpen) { state.paneOpen = true; try { syncDeploymentPolling($, state); } catch { /* polling is optional */ } }
     if (state.paneFault) return renderRecovery(ui, state, actions);
     try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
     catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
+  });
+  on('ui.close', { id: 'mainsequence' }, ($, e, next) => {
+    // Nothing polls a remote run while the pane is closed; reopening it resumes.
+    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list');
+    return next(e);
   });
   on('ui.fault', { component: 'Pane', requestId: 'mainsequence' }, ($, e, next) => {
     if (e.surface === 'desktop' && !state.paneFault) {
@@ -686,6 +720,7 @@ export function register(on, options = {}) {
   });
   on('tool.call', { tool: /^mcp__mainsequence__/ }, async ($, e) => {
     if (e.tool.startsWith('mcp__mainsequence__ms_agent_')) return handleAgentTool($, state, e);
+    if (e.tool === `mcp__mainsequence__${DEPLOY_TOOL}`) return deploymentStatusTool($, state, e);
     let entry = state.mcpTools[e.tool];
     // After a reload or right at startup the catalog still names tools this instance has not
     // registered yet: finish startup and the in-flight registration before refusing.
@@ -755,6 +790,257 @@ export async function runWorker($, state, envelope, operation, onProgress) {
 // Native host effect analysis follows $ only through functions in this module.
 
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
+
+// Deployments: remote state read from the environment's deployment history. Reads run quietly,
+// outside Activity and the running-operations counter, which count local operations only.
+const DEPLOY_ACTIONS = ['deployment-history', 'deployment-run', 'deployment-logs'];
+const DEPLOY_TOOL = 'ms_deployment_status';
+const DEPLOY_POLL_LIMIT = 360;
+
+function cancelDeployTimer(state, slot) {
+  const entry = state.deployTimers[slot];
+  if (!entry) return;
+  entry.timer.cancel();
+  state.timers = state.timers.filter(timer => timer !== entry.timer);
+  state.deployTimers[slot] = null;
+}
+function clearDeployments($, state) {
+  cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list');
+  state.deployRevision++; state.deployView = ''; state.deployOrigin = 'code'; state.deployHistory = []; state.deployList = null; state.deployListLoading = false; state.deployListError = '';
+  state.deployDetail = null; state.deployStep = ''; state.deployLogs = null; state.deployLogsLoading = false; state.deployLatest = {}; state.deployPolls = 0; state.deployPaused = false;
+  for (const op of state.running.values()) if (DEPLOY_ACTIONS.some(action => op.label === `projects · ${action}`) && op.cancel) void op.cancel().catch(() => {});
+}
+/** The branch uids whose latest run the current section draws. */
+function deployTargets(state) {
+  if (!state.fields.mcpEnvironment) return [];
+  const targets = [];
+  if (state.tab === 'Home' && (!state.fields.root || state.fields.root === state.cwd)) targets.push(deployTarget(state, { root: state.cwd }));
+  if (state.tab === 'Code' && !state.deployView && state.codeDetail?.root) targets.push(deployTarget(state, state.codeDetail));
+  return [...new Set(targets.map(target => target.branchUid).filter(Boolean))];
+}
+async function loadLatestDeployment($, state, branchUid) {
+  const selection = context(state), revision = state.deployRevision, previous = state.deployLatest[branchUid];
+  state.deployLatest[branchUid] = { entry: previous?.entry || null, loading: true, error: '' }; update($);
+  const result = await execute($, state, request('projects', 'deployment-history', { backend: state.fields.backend,
+    environmentUid: state.fields.mcpEnvironment, codeRepositoryBranchUid: branchUid, limit: 1, offset: 0 }), true);
+  if (state.closed || selection !== context(state) || revision !== state.deployRevision) return;
+  state.deployLatest[branchUid] = result.status === 'success' ? { entry: rows(result.data)[0] || null, loading: false, error: '', now: result.data.now }
+    : { entry: previous?.entry || null, loading: false, error: result.summary };
+  syncDeploymentPolling($, state); update($);
+}
+async function ensureLatestDeployments($, state, force = false) {
+  for (const branchUid of deployTargets(state)) {
+    const existing = state.deployLatest[branchUid];
+    if (existing?.loading || (existing && !force)) continue;
+    await loadLatestDeployment($, state, branchUid);
+  }
+  syncDeploymentPolling($, state);
+}
+async function loadDeploymentList($, state, { offset = 0, limit = 25 } = {}) {
+  if (!state.fields.mcpEnvironment) return;
+  const selection = context(state), revision = state.deployRevision;
+  state.deployListLoading = true; update($);
+  try {
+    const result = await execute($, state, request('projects', 'deployment-history', { backend: state.fields.backend,
+      environmentUid: state.fields.mcpEnvironment, limit: Math.max(1, Math.min(100, limit)), offset }), true);
+    if (state.closed || selection !== context(state) || revision !== state.deployRevision) return;
+    if (result.status !== 'success') { state.deployListError = result.summary; return; }
+    const kept = offset > 0 && state.deployList ? state.deployList.entries.slice(0, offset) : [];
+    const seen = new Set(kept.map(entry => entry.uid));
+    state.deployList = { count: result.data.count, now: result.data.now, entries: [...kept, ...rows(result.data).filter(entry => !seen.has(entry.uid))] };
+    state.deployListError = '';
+  } finally { if (revision === state.deployRevision) { state.deployListLoading = false; syncDeploymentPolling($, state); update($); } }
+}
+async function openDeploymentList($, state, origin) {
+  if (!state.fields.mcpEnvironment) { $.ui.toast('Choose an organization environment to see deployments.'); return; }
+  cancelDeployTimer(state, 'run');
+  state.tab = 'Code'; state.deployView = 'list'; state.deployOrigin = origin === 'home' ? 'home' : 'code'; state.deployHistory = []; state.confirmation = null;
+  state.deployDetail = null; state.deployLogs = null; state.deployStep = ''; state.deployPolls = 0; state.deployPaused = false;
+  update($);
+  await loadDeploymentList($, state, { offset: 0, limit: Math.max(25, state.deployList?.entries.length || 0) });
+}
+function closeDeployments($, state) {
+  const origin = state.deployOrigin;
+  state.deployView = ''; state.deployHistory = []; state.deployDetail = null; state.deployLogs = null; state.deployStep = ''; state.confirmation = null;
+  if (origin === 'home') state.tab = 'Home';
+  syncDeploymentPolling($, state); update($);
+  void ensureLatestDeployments($, state).catch(() => {});
+}
+async function openDeployment($, state, uid, kind, origin) {
+  if (!uuid(uid) || !state.fields.mcpEnvironment) return;
+  if (origin === 'detail' && state.deployDetail) state.deployHistory.push({ uid: state.deployDetail.uid, kind: state.deployDetail.kind, step: state.deployStep });
+  else if (origin !== 'back') { state.deployHistory = []; state.deployOrigin = origin === 'list' ? 'list' : origin === 'home' ? 'home' : 'code'; }
+  if (state.deployHistory.length > 10) state.deployHistory.shift();
+  cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list');
+  state.tab = 'Code'; state.deployView = 'detail'; state.confirmation = null;
+  state.deployDetail = { uid: uid.toLowerCase(), kind: kind === 'workflow_run' ? 'workflow_run' : 'deployment_run', run: null, hidden: false, error: '', loading: true, now: null, ticket: 0 };
+  state.deployStep = ''; state.deployLogs = null; state.deployLogsLoading = false; state.deployPolls = 0; state.deployPaused = false;
+  update($);
+  await loadDeploymentDetail($, state);
+}
+async function deployBack($, state) {
+  const previous = state.deployHistory.pop();
+  if (previous) { await openDeployment($, state, previous.uid, previous.kind, 'back'); if (state.deployDetail?.uid === previous.uid) await selectDeployStep($, state, previous.step); return; }
+  if (state.deployOrigin === 'list') {
+    cancelDeployTimer(state, 'run');
+    state.deployView = 'list'; state.deployDetail = null; state.deployLogs = null; state.deployStep = ''; update($);
+    await loadDeploymentList($, state, { offset: 0, limit: Math.max(25, state.deployList?.entries.length || 0) });
+    return;
+  }
+  closeDeployments($, state);
+}
+async function loadDeploymentDetail($, state) {
+  const detail = state.deployDetail;
+  if (!detail || state.deployView !== 'detail') return;
+  const selection = context(state), revision = state.deployRevision, ticket = ++state.sequence;
+  detail.ticket = ticket; detail.loading = true; update($);
+  const result = await execute($, state, request('projects', 'deployment-run', { backend: state.fields.backend, runUid: detail.uid, kind: detail.kind }), true);
+  if (state.closed || selection !== context(state) || revision !== state.deployRevision || state.deployDetail !== detail || detail.ticket !== ticket) return;
+  detail.loading = false;
+  if (result.status !== 'success') { detail.error = result.summary; syncDeploymentPolling($, state); update($); return; }
+  detail.error = ''; detail.now = result.data.now; detail.hidden = result.data.hidden === true;
+  if (!detail.hidden) {
+    detail.run = result.data.run;
+    if (!state.deployStep || !(detail.run.steps || []).some(step => step.id === state.deployStep)) state.deployStep = defaultStep(detail.run)?.id || '';
+  }
+  syncDeploymentPolling($, state); update($);
+  if (!detail.hidden) await loadDeploymentLogs($, state, { keep: true });
+}
+async function selectDeployStep($, state, id) {
+  const run = state.deployDetail?.run;
+  if (!run || !(run.steps || []).some(step => step.id === id)) return;
+  state.deployStep = id; state.deployLogs = null; update($);
+  await loadDeploymentLogs($, state, {});
+}
+/** One page of a step's logs. `cursor` names the page, `previous` the cursors before it; `keep` re-reads the shown page. */
+async function loadDeploymentLogs($, state, { cursor = null, previous = [], keep = false } = {}) {
+  const detail = state.deployDetail, run = detail?.run;
+  if (!run || state.deployView !== 'detail') return;
+  const step = (run.steps || []).find(item => item.id === state.deployStep) || defaultStep(run);
+  const source = logSource(run, step);
+  if (source.reason) { state.deployLogs = null; state.deployLogsLoading = false; update($); return; }
+  const existing = state.deployLogs;
+  const same = !!existing && existing.runUid === source.runUid && (existing.stepUid || null) === (source.stepUid || null);
+  if (keep && same) { cursor = existing.cursor; previous = existing.previous; }
+  const selection = context(state), revision = state.deployRevision, ticket = ++state.sequence;
+  state.deployLogsTicket = ticket; state.deployLogsLoading = true; update($);
+  const result = await execute($, state, request('projects', 'deployment-logs', { backend: state.fields.backend, runUid: source.runUid,
+    ...(source.stepUid ? { stepUid: source.stepUid } : {}), ...(cursor ? { cursor } : {}), limit: 200 }), true);
+  if (state.closed || selection !== context(state) || revision !== state.deployRevision || state.deployDetail !== detail || state.deployLogsTicket !== ticket) return;
+  state.deployLogsLoading = false;
+  const base = { runUid: source.runUid, stepUid: source.stepUid || null, cursor, previous };
+  if (result.status !== 'success') state.deployLogs = { ...base, entries: same ? existing.entries : [], nextCursor: same ? existing.nextCursor : null, complete: false, hidden: false, error: result.summary };
+  else if (result.data.hidden) state.deployLogs = { ...base, entries: [], nextCursor: null, complete: true, hidden: true, error: '' };
+  else state.deployLogs = { ...base, entries: rows(result.data.entries), nextCursor: result.data.nextCursor || null, complete: result.data.complete === true, hidden: false, error: '', now: result.data.now };
+  update($);
+}
+async function refreshDeployments($, state) {
+  state.deployPolls = 0; state.deployPaused = false;
+  if (state.tab === 'Code' && state.deployView === 'detail') await loadDeploymentDetail($, state);
+  else if (state.tab === 'Code' && state.deployView === 'list') await loadDeploymentList($, state, { offset: 0, limit: Math.max(25, state.deployList?.entries.length || 0) });
+  else await ensureLatestDeployments($, state, true);
+}
+/** What the open pane shows that is still active: one run (the detail or a latest-run card) and/or the list. */
+function deployPollTargets(state) {
+  if (state.closed || !state.paneOpen || !state.fields.mcpEnvironment || state.deployPaused) return { run: '', list: false };
+  if (state.tab === 'Code' && state.deployView === 'detail') { const run = state.deployDetail?.run; return { run: run && isActiveRun(run) ? run.uid : '', list: false }; }
+  if (state.tab === 'Code' && state.deployView === 'list') return { run: '', list: (state.deployList?.entries || []).some(isActiveRun) };
+  const active = deployTargets(state).map(branchUid => state.deployLatest[branchUid]?.entry).find(entry => entry && isActiveRun(entry));
+  return { run: active ? active.uid : '', list: false };
+}
+/** Start or stop the 10 s run timer and the 30 s list timer so they match what is shown; nothing polls when nothing is active. */
+function syncDeploymentPolling($, state) {
+  const wanted = deployPollTargets(state), timers = state.deployTimers;
+  if (timers.run && timers.run.uid !== wanted.run) cancelDeployTimer(state, 'run');
+  if (wanted.run && !timers.run) {
+    const timer = $.clock.every(10000, () => { void pollDeployments($, state, 'run').catch(() => {}); });
+    state.timers.push(timer); timers.run = { uid: wanted.run, timer };
+  }
+  if (timers.list && !wanted.list) cancelDeployTimer(state, 'list');
+  if (wanted.list && !timers.list) {
+    const timer = $.clock.every(30000, () => { void pollDeployments($, state, 'list').catch(() => {}); });
+    state.timers.push(timer); timers.list = { uid: 'list', timer };
+  }
+}
+async function pollDeployments($, state, slot) {
+  // A run that never settles must not spawn workers forever: an hour of polling pauses until Refresh.
+  if (++state.deployPolls > DEPLOY_POLL_LIMIT) { state.deployPaused = true; syncDeploymentPolling($, state); update($); return; }
+  const wanted = deployPollTargets(state);
+  if (slot === 'list') { if (wanted.list && !state.deployListLoading) await loadDeploymentList($, state, { offset: 0, limit: Math.max(25, state.deployList?.entries.length || 0) }); else syncDeploymentPolling($, state); return; }
+  if (!wanted.run) { syncDeploymentPolling($, state); return; }
+  if (state.tab === 'Code' && state.deployView === 'detail') { if (!state.deployDetail?.loading) await loadDeploymentDetail($, state); }
+  else await ensureLatestDeployments($, state, true);
+}
+async function tailDeploymentLogs($, state, source, count) {
+  let cursor = null, total = 0, lines = [], complete = false;
+  for (let page = 0; page < 25; page++) {
+    const result = await execute($, state, request('projects', 'deployment-logs', { backend: state.fields.backend, runUid: source.runUid,
+      ...(source.stepUid ? { stepUid: source.stepUid } : {}), ...(cursor ? { cursor } : {}), limit: 200 }), true);
+    if (result.status !== 'success') return { error: result.summary, lines, total, complete };
+    if (result.data.hidden) return { hidden: true, lines: [], total: 0, complete: true };
+    const entries = rows(result.data.entries);
+    total += entries.length;
+    lines = [...lines, ...entries.map(entry => `${logTimestamp(entry.timestamp)} ${entry.text}`)].slice(-count);
+    complete = result.data.complete === true; cursor = result.data.nextCursor;
+    if (complete || !cursor || !entries.length) break;
+  }
+  return { lines, total, complete };
+}
+/** The model's read-only view of a run: no confirmation, denied without a selected environment. */
+async function deploymentStatusTool($, state, e) {
+  await toolsReady($, state);
+  if (state.closed) return { deny: 'This session has ended.' };
+  if (!state.fields.mcpEnvironment) return { deny: 'Choose a MainSequence organization environment in the pane before reading deployment status.' };
+  const { tool, tool_use_id, agentId, ...input } = e;
+  const str = value => value === undefined || value === null ? '' : typeof value === 'string' ? clean(value).trim().slice(0, 200) : null;
+  const repository = str(input.repository), branch = str(input.branch), runUid = str(input.runUid);
+  const failed = (message, code = 'INVALID_REQUEST') => toolResult(fail('deployment-status', message, code));
+  if (repository === null || branch === null || runUid === null || (input.logs !== undefined && typeof input.logs !== 'boolean')) return failed('repository, branch and runUid are strings; logs is a boolean.');
+  const selection = context(state), backend = state.fields.backend, environmentUid = state.fields.mcpEnvironment;
+  const stale = () => state.closed || selection !== context(state);
+  const changed = { deny: 'The selected environment changed while reading deployment status.' };
+  const answer = (summary, blocks) => toolResult({ schemaVersion: 1, action: 'deployment-status', status: 'success', summary, data: { content: blocks } });
+  let run, now;
+  if (runUid) {
+    if (!uuid(runUid)) return failed('runUid must be the UUID of a deployment or workflow run.');
+    let read = await execute($, state, request('projects', 'deployment-run', { backend, runUid, kind: 'deployment_run' }), true);
+    if (read.status === 'success' && read.data?.hidden) read = await execute($, state, request('projects', 'deployment-run', { backend, runUid, kind: 'workflow_run' }), true);
+    if (stale()) return changed;
+    if (read.status !== 'success') return toolResult(read);
+    if (read.data.hidden) return answer(HIDDEN_DEPLOYMENT, [{ type: 'text', text: HIDDEN_DEPLOYMENT }]);
+    run = read.data.run; now = read.data.now;
+  } else {
+    if (!state.results['devtools.repositories']) await execute($, state, devRequest(state, 'repositories'), true);
+    if (stale()) return changed;
+    const remote = rows(state.results['devtools.repositories']?.data), session = deployTarget(state, { root: state.cwd });
+    const wanted = repository.toLowerCase();
+    const repo = repository ? remote.find(row => String(row.code_repository_name || '').toLowerCase() === wanted || String(row.uid).toLowerCase() === wanted)
+      : remote.find(row => String(row.uid).toLowerCase() === session.repositoryUid);
+    if (!repo) return failed(repository ? `No MainSequence repository named ${repository}. Known: ${remote.map(row => row.code_repository_name).filter(Boolean).slice(0, 40).join(', ') || 'none'}.`
+      : 'Name the repository: this session folder is not a known MainSequence checkout.');
+    const branches = rows(repo.branches);
+    const name = branch || (String(repo.uid).toLowerCase() === session.repositoryUid ? session.branchName : '') || (branches.length === 1 ? branches[0].repository_branch : '');
+    const target = branches.find(row => row.repository_branch === name);
+    if (!target) return failed(`Name the branch of ${repo.code_repository_name}: ${branches.map(row => row.repository_branch).join(', ') || 'no branches registered'}.`);
+    const page = await execute($, state, request('projects', 'deployment-history', { backend, environmentUid, codeRepositoryBranchUid: String(target.uid), limit: 1, offset: 0 }), true);
+    if (stale()) return changed;
+    if (page.status !== 'success') return toolResult(page);
+    run = rows(page.data)[0]; now = page.data.now;
+    if (!run) { const text = `No deployments for ${repo.code_repository_name} · ${name} in ${environmentLabel(state)} yet.`; return answer(text, [{ type: 'text', text }]); }
+  }
+  const blocks = [{ type: 'text', text: `Environment: ${environmentLabel(state)}\n${describeRun(run, now)}` }];
+  if (input.logs === true) {
+    const step = failedStep(run) || defaultStep(run), source = logSource(run, step);
+    if (source.reason) blocks.push({ type: 'text', text: `Logs: ${source.reason}` });
+    else {
+      const tail = await tailDeploymentLogs($, state, source, 80);
+      if (stale()) return changed;
+      blocks.push({ type: 'text', text: tail.error ? `Logs unavailable: ${tail.error}` : tail.hidden ? HIDDEN_DEPLOYMENT
+        : `Logs of ${stepLabel(step)}${failedStep(run) ? ' (first failed step)' : ''} · last ${tail.lines.length} of ${tail.total}${tail.complete ? '' : '+'} lines:\n${tail.lines.join('\n') || '(no entries)'}` });
+    }
+  }
+  return answer(`${kindLabel(run)} ${stateLabel(run.state).toLowerCase()}.`, blocks);
+}
 const context = state => `${state.fields.backend}\n${state.fields.mcpEnvironment}`;
 const storedKey = (state, account, uid) => JSON.stringify([state.fields.backend, state.fields.mcpEnvironment, account, uid]);
 const current = (state, binding) => !!binding && !state.closed && binding.hostSessionId === state.sessionId
