@@ -172,3 +172,12 @@ relabels the remaining MCPs **Unnamed MCP** or drops their tools: the pane keeps
 resolved name and the previously registered tools, names the unread MCP in a warning, and
 the worker falls back to the release's own name. See the
 [release notes](docs/releases/0.4.17.md).
+
+### 0.4.18 — MCP names stored with the connection
+
+A connected MCP's names live with its saved connection: devtools 0.3.1 reads the
+release's name and its repository's name when the MCP is connected and stores them, so a
+listing labels the connection without asking the backend. A connection saved by an earlier
+version is completed by the first listing that can read its names. Only the Add MCP search
+still labels its rows live, from the repository branch each row names. See the
+[release notes](docs/releases/0.4.18.md).

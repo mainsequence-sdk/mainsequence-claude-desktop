@@ -1,5 +1,39 @@
 # Claude Desktop plugin verification
 
+## 0.4.18 — MCP names stored with the saved connection (2026-10-21)
+
+Cause of the recurring **Unnamed MCP**: a saved connection held only its release UID and
+endpoint, because the release detail that `mcp-add` reads carries neither a name nor a
+repository. Every listing therefore asked the backend twice (the release directory, then
+the repository branch) to label the row, and any failure of those requests showed the
+UID. 0.4.17 only kept the last resolved name. Fix (devtools 0.3.1, PR
+mainsequence-sdk/mainsequence-devtools#15): `mcp-add` resolves the release's name and its
+repository's name once, when the MCP is connected, and stores them with the connection as
+`name`, `display_name` and `code_repository_branch_uid`; `mcp-list` returns them without
+a backend request and completes a record saved by an earlier version the first time the
+backend can be read, under the connection lock. The worker's name adapter
+(`src/hosts/claudeMcpNames.ts`) now labels only discovery rows, from the
+`code_repository_branch_uid` each row carries; it no longer touches listings.
+
+Live check on 2026-10-21 against the local backend `http://127.0.0.1:8000` (environment
+`18595d12-…`, Production) with the rebuilt worker and the saved MainSequenceCRMAPI
+connection as 0.4.17 had left it, with no name in the file:
+
+| Worker action | Result | Duration |
+| --- | --- | --- |
+| `mcp-list`, first run | `crm` · `MainSequenceCRMAPI`, written to `mcp-connections.json` | 5.6 s |
+| `mcp-list`, second run | the same labels from the file, no backend request | 46 ms |
+| `mcp-tools` | the connection labelled, 70 tools | 16.7 s |
+| `mcp-discover` "crm" | the row labelled `MainSequenceCRMAPI` from its branch | 7.8 s |
+
+Automated verification (`npm run release:check`): 97 Node tests (the packaged-worker MCP
+test now covers stored names, listing without a backend request, the one-time completion
+of an old record, and denied directory or branch reads), ten native simulator tests and
+loader validation on Desktop's bundled Code 2.1.304, documentation, packaging and
+distribution checks. devtools 0.3.1 adds its own test for storage, local listing,
+completion, denied and mismatched lookups, malformed stored labels, a held lock and
+discovery rows (112 tests, CI on Ubuntu and macOS).
+
 ## 0.4.17 — MCP refresh tolerates a briefly unreachable backend (2026-10-21)
 
 Reported: after disconnecting one MCP, the remaining CRM MCP showed as **Unnamed MCP**
