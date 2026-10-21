@@ -225,6 +225,16 @@ existing session's advertised catalog, but are refused by the handler. A fresh C
 session starts with only the saved, validated environment's tools. New registrations
 are available from the next prompt. Exact release identities remain pinned.
 
+Connecting or disconnecting an MCP re-reads the environment's saved connections and
+each one's tool catalog (since 0.4.17, a refresh tolerates a backend that is briefly
+unreachable, such as a local development server restarting). An MCP's row keeps the
+last name the backend resolved for it while the name lookup is unavailable, and the
+release's own name labels a connection whose repository cannot be read. A connection
+whose catalog cannot be read right now keeps the tools registered by the previous
+refresh and is named in a warning under the list; **Refresh** or **Re-register tools**
+reads it again. Only a disconnected MCP loses its tools, and a failed listing keeps the
+current environment's tools in place.
+
 Activity shows actual operations from the session, their running/completed/failed/
 cancelled status, progress text, outcome and partial-effect warnings. Result details
 are collapsed. Cancellation stops the worker stream; it does not promise rollback.

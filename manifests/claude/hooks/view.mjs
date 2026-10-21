@@ -374,7 +374,7 @@ function renderTools(p, state, actions, { dev, mut, busy, environment }) {
       button(`mcp-remove-${r.resource_release_uid}`, 'Disconnect', () => actions.disconnectMcp(r.resource_release_uid, mcpDisplayName(r)), { plain: true, dim: true })])),
     !connected.length && empty('No MCPs connected', 'Connect an MCP release to give Claude its tools in this environment.'),
     state.results['devtools.mcp-list']?.status === 'failure' && status('error', state.results['devtools.mcp-list'].summary),
-    state.results['mcp.registration']?.status === 'failure' && status('warning', state.results['mcp.registration'].summary),
+    (state.results['mcp.registration']?.status === 'failure' || rows(state.results['mcp.registration']?.data?.unavailable).length > 0) && status('warning', state.results['mcp.registration'].summary),
     inline([caption('Tools become available to Claude on the next prompt.'), button('mcp-list', 'Refresh', dev('mcp-list'), { plain: true, dim: true })], { justifyContent: 'space-between' }),
     result('devtools.mcp-remove'),
   ]);

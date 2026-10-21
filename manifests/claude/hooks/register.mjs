@@ -60,6 +60,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); statusLine($, state); update($); }
   const envelope = { protocolVersion: 1, id, request: domain };
   let result = await runWorker($, state, envelope, op, message => { op.progress = message; observer.progress?.(message); if (!quiet) update($); });
+  rememberMcpNames(state, result);
   const publicResult = publicValue(result);
   // Catalog paging needs every tool; the generic activity preview caps arrays.
   if (action === 'mcp-tools' && Array.isArray(result.data?.tools)) publicResult.data.tools = result.data.tools.map(tool => publicValue(tool));
@@ -73,6 +74,18 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
+}
+
+/** A connection's name comes from an optional backend lookup. Keep the last name each listing
+ * resolved so a lookup that fails during a backend restart does not relabel a working MCP. */
+function rememberMcpNames(state, result) {
+  if (result?.status !== 'success' || !['mcp-list', 'mcp-discover', 'mcp-add'].includes(result.action)) return;
+  for (const row of result.action === 'mcp-add' ? [record(result.data).connection] : rows(result.data)) {
+    if (!row || typeof row !== 'object' || typeof row.resource_release_uid !== 'string') continue;
+    const key = `${row.backend}\n${row.resource_release_uid}`;
+    if (typeof row.display_name === 'string' && row.display_name.trim()) state.mcpNames[key] = row.display_name;
+    else if (state.mcpNames[key]) row.display_name = state.mcpNames[key];
+  }
 }
 
 /** Mirror the pane's running operations in Claude's status line. */
@@ -229,22 +242,32 @@ async function toolsReady($, state) {
 
 async function refreshToolsNow($, state) {
   const revision = state.contextRevision;
+  // Tools registered by the previous run stay registered with Claude. A saved connection
+  // whose catalog cannot be read right now (a backend restart, a network blip) keeps its
+  // earlier tools until a later refresh reads it; a removed connection loses them here.
+  const previous = state.mcpTools;
   state.mcpTools = {};
   if (!state.fields.mcpEnvironment || state.preferencesLoading) return;
   const environmentUid = state.fields.mcpEnvironment;
+  const kept = (test) => Object.fromEntries(Object.entries(previous).filter(([, entry]) => entry.environmentUid === environmentUid && test(entry)));
   const listed = await execute($, state, devRequest(state, 'mcp-list'), true);
   if (state.closed || revision !== state.contextRevision) return;
-  if (listed.status !== 'success') { state.results['mcp.registration'] = publicValue(listed); update($); }
+  if (listed.status !== 'success') { state.mcpTools = kept(() => true); state.results['mcp.registration'] = publicValue(listed); update($); }
   else {
     const next = {};
     const unavailable = [];
+    let retained = 0;
     for (const connection of rows(listed.data)) {
       if (connection.mcp_connection?.organization_environment_uid !== environmentUid) continue;
       const releaseUid = connection.resource_release_uid;
       const backend = connection.backend;
       const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, environmentUid, releaseUid }), true);
       if (state.closed || revision !== state.contextRevision) return;
-      if (answer.status !== 'success') { unavailable.push(mcpDisplayName(connection)); continue; }
+      if (answer.status !== 'success') {
+        const earlier = kept(entry => entry.backend === backend && entry.releaseUid === releaseUid);
+        Object.assign(next, earlier); retained += Object.keys(earlier).length;
+        unavailable.push(mcpDisplayName(connection)); continue;
+      }
       for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
         const name = toolName(backend, environmentUid, releaseUid, tool.name);
         const full = `mcp__${$.plugin.name}__${name}`;
@@ -256,8 +279,11 @@ async function refreshToolsNow($, state) {
     // Removed servers' previously registered names are refused by the handler below.
     if (state.closed || revision !== state.contextRevision) return;
     state.mcpTools = next;
+    const count = Object.keys(next).length;
     state.results['mcp.registration'] = { schemaVersion: 1, action: 'mcp-registration', status: 'success',
-      summary: `${Object.keys(next).length} MainSequence tools available from the next prompt.`, data: { unavailable } };
+      summary: !unavailable.length ? `${count} MainSequence tools available from the next prompt.`
+        : `${count} MainSequence tools available from the next prompt. ${unavailable.join(', ')} could not be read now${retained ? '; its earlier tools stay registered' : ''}. Refresh to try again.`,
+      data: { unavailable, retained } };
     update($);
   }
   // The deployment status tool is registered once per environment selection. It reads only, and the

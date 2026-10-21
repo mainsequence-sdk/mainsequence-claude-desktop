@@ -26,7 +26,7 @@ export function mcpDisplayName(value) {
   return name ? clean(name).trim() : 'Unnamed MCP';
 }
 export function initialState(options = {}) {
-  return { tab: 'Home', expanded: {}, initPromise: null, toolRefresh: null, booting: null, booted: false, paneFault: null, selectPages: {}, codeDetail: null, codeFilter: 'all', toolsView: 'list', projectListView: false, homeStatusRequested: false, contextRevision: 0, initializing: false, repositoriesLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
+  return { tab: 'Home', expanded: {}, initPromise: null, toolRefresh: null, mcpNames: {}, booting: null, booted: false, paneFault: null, selectPages: {}, codeDetail: null, codeFilter: 'all', toolsView: 'list', projectListView: false, homeStatusRequested: false, contextRevision: 0, initializing: false, repositoriesLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
     fields: { backend: 'https://api.main-sequence.app', commandCenterUrl: '', projectSearch: '', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
       image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}', agentSearch: '', codeSearch: '',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },

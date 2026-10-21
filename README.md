@@ -165,3 +165,11 @@ logs, and lists the environment's deployments; active runs refresh every 10 s wh
 The read-only `ms_deployment_status` tool gives the model the same view, with the failed
 step's log tail on request. See [Deployments](docs/claude-desktop.md#deployments) and the
 [release notes](docs/releases/0.4.16.md).
+
+### 0.4.17 — MCP refresh tolerates backend blips
+
+Disconnecting or connecting an MCP while the backend is briefly unreachable no longer
+relabels the remaining MCPs **Unnamed MCP** or drops their tools: the pane keeps the last
+resolved name and the previously registered tools, names the unread MCP in a warning, and
+the worker falls back to the release's own name. See the
+[release notes](docs/releases/0.4.17.md).

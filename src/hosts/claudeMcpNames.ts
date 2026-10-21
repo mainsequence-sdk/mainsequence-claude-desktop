@@ -11,6 +11,7 @@ export async function withClaudeMcpNames(result: ActionResult, options: { host: 
   const repositories = new RepositoryClient(session, backend);
   const wanted = new Map(connections.map(row => [row.resource_release_uid, row]));
   const branches = new Map<string, string>();
+  const releaseNames = new Map<string, string>();
   try {
     // The pinned devtools result omits repository identity. Read the existing
     // collection projection, matching exact releases and environments, to label it.
@@ -23,6 +24,8 @@ export async function withClaudeMcpNames(result: ActionResult, options: { host: 
           && connection.mcp_connection?.organization_environment_uid === row.mcp_connection?.organization_environment_uid
           && typeof row.code_repository_branch_uid === 'string' && row.code_repository_branch_uid.trim()) {
           branches.set(row.uid, row.code_repository_branch_uid);
+          // The release's own name labels it when its repository cannot be read.
+          if (typeof row.name === 'string' && row.name.trim()) releaseNames.set(row.uid, row.name.trim());
         }
       }
       if (branches.size === wanted.size || offset + 100 >= page.count || !page.results.length) break;
@@ -44,7 +47,8 @@ export async function withClaudeMcpNames(result: ActionResult, options: { host: 
     }));
     const labelled = connections.map(row => {
       const name = names.get(branches.get(row.resource_release_uid) || '');
-      return name ? { ...row, display_name: name } : row;
+      const release = typeof row.name === 'string' && row.name.trim() ? undefined : releaseNames.get(row.resource_release_uid);
+      return { ...row, ...(release ? { name: release } : {}), ...(name ? { display_name: name } : {}) };
     });
     return { ...result, data: Array.isArray(data) ? labelled : { ...data, results: labelled } };
   } catch {
