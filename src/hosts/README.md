@@ -18,5 +18,12 @@ through the pinned devtools package's public API.
   the name. Exact release/environment matching preserves routing; optional name
   lookup failures preserve the original result and never rewrite saved connections.
 
+- `claudeDeployments.ts` reads the environment's deployment history, one run and its
+  logs through the public session service, projecting only what the pane and the
+  `ms_deployment_status` tool draw: identity, states, timings, steps, owned runs and
+  error text. Billing and cost fields are never copied. A run that answers 404 is
+  described with Command Center's "You can't see this deployment" wording, which
+  does not assert whether the record exists.
+
 Hook-side rendering and transient caching live in `manifests/claude/hooks/`.
 See [agent icon behavior and current transport limits](../../docs/agent-icons.md).

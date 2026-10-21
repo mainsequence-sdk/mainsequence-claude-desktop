@@ -74,7 +74,8 @@ test('a setup finishing after an environment change never opens the old workspac
 
 function fixture(options = {}) {
   const stores = options.stores || new Map();
-  const hooks = [], calls = [], tools = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
+  // `tools` lists the MCP and agent tools; the fixed deployment status tool is recorded in `registered`.
+  const hooks = [], calls = [], tools = [], registered = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
   const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg', 'Link'].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
     if (type === 'Select') assert.ok(props.options.length > 0 && props.options.length <= 64, 'Native Select supports 1–64 options');
@@ -95,7 +96,7 @@ function fixture(options = {}) {
     command: { register: async spec => { calls.push({ command: spec }); }, run: async spec => { calls.push({runCommand:spec}); return options.commandResult ? options.commandResult(spec) : {text:`Added ${spec.args} as a working directory for this session`}; } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool', status: value => { calls.push({ status: value }); } },
-    tool: { register: async spec => { tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
+    tool: { register: async spec => { registered.push(spec); if (spec.name !== 'ms_deployment_status') tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
     clock: { now: async () => 1000, after: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; } },
     env: { get: async key => env.get(key), set: async (key, value) => { value === undefined ? env.delete(key) : env.set(key, value); } },
     fs: { read: async () => JSON.stringify({ claudeAiOauth: { accessToken: 'secret-new-token', expiresAt: 1000000 } }) },
@@ -132,7 +133,7 @@ function fixture(options = {}) {
     for (const child of tree.props?.children || []) { const found = find(child, key); if (found) return found; } };
   const press = async key => { const node = find(await pane(), key); assert.ok(node, `Missing ${key}`); node.props.onPress(); await flush(); };
   const field = async (key, value) => { const node = find(await pane(), `field-${key}`); assert.ok(node, `Missing field ${key}`); node.props.onInput(value); await flush(); };
-  return { hooks, $, on, emit, pane, press, field, calls, tools, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; } };
+  return { hooks, $, on, emit, pane, press, field, calls, tools, registered, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; } };
 }
 
 test('one native pane has five sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
@@ -1203,4 +1204,170 @@ test('a model call to a MainSequence tool right after a reload waits for registr
   assert.deepEqual(answer, { result: [{ type: 'text', text: '{"user_uid":"u-1"}' }] });
   assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').length, 1);
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_unknown_0' })).deny, /no longer connected/, 'an unknown name is still refused');
+});
+
+// Deployments: the Code card, the run detail with its logs, hidden runs, polling and the model tool.
+const deployId = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const deployRepo = deployId(30), deployBranch = deployId(31), deployRun = deployId(40), ownedRun = deployId(41), hiddenRun = deployId(42);
+function workflowFixtureEntry(state = 'succeeded') {
+  const failed = state === 'failed', running = state === 'running';
+  const step = (key, operation, resourceKey, stepState, startedAt, finishedAt, extra = {}) => ({ id: key, key, operation, resourceKey, state: stepState, reason: '', needs: [], deploymentRunUid: null,
+    startedAt, finishedAt, durationMs: startedAt && finishedAt ? Date.parse(finishedAt) - Date.parse(startedAt) : null, error: '', ...extra });
+  return { kind: 'workflow_run', uid: deployRun, state, reason: '', workflowPath: '.mainsequence/workflows/crm-api.yaml', repositoryUid: deployRepo, repositoryName: 'Real project',
+    branchUid: deployBranch, branchName: 'main', commit: 'abc1234', createdAt: '2026-10-21T08:00:00.000Z', startedAt: '2026-10-21T08:00:00.000Z',
+    finishedAt: running ? null : '2026-10-21T08:06:00.000Z', durationMs: running ? 120000 : 360000, error: failed ? 'Migration failed.' : '',
+    steps: [step('image', 'prepare_image', 'crm', 'succeeded', '2026-10-21T08:00:10.000Z', '2026-10-21T08:02:30.000Z', { deploymentRunUid: ownedRun }),
+      step('migrate', 'run_job', 'migrate-crm', failed ? 'failed' : running ? 'running' : 'succeeded', '2026-10-21T08:02:31.000Z', running || failed ? (failed ? '2026-10-21T08:03:00.000Z' : null) : '2026-10-21T08:04:00.000Z', { needs: ['image'], error: failed ? 'exit status 1' : '' }),
+      step('deploy_api', 'deploy', 'crm', failed ? 'blocked' : running ? 'pending' : 'succeeded', failed || running ? null : '2026-10-21T08:04:01.000Z', failed || running ? null : '2026-10-21T08:06:00.000Z', { needs: ['migrate'], deploymentRunUid: ownedRun, reason: failed ? 'prerequisite_not_successful' : '' })],
+    deploymentRuns: [{ uid: ownedRun, targetLabel: 'FastAPI', targetType: 'resource_release', state: failed ? 'failed' : running ? 'queued' : 'succeeded', workflowStepKeys: ['image', 'deploy_api'], createdAt: '2026-10-21T08:00:05.000Z', startedAt: '2026-10-21T08:00:10.000Z', finishedAt: running ? null : '2026-10-21T08:06:00.000Z' }] };
+}
+function deployFixture(options = {}) {
+  const backend = 'https://api.main-sequence.app';
+  const state = { latest: workflowFixtureEntry(options.state || 'succeeded'), hidden: false, logs: {} };
+  const f = fixture({ ...options, environments: options.noEnvironment ? undefined : { [backend]: 'env-1' }, respond: d => {
+    const q = d.request, override = options.respond?.(q, state);
+    if (override) return override;
+    if (q.action === 'workspace-preferences') return success(q.action, { backend, baseDir: '/repos' });
+    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'deploy@example.test' });
+    if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Research' }]);
+    if (q.action === 'mcp-list' || q.action === 'mcp-discover') return success(q.action, []);
+    if (q.action === 'repositories') return success(q.action, [{ uid: deployRepo, code_repository_name: 'Real project', branches: [{ uid: deployBranch, repository_branch: 'main' }, { uid: deployId(32), repository_branch: 'develop' }] }]);
+    if (q.action === 'workspace-profile') return success(q.action, { organization: 'acme' });
+    if (q.action === 'local-repositories') return success(q.action, [{ name: 'Real project', path: '/work/repo', repositoryUid: deployRepo, isGitRepository: true }]);
+    if (q.action === 'status') return success(q.action, { project: { root: '/work/repo', branch: 'main', commit: 'abc1234def', projectType: 'python' }, capabilities: [] });
+    if (q.action === 'deployment-history') return success(q.action, { environmentUid: q.environmentUid, branchUid: q.codeRepositoryBranchUid || null, count: 1, limit: q.limit, offset: q.offset, now: '2026-10-21T08:02:00.000Z', results: q.codeRepositoryBranchUid && q.codeRepositoryBranchUid !== deployBranch ? [] : [state.latest] });
+    // Like the platform: a workflow run's uid answers 404 on the deployment-run endpoint.
+    if (q.action === 'deployment-run') return state.hidden || q.runUid === hiddenRun || (q.kind === 'deployment_run' && q.runUid === deployRun) ? { ...success(q.action, { hidden: true, uid: q.runUid, kind: q.kind, now: '2026-10-21T08:02:00.000Z' }), summary: "You can't see this deployment. A deployment is shown to the people who can see its release or Job." }
+      : success(q.action, { hidden: false, uid: q.runUid, kind: q.kind, run: state.latest, now: '2026-10-21T08:02:00.000Z' });
+    if (q.action === 'deployment-logs') {
+      const page = q.cursor === 'cursor-2' ? { entries: [{ sequence: 2, timestamp: '2026-10-21T08:00:12.500Z', stepUid: null, source: 'orchestrator', stream: 'stdout', level: 'info', text: 'Second page line' }], nextCursor: null, complete: true }
+        : { entries: [{ sequence: 0, timestamp: '2026-10-21T08:00:11.000Z', stepUid: null, source: 'orchestrator', stream: 'stdout', level: 'info', text: 'Resolving revision' }, { sequence: 1, timestamp: null, stepUid: null, source: 'build', stream: 'stdout', level: 'info', text: 'Building image' }], nextCursor: 'cursor-2', complete: false };
+      return success(q.action, { hidden: false, runUid: q.runUid, stepUid: q.stepUid || null, cursor: q.cursor || null, now: '2026-10-21T08:02:00.000Z', ...page });
+    }
+    return success(q.action, {});
+  } });
+  f.deploy = state;
+  f.start = async () => { await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await flush(); await flush(); };
+  f.openCodeDetail = async () => { await f.press('tab-Code'); await flush(); await f.press('code-open-session'); await flush(); };
+  return f;
+}
+const deployRequests = (f, action) => f.calls.filter(c => c.request?.request.action === action).map(c => c.request.request);
+
+test('the Code detail shows the branch’s latest run with its state colour and progress rail, succeeded and failed', async () => {
+  const { register } = await load();
+  for (const outcome of ['succeeded', 'failed']) {
+    const f = deployFixture({ state: outcome }); register(f.on); await f.start(); await f.openCodeDetail();
+    const latest = deployRequests(f, 'deployment-history');
+    assert.equal(latest.length, 1, 'one latest-run read for the branch'); assert.equal(latest[0].codeRepositoryBranchUid, deployBranch); assert.equal(latest[0].limit, 1); assert.equal(latest[0].environmentUid, 'env-1');
+    const tree = await f.pane(), card = JSON.stringify(tree);
+    assert.ok(f.find(tree, `deploy-open-${deployRun}`), 'the latest run opens its detail'); assert.ok(f.find(tree, 'deploy-all'));
+    assert.match(card, outcome === 'succeeded' ? /"● Succeeded"/ : /"! Failed"/);
+    assert.match(card, /Real project · main · abc1234/); assert.match(card, /Started 2026-10-21/);
+    const rail = f.find(tree, `deploy-rail-${deployRun}`); assert.ok(rail, 'progress rail');
+    const glyphs = rail.props.children.filter(child => child.type === 'Text' && child.props.key?.startsWith('deploy-rail-')).map(child => child.props.children[0]);
+    assert.deepEqual(glyphs, outcome === 'succeeded' ? ['●', '●', '●'] : ['●', '!', '○'], 'glyphs in plan order');
+    assert.match(card, outcome === 'succeeded' ? /3\/3 steps/ : /1\/3 steps/);
+    assert.equal(f.timers.some(t => t.ms === 10000 || t.ms === 30000), false, 'a finished run is never polled');
+    assert.doesNotMatch(JSON.stringify(f.find(tree, 'tab-Activity')), /running/, 'remote runs never count as running operations');
+    await f.press('tab-Home'); const home = await f.pane();
+    assert.ok(f.find(home, 'home-deploy-view'), 'Home shows the session branch’s latest run'); assert.match(JSON.stringify(f.find(home, 'home-deploy')), outcome === 'succeeded' ? /Succeeded · Workflow run/ : /Failed · Workflow run/);
+    assert.equal(deployRequests(f, 'deployment-history').length, 1, 'Home reuses the loaded latest run');
+  }
+});
+
+test('opening a run selects its first failed step, shows the timeline and step rows, and pages logs by cursor', async () => {
+  const { register } = await load(); const f = deployFixture({ state: 'failed' }); register(f.on); await f.start(); await f.openCodeDetail();
+  await f.press(`deploy-open-${deployRun}`); await flush();
+  const read = deployRequests(f, 'deployment-run'); assert.equal(read.length, 1); assert.equal(read[0].runUid, deployRun); assert.equal(read[0].kind, 'workflow_run');
+  let tree = await f.pane(); let text = JSON.stringify(tree);
+  const timeline = f.find(tree, 'deploy-timeline')?.props.children[0]; assert.equal(timeline?.type, 'Svg', 'the Svg timeline is drawn');
+  assert.match(timeline.props.source, /^<svg /); assert.ok(timeline.props.source.length < 8000); assert.equal(timeline.props.width, 360); assert.equal((timeline.props.source.match(/<rect/g) || []).length, 2, 'two timed bars'); assert.equal((timeline.props.source.match(/<circle/g) || []).length, 1, 'one marker for the step that never ran');
+  for (const key of ['image', 'migrate', 'deploy_api']) assert.ok(f.find(tree, `deploy-step-${key}`), `row for ${key}`);
+  assert.equal(f.find(tree, 'deploy-step-migrate').props.plain, undefined, 'the failed step is selected'); assert.equal(f.find(tree, 'deploy-step-image').props.plain, true);
+  assert.match(text, /Step migrate/); assert.match(text, /exit status 1/); assert.match(text, /Job run logs are shown in Command Center/);
+  assert.equal(deployRequests(f, 'deployment-logs').length, 0, 'a job step has no deployment logs to read');
+  assert.ok(f.find(tree, `deploy-open-${ownedRun}`), 'owned deployments are listed'); assert.match(text, /prerequisite not successful/);
+  await f.press('deploy-step-image'); await flush();
+  let logs = deployRequests(f, 'deployment-logs'); assert.equal(logs.length, 1); assert.equal(logs[0].runUid, ownedRun); assert.equal(logs[0].cursor, undefined); assert.equal(logs[0].limit, 200);
+  tree = await f.pane(); const block = f.find(tree, 'deploy-logs')?.props.children[0]; assert.equal(block?.type, 'Code', 'logs draw in a Code block'); assert.equal(block.props.language, 'text');
+  assert.match(block.props.source, /^\d\d:\d\d:\d\d\.000 Resolving revision\n {12} Building image$/, 'chronological HH:MM:SS.mmm lines; a missing timestamp keeps the column');
+  assert.equal(f.find(tree, 'deploy-logs-older').props.disabled, true); assert.equal(f.find(tree, 'deploy-logs-newer').props.disabled, undefined);
+  await f.press('deploy-logs-newer'); logs = deployRequests(f, 'deployment-logs'); assert.equal(logs.at(-1).cursor, 'cursor-2');
+  const logSource = async () => f.find(await f.pane(), 'deploy-logs').props.children[0].props.source;
+  tree = await f.pane(); assert.match(await logSource(), /Second page line/); assert.equal(f.find(tree, 'deploy-logs-newer').props.disabled, true);
+  await f.press('deploy-logs-older'); logs = deployRequests(f, 'deployment-logs'); assert.equal(logs.at(-1).cursor, undefined, 'Older returns to the first page');
+  assert.match(await logSource(), /Resolving revision/);
+  await f.press('deploy-back'); tree = await f.pane(); assert.ok(f.find(tree, `deploy-open-${deployRun}`), 'Back returns to the Code detail'); assert.ok(f.find(tree, 'sync'));
+});
+
+test('a run the reader cannot see is described without asserting that it exists', async () => {
+  const { register } = await load(); const f = deployFixture(); register(f.on); await f.start(); await f.openCodeDetail();
+  await f.press(`deploy-open-${deployRun}`); await flush();
+  await f.press(`deploy-open-${ownedRun}`); await flush();
+  f.deploy.hidden = true; await f.press('deploy-back'); await flush();
+  const text = JSON.stringify(await f.pane());
+  assert.match(text, /You can't see this deployment\. A deployment is shown to the people who can see its release or Job\./);
+  assert.doesNotMatch(text, /not found|does not exist|no such/i);
+  assert.equal(f.find(await f.pane(), 'deploy-timeline'), undefined);
+});
+
+test('an active run is refreshed every 10 s while shown, the list every 30 s, and polling stops when it finishes or the section changes', async () => {
+  const { register } = await load(); const f = deployFixture({ state: 'running' }); register(f.on);
+  const cancelled = [], every = f.$.clock.every;
+  f.$.clock.every = (ms, callback) => { const timer = every(ms, callback); timer.cancel = () => { cancelled.push(timer); }; return timer; };
+  await f.start(); await f.openCodeDetail();
+  const mark = f.calls.length;
+  const polls = () => f.timers.filter(t => (t.ms === 10000 || t.ms === 30000) && !cancelled.includes(t));
+  assert.deepEqual(polls().map(t => t.ms), [10000], 'the active latest run on the Code card is polled');
+  await f.press(`deploy-open-${deployRun}`); await flush();
+  assert.deepEqual(polls().map(t => t.ms), [10000], 'the open detail is polled once');
+  const before = deployRequests(f, 'deployment-run').length;
+  polls()[0].callback(); await flush(); await flush();
+  assert.equal(deployRequests(f, 'deployment-run').length, before + 1, 'a tick re-reads the run');
+  f.deploy.latest = workflowFixtureEntry('succeeded'); polls()[0].callback(); await flush(); await flush();
+  assert.deepEqual(polls(), [], 'polling stops once the run has finished');
+  assert.match(JSON.stringify(await f.pane()), /"● Succeeded"/);
+  f.deploy.latest = workflowFixtureEntry('running'); await f.press('deploy-back'); await flush(); await f.press('deploy-refresh'); await flush();
+  assert.deepEqual(polls().map(t => t.ms), [10000]);
+  await f.press('tab-Tools'); assert.deepEqual(polls(), [], 'leaving the section cancels the timer');
+  await f.press('tab-Code'); await flush(); assert.deepEqual(polls().map(t => t.ms), [10000], 'returning resumes it');
+  await f.emit('ui.close', { id: 'mainsequence', origin: { kind: 'person' } }); assert.deepEqual(polls(), [], 'a closed pane polls nothing');
+  await f.pane(); await flush(); assert.deepEqual(polls().map(t => t.ms), [10000], 'a draw of the reopened pane resumes it');
+  await f.press('deploy-all'); await flush();
+  assert.deepEqual(polls().map(t => t.ms), [30000], 'the list polls every 30 s while an entry is active');
+  assert.ok(f.find(await f.pane(), `deploy-row-${deployRun}`));
+  f.deploy.latest = workflowFixtureEntry('failed'); polls()[0].callback(); await flush(); await flush();
+  assert.deepEqual(polls(), [], 'a settled list stops polling');
+  await f.emit('session.end'); assert.deepEqual(polls(), []);
+  assert.ok(f.calls.slice(mark).some(c => c.request?.request.action.startsWith('deployment-')), 'deployment reads ran');
+  assert.equal(f.calls.slice(mark).some(c => c.status), false, 'the status line and Activity never count remote runs or their reads');
+  assert.equal(f.calls.slice(mark).some(c => c.request && !c.request.request.action.startsWith('deployment-')), false, 'only deployment reads ran');
+});
+
+test('ms_deployment_status reads the branch’s latest run and the failed step’s log tail, and is denied without an environment', async () => {
+  const { register } = await load(); const f = deployFixture({ state: 'failed' }); register(f.on); await f.start();
+  const spec = f.registered.find(t => t.name === 'ms_deployment_status'); assert.ok(spec, 'registered with the environment'); assert.match(spec.description, /Research/);
+  assert.deepEqual(Object.keys(spec.inputSchema.properties).sort(), ['branch', 'logs', 'repository', 'runUid']);
+  assert.equal(f.registered.filter(t => t.name === 'ms_deployment_status').length, 1, 'registered once per environment selection');
+  const asks = f.$.ui.ask; f.$.ui.ask = async () => assert.fail('a read-only tool needs no confirmation');
+  const answer = await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-1', repository: 'real project', branch: 'main', logs: true });
+  f.$.ui.ask = asks;
+  assert.equal(answer.isError, undefined); assert.equal(answer.result[0].type, 'text');
+  assert.match(answer.result[0].text, /Environment: Research/); assert.match(answer.result[0].text, /Real project · main · abc1234/); assert.match(answer.result[0].text, /Workflow run .*crm-api\.yaml — Failed/);
+  assert.match(answer.result[0].text, /! migrate \(run_job · migrate-crm\) — failed/); assert.match(answer.result[0].text, /○ deploy_api .* — blocked/); assert.match(answer.result[0].text, /needs migrate/);
+  assert.match(answer.result[1].text, /^Logs: Job run logs are shown in Command Center/);
+  assert.equal(deployRequests(f, 'deployment-history').at(-1).codeRepositoryBranchUid, deployBranch);
+  f.deploy.latest = { ...workflowFixtureEntry('failed'), steps: workflowFixtureEntry('failed').steps.map(step => step.key === 'deploy_api' ? { ...step, state: 'failed', error: 'rollout refused' } : { ...step, state: 'succeeded', error: '' }) };
+  const withLogs = await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-2', runUid: deployRun, logs: true });
+  assert.match(withLogs.result[1].text, /^Logs of deploy_api \(first failed step\) · last 3 of 3 lines:\n/); assert.match(withLogs.result[1].text, /Resolving revision\n.*Building image\n.*Second page line$/);
+  assert.deepEqual(deployRequests(f, 'deployment-logs').slice(-2).map(q => [q.runUid, q.cursor]), [[ownedRun, undefined], [ownedRun, 'cursor-2']], 'the tail follows next_cursor');
+  const byRun = deployRequests(f, 'deployment-run'); assert.deepEqual(byRun.slice(-2).map(q => q.kind), ['deployment_run', 'workflow_run'], 'a uid is tried as a deployment, then as a workflow run');
+  const hidden = await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-3', runUid: hiddenRun });
+  assert.equal(hidden.result.length, 1); assert.match(hidden.result[0].text, /You can't see this deployment/); assert.doesNotMatch(hidden.result[0].text, /not found|does not exist/i);
+  assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-4', repository: 'Unknown' })).result[0].text, /No MainSequence repository named Unknown/);
+  assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-5', repository: 'Real project', branch: 'nope' })).result[0].text, /main, develop/);
+  const none = deployFixture({ noEnvironment: true }); register(none.on); await none.start();
+  assert.equal(none.registered.some(t => t.name === 'ms_deployment_status'), false, 'no registration without an environment');
+  assert.match((await none.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-6' })).deny, /Choose a MainSequence organization environment/);
+  assert.equal(none.calls.some(c => c.request?.request.action.startsWith('deployment-')), false);
 });

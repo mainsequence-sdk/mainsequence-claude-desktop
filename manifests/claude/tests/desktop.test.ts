@@ -82,6 +82,8 @@ test('Projects renders native branch links and confirms local setup before openi
   on('session.cwd',()=>({value:'/fixture/repository'}));on('session.id',()=>({value:'native-project-test'}));
   on('session.version',()=>({value:{version:'2.1.295'}}));on('session.start',($,e)=>({cwd:e.cwd}));
   on('ui.open',()=>({value:undefined}));on('command.register',()=>({value:{command:'ms'}}));
+  // Selecting an environment registers the read-only deployment status tool.
+  on('tool.register',($,e)=>({value:{tool:`mcp__mainsequence__${e.name}`}}));
   on('process.spawn',async function*($,e){
     const envelope=JSON.parse(e.input),q=envelope.request.request;requests.push(q);let data={};
     if(q.action==='workspace-preferences')data={backend:'https://fixture.example',baseDir:'/fixture/repos'};
@@ -343,4 +345,54 @@ test('Ontology native startup adds both distinct repositories with exact saved p
   const ui=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
   expect(added).toEqual(workspace.repositories.map(r=>r.path));
   expect(await ui.find({type:'Text',text:'Ontology: 2 repository checkouts attached to this Claude session.'})).toBeDefined();await ui.unmount();
+});
+
+test('Deployments: the Code detail opens a recorded workflow run with its timeline, step rows and logs', async ($, on) => {
+  const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`, repo=id(30), branch=id(31), run=id(40), owned=id(41), requests=[];
+  const step=(key,operation,state,startedAt,finishedAt,extra={})=>({id:key,key,operation,resourceKey:'crm',state,reason:'',needs:[],deploymentRunUid:null,startedAt,finishedAt,durationMs:startedAt&&finishedAt?Date.parse(finishedAt)-Date.parse(startedAt):null,error:'',...extra});
+  const entry={kind:'workflow_run',uid:run,state:'failed',reason:'',workflowPath:'.mainsequence/workflows/crm-api.yaml',repositoryUid:repo,repositoryName:'MainSequenceCRMAPI',branchUid:branch,branchName:'main',commit:'3e3f54b',
+    createdAt:'2026-10-21T07:59:51.000Z',startedAt:'2026-10-21T07:59:51.000Z',finishedAt:'2026-10-21T08:06:00.000Z',durationMs:369000,error:'',
+    steps:[step('image','prepare_image','succeeded','2026-10-21T08:02:39.000Z','2026-10-21T08:05:08.000Z',{deploymentRunUid:owned}),
+      step('deploy_api','deploy','failed','2026-10-21T08:05:09.000Z','2026-10-21T08:06:00.000Z',{needs:['image'],deploymentRunUid:owned,error:'rollout refused'})],
+    deploymentRuns:[{uid:owned,targetLabel:'FastAPI',targetType:'resource_release',state:'failed',workflowStepKeys:['image','deploy_api'],createdAt:'2026-10-21T08:02:08.000Z',startedAt:'2026-10-21T08:02:08.000Z',finishedAt:'2026-10-21T08:06:00.000Z'}]};
+  on('session.cwd',()=>({value:'/fixture/repos/acme/projects/MainSequenceCRMAPI-'+repo}));on('session.id',()=>({value:'native-deployments-test'}));
+  on('session.version',()=>({value:{version:'2.1.299'}}));on('session.start',($,e)=>({cwd:e.cwd}));
+  on('ui.open',()=>({value:undefined}));on('command.register',()=>({value:{command:'ms'}}));
+  on('tool.register',($,e)=>({value:{tool:`mcp__mainsequence__${e.name}`}}));
+  on('process.spawn',async function*($,e){
+    const envelope=JSON.parse(e.input),q=envelope.request.request;requests.push(q);let data:any={};
+    if(q.action==='workspace-preferences')data={backend:'https://fixture.example',baseDir:'/fixture/repos'};
+    if(q.action==='auth-status')data={authenticated:true,username:'fixture@example.test'};
+    if(q.action==='mcp-environments')data=[{uid:id(2),name:'Research'}];
+    if(q.action==='mcp-list'||q.action==='mcp-discover')data=[];
+    if(q.action==='repositories')data=[{uid:repo,code_repository_name:'MainSequenceCRMAPI',branches:[{uid:branch,repository_branch:'main'}]}];
+    if(q.action==='workspace-profile')data={organization:'acme'};
+    if(q.action==='local-repositories')data=[{name:'MainSequenceCRMAPI',path:'/fixture/repos/acme/projects/MainSequenceCRMAPI-'+repo,repositoryUid:repo,isGitRepository:true}];
+    if(q.action==='status')data={project:{root:'/fixture/repos/acme/projects/MainSequenceCRMAPI-'+repo,branch:'main',commit:'3e3f54ba7c3e',projectType:'python'},capabilities:[]};
+    if(q.action==='deployment-history')data={environmentUid:q.environmentUid,branchUid:q.codeRepositoryBranchUid||null,count:1,limit:q.limit,offset:q.offset,now:'2026-10-21T08:10:00.000Z',results:[entry]};
+    if(q.action==='deployment-run')data={hidden:false,uid:q.runUid,kind:q.kind,run:entry,now:'2026-10-21T08:10:00.000Z'};
+    if(q.action==='deployment-logs')data={hidden:false,runUid:q.runUid,stepUid:q.stepUid||null,cursor:q.cursor||null,nextCursor:null,complete:true,now:'2026-10-21T08:10:00.000Z',
+      entries:[{sequence:0,timestamp:'2026-10-21T08:05:10.250Z',stepUid:null,source:'orchestrator',stream:'stdout',level:'info',text:'Rolling out FastAPI'},{sequence:1,timestamp:'2026-10-21T08:05:59.000Z',stepUid:null,source:'orchestrator',stream:'stderr',level:'error',text:'rollout refused'}]};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/repos/acme/projects/MainSequenceCRMAPI-'+repo,surface:'desktop',isInteractive:true});await clock.settle();
+  const ui=await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await ui.press({key:'tab-Tools'});await clock.settle();await ui.select({key:'mcp-environment',value:id(2)});await clock.settle();
+  await ui.press({key:'tab-Code'});await clock.settle();await ui.press({key:'code-open-session'});await clock.settle();
+  expect(await ui.find({key:`deploy-open-${run}`}),'the Deploys card shows the branch’s latest run').toBeDefined();
+  expect(await ui.find({key:`deploy-rail-${run}`})).toBeDefined();
+  expect(requests.find(q=>q.action==='deployment-history')?.codeRepositoryBranchUid).toBe(branch);
+  await ui.press({key:`deploy-open-${run}`});await clock.settle();
+  expect(await ui.find({key:'deploy-timeline'}),'the Svg timeline is drawn').toBeDefined();
+  expect(await ui.find({key:'deploy-step-image'})).toBeDefined();
+  expect(await ui.find({key:'deploy-step-deploy_api'})).toBeDefined();
+  expect(await ui.find({type:'Text',text:'rollout refused'}),'the failed step record shows its error').toBeDefined();
+  expect(await ui.find({key:'deploy-logs'}),'the selected step’s logs draw in a Code block').toBeDefined();
+  expect(requests.find(q=>q.action==='deployment-logs')?.runUid).toBe(owned);
+  expect(await ui.find({key:`deploy-open-${owned}`})).toBeDefined();
+  await ui.press({key:'deploy-back'});await clock.settle();
+  expect(await ui.find({key:'sync'}),'Back returns to the Code detail').toBeDefined();
+  await ui.unmount();
 });

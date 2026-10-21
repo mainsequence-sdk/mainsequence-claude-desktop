@@ -1,5 +1,69 @@
 # Claude Desktop plugin verification
 
+## 0.4.16 — deployments in the pane and the `ms_deployment_status` tool (2026-10-21)
+
+A local repository's Code detail gains a **Deploys** card, a run detail (SVG step
+timeline, step rows, the selected step's record and cursor-paged logs) and the
+environment-wide list; Home shows the session branch's latest run; the read-only
+`ms_deployment_status` tool gives the model the same view. The worker actions
+`deployment-history`, `deployment-run` and `deployment-logs` (`src/hosts/claudeDeployments.ts`)
+read the platform through the public session service and return only what the pane draws.
+
+Automated verification on 2026-10-21 (`npm run release:check` with Desktop's bundled
+Code 2.1.299 and disposable configuration folders):
+
+- 95 Node tests passed. New: the Code card with a succeeded and a failed run (state
+  colour, rail glyphs in plan order, no polling of a finished run, Home line), opening a
+  run (first failed step selected, timeline, step rows, job-step wording, log paging by
+  cursor, Back), the hidden-run wording without asserting existence, polling (10 s run
+  timer while active, 30 s list timer, cancelled when the run settles, on section change,
+  pane close and session end, resumed on redraw, never counted as an operation), the
+  model tool (blocks, failed-step log tail following `next_cursor`, deployment-then-workflow
+  uid lookup, hidden run, unknown repository and branch, denial without an environment),
+  and the packaged-worker HTTP fixture (recorded-style rows: projection, branch filter,
+  limit validation, `include=workflow_run`, 404 as hidden, log cursor and step filter,
+  control characters stripped, and no billing, cost, credential or private context in the
+  worker's output).
+- Ten native simulator tests passed, including the new Deployments test (card, keyed
+  timeline slot with its Svg, step rows, failed-step error text, Code block, owned run,
+  Back) and the Projects test updated for the tool registration. Loader validation lists
+  the new `ui.close{id=mainsequence}` hook and `$.clock.every` via `syncDeploymentPolling`.
+- Documentation links, packaging, the checksum-pinned marketplace, the portable ZIP
+  inventory (74 files) and the standalone worker check passed.
+
+Live check (read-only) on 2026-10-21 against the local backend `http://127.0.0.1:8000`,
+environment `18595d12-f92a-4960-84cd-0c6798a1ad25` (named Production there, 1,217
+entries), with the plugin's saved MainSequence session, the real hooks and the real built
+worker; only Claude's host APIs were simulated by a harness. No checkout of a repository
+registered on that backend exists under the repositories folder, so the session folder
+was a stand-in Git folder on `main` named canonically `mainsequencecrmapi-b825d486-…`;
+the pane resolved the repository from that name and the branch from the repository's
+single registered branch, as it would for a real checkout. Results:
+
+- Header: signed in, the saved environment restored, `ms_deployment_status` registered.
+- Deploys card: the latest run of MainSequenceCRMAPI · main (run `9800eb5f…`),
+  "● Succeeded · Workflow run", started 2026-10-21 10:13, 12m 38s, rail ●●●●● (5/5
+  steps), one `deployment-history` read with the branch uid and `limit: 1`.
+- Run detail: heading "MainSequenceCRMAPI · crm-api.yaml", a 1,141-character timeline SVG
+  with five bars, five step rows (image, migrate, deploy_api selected by default as the
+  deploy step of a run without failures, image_assistant, deploy_assistant), the selected
+  step's record, 200 log lines in a text Code block, **Newer** sending the platform's
+  363-character cursor and drawing the next page, **Older** returning to the first page,
+  four owned deployments, and **Back** returning to the Code detail.
+- All deployments: 25 rows newest first with Succeeded and Failed states, **Load more**
+  drawing 50, the first row opening its detail.
+- Home: the This session card drew the Deploy line with **View**.
+- `ms_deployment_status({ runUid, logs: true })` returned two text blocks: the run
+  description and "Logs of deploy_api · last 80 of 1342 lines".
+- No run shown was active, so no polling timer started; after `session.end` none
+  remained. Nineteen deployment reads and no mutating worker action ran.
+
+Not verified live: the 10 s / 30 s refresh of an active run (none was active; covered by
+the hook tests with the mocked clock), and a hidden run beyond the probe that confirmed
+the backend answers HTTP 404 for an unknown run uid. The pane was driven by a harness,
+not by Desktop's window, so the native drawing of the timeline is not claimed as
+visually inspected.
+
 ## 0.4.13 — startup after reload, and a real Back Office conversation (2026-10-20)
 
 In the user's Desktop session, after `/reload-plugins` loaded 0.4.12, a model call to

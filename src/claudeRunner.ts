@@ -8,6 +8,7 @@ import { CLAUDE_INPUT_LIMIT, claudeFailure, executeClaudeEnvelope, parseClaudeEn
 import { createClaudeProjectActions } from './hosts/claudeProjectActions';
 import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
 import { withClaudeMcpNames } from './hosts/claudeMcpNames';
+import { CLAUDE_DEPLOYMENT_ACTIONS, createClaudeDeployments } from './hosts/claudeDeployments';
 
 export async function main(): Promise<void> {
   const controller = new AbortController();
@@ -45,7 +46,9 @@ export async function main(): Promise<void> {
     const result = await executeClaudeEnvelope(envelope, { devtools: async request =>
       withClaudeMcpNames(await tooling.dispatch(request), { host, signal: controller.signal }),
       projects: request => request.action === 'agent-icons'
-        ? createClaudeAgentIcons({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
+        ? createClaudeAgentIcons({ host, signal: controller.signal }).dispatch(request)
+        : CLAUDE_DEPLOYMENT_ACTIONS.has(request.action)
+          ? createClaudeDeployments({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
     process.stdout.write(JSON.stringify({ type: 'result', id, result }) + '\n');
   } catch (error) {
     process.stdout.write(JSON.stringify({ type: 'result', id, result: claudeFailure(action, error, controller.signal.aborted) }) + '\n');

@@ -111,6 +111,51 @@ Setup writes the endpoint without copying access tokens into the project. **Clea
 legacy environment credentials** is an explicit project action; signing in does
 not silently migrate other projects or rewrite their provider settings.
 
+### Deployments
+
+A local repository detail has a **Deploys** card (since 0.4.16) with the latest
+workflow run or deployment of the checked-out branch in the selected organization
+environment: its state in the host's status colour, repository · branch · commit,
+when it started and its duration, and a progress rail of step glyphs (● succeeded,
+◌ running, ! failed, ○ pending, blocked or skipped) in plan order. The branch is
+matched through the repositories list's branch uids and the checked status, so
+**Check status** (or a single registered branch) comes first; a folder that is not
+a known checkout says so instead of guessing.
+
+**Open run** shows the run: a step timeline drawn as an SVG on the run's clock, one
+row per step or stage with its state and duration, the selected step's record
+(state, start, finish, needs, skip reason, error) and that step's logs in a code
+block, in chronological order with `HH:MM:SS.mmm` timestamps and **Older** /
+**Newer** following the platform's log cursor. A workflow run opens its first failed
+step, else its deploy step, else the first; a deployment opens its first failed
+stage, else the running one, else the first. Deploy and image steps read the logs
+of the deployment run they own and list the run's deployments with **Open
+deployment**; Job steps point to Command Center for their Job run logs. **All
+deployments** (on the card and on Home) lists the environment's latest 25 entries
+newest first with **Load more**; a row opens its detail. Home's **This session**
+card shows the same latest run with **View** when the session folder is a known
+checkout.
+
+Reads use `GET /api/v1/deployment-history/`, `/api/v1/deployment-runs/{uid}/?include=workflow_run`
+and `/api/v1/deployment-runs/{uid}/logs/` through the saved MainSequence session, in
+a worker action that returns only what the pane draws: billing and cost fields are
+never read into Claude. A run that answers 404 is described as "You can't see this
+deployment. A deployment is shown to the people who can see its release or Job."
+without saying whether it exists, as in Command Center. While a shown run is
+pending, queued or running and the pane is open, that run is refreshed every 10 s
+and the list every 30 s; the timers stop when the run settles, the section changes,
+the pane closes or the session ends, and pause after an hour until **Refresh**.
+Nothing polls when nothing is active. Remote runs are remote state, not local
+operations: they never count in the header's running counter, Activity or Claude's
+status line.
+
+The model tool `ms_deployment_status` is registered with the environment selection.
+Its input is `{ repository?, branch?, runUid?, logs? }`: it returns the latest run of
+the named repository branch (default: this session's checkout), or the given run,
+with its steps and states as text, and with `logs: true` the last 80 log lines of the
+first failed step. It reads only and needs no confirmation; it is denied while no
+environment is selected.
+
 ## MainSequence Projects
 
 Projects lists `OrganizationProject` records within the selected environment.
@@ -225,6 +270,7 @@ conversation through Claude, task polling, local continuity and uncertain reques
 | Diagnostics/errors/previews | Bundle/runtime checks, actionable errors, Activity results/cancellation, explicit mutation confirmations, and previews for supported SDK/skills operations, Docker, container configuration and local deletion. Cancellation can leave partial effects, which are reported. |
 | Agent discovery and conversations | Shared environment selector, public card details, session preparation without sending, editable native command drafts, separate per-agent status and approved follow-ups, Task status/wait/cancel and local conversation continuity. |
 | MCP discovery/connections/tools | Search/paginate project MCPs, connect/disconnect exact releases, inspect/call tools and register them for Claude. Tool calls request approval and disconnected tools are refused. |
+| Deployment history | Latest run of the checked-out branch, run detail with an SVG step timeline, step records and cursor-paged logs, the environment-wide list, 10 s / 30 s polling of active runs only, and the read-only `ms_deployment_status` tool. Hidden runs use Command Center's wording. |
 
 The signed-terminal, session-navigation and container-launch limitations are explicit
 host gaps, not completed parity claims. Every action remains accounted for in this

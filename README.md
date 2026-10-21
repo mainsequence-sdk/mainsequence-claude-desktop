@@ -156,3 +156,12 @@ accepts. See the [release notes](docs/releases/0.4.14.md).
 
 Icons larger than Claude can embed, such as Back Office Helper's 512 px PNG, are shrunk to
 at most 128 px instead of being dropped. See the [release notes](docs/releases/0.4.15.md).
+
+### 0.4.16 — deployments
+
+A local repository's Code detail shows the latest workflow run or deployment of its
+checked-out branch, opens the run with a step timeline, step records and cursor-paged
+logs, and lists the environment's deployments; active runs refresh every 10 s while shown.
+The read-only `ms_deployment_status` tool gives the model the same view, with the failed
+step's log tail on request. See [Deployments](docs/claude-desktop.md#deployments) and the
+[release notes](docs/releases/0.4.16.md).

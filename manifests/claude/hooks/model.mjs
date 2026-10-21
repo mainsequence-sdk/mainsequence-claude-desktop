@@ -35,7 +35,26 @@ export function initialState(options = {}) {
     editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
     agentRevision: 0, agentListRevision: 0, agentOffset: 0, agentDetail: null, agentAccount: '', agentTools: {}, activeAgent: null, agentsLoading: false, agentSelection: 0, agentPreparing: {}, agentBindings: {}, agentDrafts: {}, agentSave: Promise.resolve(),
     agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentCommandOutputs: new Map(),
+    // Deployments: remote state read from the environment's deployment history, never a local operation.
+    deployView: '', deployOrigin: 'code', deployHistory: [], deployList: null, deployListLoading: false, deployListError: '',
+    deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,
+    deployTimers: { run: null, list: null }, deployPolls: 0, deployPaused: false, paneOpen: false,
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };
+}
+/** The MainSequence repository branch a local folder stands for, from the repositories list and the checked status. */
+export function deployTarget(state, { root = '', repositoryUid = '' } = {}) {
+  const remote = rows(state.results['devtools.repositories']?.data);
+  const locals = rows(state.results['projects.local-repositories']?.data);
+  const context = record(record(state.results['devtools.status']?.data).project);
+  const trailing = /-([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.exec(basename(root));
+  const uid = String(repositoryUid || locals.find(local => local.path === root)?.repositoryUid || (trailing ? trailing[1] : '') || '').toLowerCase();
+  const repository = remote.find(row => String(row.uid).toLowerCase() === uid);
+  const branches = rows(repository?.branches);
+  // The checked status describes the operation target; a single registered branch needs no check.
+  const branchName = (root && state.fields.root === root && context.branch) || (branches.length === 1 ? branches[0].repository_branch : '')
+    || (state.fields.repositoryUid === uid ? state.fields.branch : '') || '';
+  const branch = branches.find(row => row.repository_branch === branchName);
+  return { repositoryUid: uid, repositoryName: repository?.code_repository_name || '', branchName, branchUid: branch?.uid ? String(branch.uid) : '' };
 }
 export function meetsVersion(value, minimum = [2, 1, 296]) {
   const match = String(value || '').match(/(\d+)\.(\d+)\.(\d+)/);
