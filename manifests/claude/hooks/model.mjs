@@ -35,19 +35,75 @@ export function initialState(options = {}) {
     editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
     agentRevision: 0, agentListRevision: 0, agentOffset: 0, agentDetail: null, agentAccount: '', agentTools: {}, activeAgent: null, agentsLoading: false, agentSelection: 0, agentPreparing: {}, agentBindings: {}, agentDrafts: {}, agentSave: Promise.resolve(),
     agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentCommandOutputs: new Map(),
+    // Checkouts outside the repositories folder: saved folder per backend and repository, what the
+    // platform said about folders already asked about, and which backends' saved folders were checked.
+    localFolders: {}, folderIdentity: {}, identifying: new Set(), foldersChecked: new Set(),
     // Deployments: remote state read from the environment's deployment history, never a local operation.
     deployView: '', deployOrigin: 'code', deployHistory: [], deployList: null, deployListLoading: false, deployListError: '',
     deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,
     deployTimers: { run: null, list: null }, deployPolls: 0, deployPaused: false, paneOpen: false,
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };
 }
+export const sameUid = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
+/** devtools' folder slug, for the canonical `<base>/<organization>/projects/<name>-<uid>` layout. */
+export const safeSlug = value => String(value || 'code-repository').toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'code-repository';
+const separator = folder => String(folder).includes('\\') ? '\\' : '/';
+/** The folder the local scan reads and setup clones into, once the organization is known. */
+export function organizationRoot(state) {
+  const scanned = record(state.results['projects.local-repositories']?.data).organizationRoot;
+  if (typeof scanned === 'string' && scanned) return scanned;
+  const { baseDir, organization } = state.fields;
+  return baseDir && organization ? [baseDir.replace(/[\\/]+$/, ''), safeSlug(organization), 'projects'].join(separator(baseDir)) : '';
+}
+export function cloneDestination(state, repository) {
+  const { baseDir, organization } = state.fields;
+  if (!repository?.uid || !baseDir || !organization) return '';
+  return [baseDir.replace(/[\\/]+$/, ''), safeSlug(organization), 'projects', `${safeSlug(repository.code_repository_name || repository.name)}-${repository.uid}`].join(separator(baseDir));
+}
+export const folderKey = (state, root) => `${state.fields.backend.trim()}\n${root}`;
+export const savedFolders = state => record(state.localFolders[state.fields.backend.trim()]);
+/**
+ * A `-<uuid>` folder name names a listed repository, or one of its branches: folders created by
+ * earlier tools carry the branch UID. Anything else is not evidence, so the platform is asked instead.
+ */
+export function suffixRepository(state, root) {
+  const trailing = /-([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.exec(basename(root));
+  if (!trailing) return '';
+  const repository = rows(state.results['devtools.repositories']?.data).find(row => sameUid(row.uid, trailing[1])
+    || rows(row.branches).some(branch => sameUid(branch.uid, trailing[1])));
+  return repository ? String(repository.uid) : '';
+}
+const scannedRepository = (state, item) => item.repositoryUid ? String(item.repositoryUid) : suffixRepository(state, item.path);
+/** The repository a folder is a checkout of: the local scan, a saved folder, a platform answer, then its folder name. */
+export function repositoryForPath(state, root) {
+  if (!root) return '';
+  const scanned = rows(state.results['projects.local-repositories']?.data).find(item => item.path === root && scannedRepository(state, item));
+  if (scanned) return scannedRepository(state, scanned);
+  const saved = Object.entries(savedFolders(state)).find(([, folder]) => folder === root);
+  if (saved) return saved[0];
+  return state.folderIdentity[folderKey(state, root)] || suffixRepository(state, root);
+}
+/** Where a repository is on this computer: this session's folder, the canonical copy, then a folder opened before. */
+export function localPathFor(state, uid) {
+  if (!uid) return '';
+  if (state.cwd && sameUid(repositoryForPath(state, state.cwd), uid)) return state.cwd;
+  const scanned = rows(state.results['projects.local-repositories']?.data).find(item => sameUid(scannedRepository(state, item), uid));
+  if (scanned) return scanned.path;
+  return Object.entries(savedFolders(state)).find(([key]) => sameUid(key, uid))?.[1] || '';
+}
+/** Registered branch names across the account's repositories, most common first: fallbacks when a checkout's own branch is not registered. */
+export function registeredBranches(state, limit = 8) {
+  const counts = new Map();
+  for (const repository of rows(state.results['devtools.repositories']?.data)) {
+    for (const branch of new Set(rows(repository.branches).map(row => row.repository_branch).filter(name => typeof name === 'string' && name))) counts.set(branch, (counts.get(branch) || 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, limit).map(([name]) => name);
+}
 /** The MainSequence repository branch a local folder stands for, from the repositories list and the checked status. */
 export function deployTarget(state, { root = '', repositoryUid = '' } = {}) {
   const remote = rows(state.results['devtools.repositories']?.data);
-  const locals = rows(state.results['projects.local-repositories']?.data);
   const context = record(record(state.results['devtools.status']?.data).project);
-  const trailing = /-([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.exec(basename(root));
-  const uid = String(repositoryUid || locals.find(local => local.path === root)?.repositoryUid || (trailing ? trailing[1] : '') || '').toLowerCase();
+  const uid = String(repositoryUid || repositoryForPath(state, root) || '').toLowerCase();
   const repository = remote.find(row => String(row.uid).toLowerCase() === uid);
   const branches = rows(repository?.branches);
   // The checked status describes the operation target; a single registered branch needs no check.

@@ -1,4 +1,5 @@
-import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget } from './model.mjs';
+import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget,
+  repositoryForPath, localPathFor, registeredBranches, cloneDestination, sameUid } from './model.mjs';
 import { renderPane, renderRecovery } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
@@ -26,7 +27,7 @@ function ensureBoot($, state, e) {
 
 function operationTitle(action) {
   return ({ 'auth-status': 'Check MainSequence connection', login: 'Sign in to MainSequence', logout: 'Sign out of MainSequence',
-    'refresh-token': 'Renew MainSequence session', repositories: 'Refresh code repositories', setup: 'Set up repository',
+    'refresh-token': 'Renew MainSequence session', repositories: 'Refresh code repositories', setup: 'Clone repository',
     status: 'Check repository status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
     'mcp-discover': 'Find MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect MCP',
     'mcp-remove': 'Disconnect MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool',
@@ -34,7 +35,8 @@ function operationTitle(action) {
     'agent-task-get': 'Check agent task', 'agent-task-wait': 'Wait for agent task', 'agent-task-cancel': 'Cancel agent task',
     'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
     'organization-project-setup': 'Set up project locally', 'open-project-workspace': 'Open project in Claude',
-    'local-repositories': 'Discover local repositories', 'deployment-history': 'Read deployment history', 'deployment-run': 'Read deployment run',
+    'local-repositories': 'Discover local repositories', 'identify-folder': 'Identify repository folder', 'existing-folders': 'Check saved repository folders',
+    'deployment-history': 'Read deployment history', 'deployment-run': 'Read deployment run',
     'deployment-logs': 'Read deployment logs' })[action] || action.replaceAll('-', ' ');
 }
 
@@ -127,6 +129,8 @@ async function runDev($, state, action, extra = {}) {
   if (action === 'mcp-discover') state.mcpOffset = domain.request.offset;
   const result = await execute($, state, domain);
   if (state.closed || revision !== state.contextRevision) return result;
+  if (action === 'status') await identifyStatusFolder($, state, result);
+  if (state.closed || revision !== state.contextRevision) return result;
   if (result.status === 'success' && ['mcp-add', 'mcp-remove'].includes(action)) await refreshTools($, state);
   if (result.status === 'success' && ['login', 'logout', 'refresh-token'].includes(action)) await execute($, state, devRequest(state, 'auth-status', { check: true }), true);
   if (result.status === 'success' && !extra.dryRun && ['sync', 'install', 'update-sdk', 'update-agents', 'install-skills', 'skills-sync', 'env-cleanup'].includes(action)) {
@@ -141,8 +145,8 @@ async function runDev($, state, action, extra = {}) {
   if (result.status === 'success' && action === 'setup') {
     await runProject($, state, 'local-repositories');
     if (state.closed || revision !== state.contextRevision) return result;
-    const local = rows(state.results['projects.local-repositories']?.data).find(row => String(row.repositoryUid) === String(state.fields.repositoryUid));
-    if (local && state.codeDetail?.repositoryUid === state.fields.repositoryUid && !state.codeDetail.root) await openCode($, state, { root: local.path, repositoryUid: state.fields.repositoryUid });
+    const cloned = String(domain.request.repositoryUid || ''), local = localPathFor(state, cloned);
+    if (local && sameUid(state.codeDetail?.repositoryUid, cloned) && !state.codeDetail.root) await openCode($, state, { root: local, repositoryUid: cloned });
   }
   update($);
   return result;
@@ -154,7 +158,7 @@ async function runProject($, state, action, extra = {}) {
   const values = { root: action.startsWith('delete-local') ? state.selectedLocal : f.root || state.cwd,
     baseDir: f.baseDir, organization: f.organization, ...(f.image ? { image: f.image } : {}), ...(f.platform ? { platform: f.platform } : {}), ...extra };
   const destination = values.destination; delete values.destination;
-  if (action === 'pick-folder') values.initialPath = f[destination] || state.cwd;
+  if (action === 'pick-folder') { values.initialPath = f[destination] || state.cwd; values.purpose = destination === 'root' ? 'repository' : 'repositories'; }
   if (action === 'local-repositories') values.repositories = rows(state.results['devtools.repositories']?.data).map(row => ({ uid: row.uid, name: row.code_repository_name || row.name }));
   const result = await execute($, state, request('projects', action, values));
   if (state.closed || result.status !== 'success' || revision !== state.contextRevision) return result;
@@ -163,7 +167,11 @@ async function runProject($, state, action, extra = {}) {
   if (action === 'pick-folder' && typeof data.path === 'string' && ['root', 'baseDir'].includes(destination)) {
     state.editedSettings.add(destination); state.fields[destination] = data.path;
     if (destination === 'baseDir') { clearOrganizationProjects($, state); state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
-    if (destination === 'root') { state.contextRevision++; state.confirmation = null; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
+    if (destination === 'root') {
+      state.contextRevision++; state.confirmation = null; delete state.results['devtools.status']; delete state.results['devtools.sdk-status'];
+      // A chosen repository folder opens like any other: status, then which repository it is.
+      await openCode($, state, { root: data.path }, state.tab === 'Code');
+    }
   }
   if (action === 'delete-local-preview') state.confirmation = { title: 'Permanently delete local repository', detail: `${data.root}\n${data.warning || ''}`,
     callback: () => runProject($, state, 'delete-local', { ...values, confirmation: data.confirmation }) };
@@ -343,11 +351,14 @@ function actionsFor($, state) {
     retryPane: () => { state.paneFault = null; update($); if (!state.booted) background(ensureBoot($, state, { surface: 'desktop' })); },
     selectPage: (key, page) => { state.selectPages[key] = page; update($); },
     setup: install => {
-      if ([...state.running.values()].some(op => op.setupTarget === setupKey(state.fields))) return;
+      // Clone the repository whose page is open, whatever other folders were checked meanwhile.
+      const repositoryUid = state.codeDetail && !state.codeDetail.root ? state.codeDetail.repositoryUid : '';
+      if (!repositoryUid || [...state.running.values()].some(op => op.setupTarget === setupKey({ ...state.fields, repositoryUid }))) return;
       let input;
-      try { input = devRequest(state, 'setup', { install: !!install }).request; } catch { return; }
-      state.confirmation = { title: install ? 'Set up and install repository' : 'Set up repository',
-        detail: `Set up branch ${input.branch} in ${input.baseDir}${install ? ' and install its dependencies' : ''}.`,
+      try { input = devRequest(state, 'setup', { install: !!install, repositoryUid }).request; } catch { return; }
+      const repository = rows(state.results['devtools.repositories']?.data).find(row => sameUid(row.uid, input.repositoryUid));
+      state.confirmation = { title: install ? 'Clone and install repository' : 'Clone repository',
+        detail: `Clone branch ${input.branch} into ${cloneDestination(state, repository) || input.baseDir}${install ? ' and install its dependencies' : ''}.`,
         callback: () => runDev($, state, 'setup', input) };
       update($);
     },
@@ -366,6 +377,7 @@ function actionsFor($, state) {
       if (tab === 'Home' || tab === 'Code') background(ensureLatestDeployments($, state));
     },
     openCode: target => background(openCode($, state, target)),
+    openFolder: expected => background(openFolder($, state, expected)),
     closeCode: () => { state.codeDetail = null; state.confirmation = null; syncDeploymentPolling($, state); update($); },
     openDeployment: (uid, kind, origin) => background(openDeployment($, state, uid, kind, origin)),
     openDeployments: origin => background(openDeploymentList($, state, origin)),
@@ -450,7 +462,7 @@ function actionsFor($, state) {
 
 /** Open a repository detail. A local folder becomes the operation target; a remote one offers setup. */
 async function openCode($, state, target, show = true) {
-  const repositoryUid = target.repositoryUid ? String(target.repositoryUid) : '';
+  const repositoryUid = target.repositoryUid ? String(target.repositoryUid) : target.root ? repositoryForPath(state, target.root) : '';
   if (show) { state.tab = 'Code'; state.confirmation = null; }
   if (!target.root) {
     state.fields.repositoryUid = repositoryUid;
@@ -495,6 +507,7 @@ async function boot($, state, e) {
   const saved = record(await $.store.get('settings'));
   state.savedSettings = saved;
   state.environmentSelections = record(await $.store.get('mcp-environments'));
+  state.localFolders = record(await $.store.get('repository-folders'));
   for (const key of ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
   await $.command.register({ name: 'ms', description: 'Open MainSequence or message an agent by handle', argumentHint: '[@agent <message> | agent <uid> <message>]', immediate: true });
   // Desktop hosts the engine through the SDK: session.start (and a plugin reload) can name no
@@ -537,8 +550,90 @@ async function loadRepositories($, state) {
     if (state.closed || revision !== state.contextRevision) return;
     if (state.fields.baseDir && state.fields.organization) await runProject($, state, 'local-repositories');
     if (state.closed || revision !== state.contextRevision) return;
+    await checkSavedFolders($, state);
+    if (state.closed || revision !== state.contextRevision) return;
+    await identifyFolder($, state, state.cwd);
+    if (state.closed || revision !== state.contextRevision) return;
     await ensureLatestDeployments($, state);
   } finally { state.repositoriesLoading = false; update($); }
+}
+
+/** Remember which repository a folder outside the repositories folder is a checkout of, per backend. */
+async function saveFolder($, state, backend, uid, root) {
+  const folders = Object.fromEntries(Object.entries(record(state.localFolders[backend])).filter(([key, folder]) => folder !== root && !sameUid(key, uid)));
+  folders[uid] = root;
+  state.localFolders = { ...state.localFolders, [backend]: folders };
+  await $.store.set('repository-folders', { ...record(await $.store.get('repository-folders')), [backend]: folders });
+}
+async function forgetFolders($, state, backend, roots) {
+  const gone = new Set(roots);
+  const folders = Object.fromEntries(Object.entries(record(state.localFolders[backend])).filter(([, folder]) => !gone.has(folder)));
+  state.localFolders = { ...state.localFolders, [backend]: folders };
+  for (const key of Object.keys(state.folderIdentity)) if (key.startsWith(`${backend}\n`) && gone.has(key.slice(backend.length + 1))) delete state.folderIdentity[key];
+  await $.store.set('repository-folders', { ...record(await $.store.get('repository-folders')), [backend]: folders });
+}
+/** Saved folders are checked once per backend and pane session; a folder that no longer exists is forgotten. */
+async function checkSavedFolders($, state) {
+  const backend = state.fields.backend.trim();
+  const paths = [...new Set(Object.values(record(state.localFolders[backend])))];
+  if (!paths.length || state.foldersChecked.has(backend)) return;
+  const result = await execute($, state, request('projects', 'existing-folders', { paths }), true);
+  if (result.status !== 'success' || state.closed || backend !== state.fields.backend.trim()) return;
+  state.foldersChecked.add(backend);
+  const existing = new Set(rows(record(result.data).existing));
+  const missing = paths.filter(folder => !existing.has(folder));
+  if (missing.length) await forgetFolders($, state, backend, missing);
+}
+/**
+ * Ask the platform which repository a folder is a checkout of, from its Git remote and branch, wherever
+ * it is on disk. Answers are kept for the pane session (a folder that is not a repository is not asked
+ * about again) and matches are saved, so the folder is known after a restart without another request.
+ */
+async function identifyFolder($, state, root) {
+  const backend = state.fields.backend.trim();
+  if (!root || !backend) return '';
+  const known = repositoryForPath(state, root);
+  if (known) return known;
+  const key = `${backend}\n${root}`;
+  if (Object.hasOwn(state.folderIdentity, key) || state.identifying.has(key)) return '';
+  state.identifying.add(key);
+  try {
+    const result = await execute($, state, request('projects', 'identify-folder', { backend, root, branches: registeredBranches(state) }), true);
+    if (result.status !== 'success' || state.closed || backend !== state.fields.backend.trim()) return '';
+    const data = record(result.data);
+    const uid = data.matched === true && typeof data.repositoryUid === 'string' ? data.repositoryUid : '';
+    const top = typeof data.root === 'string' && data.root ? data.root : root;
+    state.folderIdentity[key] = uid; state.folderIdentity[`${backend}\n${top}`] = uid;
+    if (uid) await saveFolder($, state, backend, uid, top);
+    return uid;
+  } finally { state.identifying.delete(key); update($); }
+}
+/** After a status check, the checked folder's repository becomes the detail's repository. */
+async function identifyStatusFolder($, state, result) {
+  const requested = state.fields.root || state.cwd, revision = state.contextRevision, backend = state.fields.backend.trim();
+  if (result?.status !== 'success') {
+    // A saved folder that disappeared is forgotten; the repository offers Clone again.
+    if (result?.error?.code === 'PROJECT_NOT_FOUND' && Object.values(record(state.localFolders[backend])).includes(requested)) await forgetFolders($, state, backend, [requested]);
+    return;
+  }
+  const project = record(record(result.data).project);
+  const root = typeof project.root === 'string' && project.root ? project.root : requested;
+  const uid = repositoryForPath(state, requested) || repositoryForPath(state, root) || await identifyFolder($, state, root);
+  if (!uid || state.closed || revision !== state.contextRevision) return;
+  if (root !== requested) state.folderIdentity[`${backend}\n${requested}`] = uid;
+  if (!state.fields.repositoryUid) state.fields.repositoryUid = uid;
+  if (state.codeDetail?.root === requested && !state.codeDetail.repositoryUid) state.codeDetail = { ...state.codeDetail, repositoryUid: uid };
+}
+/** Open a folder the person chooses. From a repository's page, say when it is a checkout of something else. */
+async function openFolder($, state, expected = '') {
+  const result = await runProject($, state, 'pick-folder', { destination: 'root' });
+  const picked = record(result?.data).path;
+  if (result?.status !== 'success' || typeof picked !== 'string' || !picked || !expected || state.closed) return;
+  const uid = repositoryForPath(state, picked);
+  if (sameUid(uid, expected)) return;
+  const name = value => rows(state.results['devtools.repositories']?.data).find(row => sameUid(row.uid, value))?.code_repository_name || 'another repository';
+  $.ui.toast(uid ? `That folder is a checkout of ${name(uid)}, not ${name(expected)}.`
+    : `That folder could not be matched to ${name(expected)}: its Git remote and branch match no registered branch you can see.`);
 }
 
 function clearOrganizationProjects($, state) {

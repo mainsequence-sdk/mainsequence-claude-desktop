@@ -70,8 +70,40 @@ test('setup keeps progress beside disabled controls across native pane remounts'
   await ui.press({key:'tab-Settings'});
   expect(await ui.find({type:'Button',text:'View progress'})).toBeDefined();
   await ui.press({key:'tab-Code'}); await ui.press({key:'cancel-setup'}); await clock.settle();
-  expect(await ui.find({type:'Text',text:'Setup cancelled'})).toBeDefined();
+  expect(await ui.find({type:'Text',text:'Clone cancelled'})).toBeDefined();
   expect(setups).toBe(1);
+  await ui.unmount();
+});
+
+test('Code lists the session folder as the repository it is a checkout of and offers Clone only for the rest', async ($, on) => {
+  const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/elsewhere/pricing'}));
+  on('session.id', () => ({value:'code-identity'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  const requests: any[] = [];
+  on('process.spawn', async function* ($, e) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request; requests.push(q);
+    const data = q.action === 'repositories' ? [{uid:'repo-1',code_repository_name:'Pricing',code_repository_type:'python',branches:[{uid:'b-1',repository_branch:'main'}]},{uid:'repo-2',code_repository_name:'Ontology',branches:[{uid:'b-2',repository_branch:'main'}]}]
+      : q.action === 'workspace-preferences' ? {backend:'https://fixture.example',baseDir:'/fixture/repos'}
+      : q.action === 'workspace-profile' ? {organization:'acme'}
+      : q.action === 'local-repositories' ? {organizationRoot:'/fixture/repos/acme/projects',items:[]}
+      : q.action === 'identify-folder' ? {root:q.root,matched:q.root === '/fixture/elsewhere/pricing',repositoryUid:'repo-1',branch:'feature/x',registeredBranch:'main'} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Ready',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/elsewhere/pricing',surface:'desktop',isInteractive:true});
+  const ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await clock.settle(); await ui.press({key:'tab-Code'}); await clock.settle();
+  expect(requests.find(q => q.action === 'identify-folder')?.branches).toEqual(['main']);
+  expect(await ui.find({key:'code-session'})).toBeDefined();
+  expect(await ui.find({type:'Text',text:'Pricing'}), 'the session row names its repository').toBeDefined();
+  expect(await ui.find({key:'setup-repository-repo-1'}), 'a local repository is not offered for cloning').toBeUndefined();
+  expect(await ui.find({type:'Button',text:'Clone'})).toBeDefined();
+  await ui.press({key:'setup-repository-repo-2'}); await clock.settle();
+  expect(await ui.find({type:'Button',text:'Open existing folder…'})).toBeDefined();
+  expect(await ui.find({type:'Text',text:'Ontology'})).toBeDefined();
   await ui.unmount();
 });
 
