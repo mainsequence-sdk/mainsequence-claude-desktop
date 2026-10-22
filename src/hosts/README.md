@@ -25,5 +25,12 @@ through the pinned devtools package's public API.
   described with Command Center's "You can't see this deployment" wording, which
   does not assert whether the record exists.
 
+- `claudeLocalRepositories.ts` identifies which repository a folder anywhere on disk is
+  a checkout of: devtools' `projectContext` reads its origin identity, branch and commit,
+  and the platform's Git-context resolution names the registered branch, retrying with
+  registered branch names when the checked-out branch is not one. Its injected fetch
+  adapter reports only that endpoint's 404 as "no match" inside the public session
+  service. It also reports which saved folders still exist.
+
 Hook-side rendering and transient caching live in `manifests/claude/hooks/`.
 See [agent icon behavior and current transport limits](../../docs/agent-icons.md).

@@ -1,5 +1,47 @@
 # Claude Desktop plugin verification
 
+## Unreleased — Code recognizes checkouts anywhere on disk (2026-10-22)
+
+Cause of **Set up** on repositories that were already checked out: Code marked a
+repository **Local** only when devtools' scan found a folder under
+`<base>/<organization>/projects/` whose name ends in the repository's UID. Two kinds of
+checkout were missed. Folders that earlier tools named after a **branch** UID sit in the
+canonical folder but never match. Checkouts anywhere else, including the Code session's
+own folder, are never looked at. Fix: the pane maps a folder-name UUID through the
+listed repositories' branch UIDs as well, and the new worker module
+`src/hosts/claudeLocalRepositories.ts` identifies any other folder through the platform's
+Git-context resolution (origin identity plus branch, falling back to registered branch
+names). Matches are saved per backend in the plugin store. The remote-only page now says
+where the pane looked, offers **Open existing folder…**, and names the action **Clone**.
+
+Live check on 2026-10-22 against the local backend `http://127.0.0.1:8000`, with the
+rebuilt packaged worker and the saved MainSequence session (read-only requests):
+
+| Folder | Location | Branch | `identify-folder` |
+| --- | --- | --- | --- |
+| `assetmonitor-164` | older `<name>-<number>` layout, outside the repositories folder | `main` | assetmonitor |
+| `alpacaconnectors-<branch UID>` | canonical folder named after its branch UID | `main` | alpaca-connectors |
+| `MainSequenceMarkets` | a source checkout outside the repositories folder | `main` | MainSequenceMarkets |
+| `fmpconnectors-163` | older layout | `main` | no match: not on this backend |
+| `mainsequence-sdk` | a source checkout | `development` | no match after `development`, `main`, `develop` |
+
+The same account lists 45 repositories and its repositories folder holds 41 folders; 8
+of the 38 UUID-named folders end in a branch UID. Repositories shown as Local from that
+folder alone went from 30 to 37; folders elsewhere are added when Code loads (the
+session folder) or when they are opened.
+
+**Clone** now always targets the repository whose page is open. Before, it read a field
+that any status check also set, so a check run from Home between opening a repository's
+page and pressing the button would have named the session folder's repository instead.
+
+Automated verification (`npm run release:check`): 102 Node tests (a packaged-worker test
+with real Git checkouts and a loopback platform covering the branch fallback, a
+subfolder, an unknown remote, non-checkouts and the existence check; pane tests for the
+session row, Open existing folder…, mismatch messages, saved folders across a restart,
+a forgotten folder, branch-UID folder names and the Clone target), documentation and
+distribution checks. `MS_CLAUDE_DESKTOP_BINARY` set to Desktop's bundled Code 2.1.304: loader
+validation and 11 native tests passed, including a new Code list test.
+
 ## 0.4.18 — MCP names stored with the saved connection (2026-10-21)
 
 Cause of the recurring **Unnamed MCP**: a saved connection held only its release UID and

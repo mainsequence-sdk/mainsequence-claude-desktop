@@ -9,6 +9,7 @@ import { createClaudeProjectActions } from './hosts/claudeProjectActions';
 import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
 import { withClaudeMcpNames } from './hosts/claudeMcpNames';
 import { CLAUDE_DEPLOYMENT_ACTIONS, createClaudeDeployments } from './hosts/claudeDeployments';
+import { CLAUDE_LOCAL_ACTIONS, createClaudeLocalRepositories } from './hosts/claudeLocalRepositories';
 
 export async function main(): Promise<void> {
   const controller = new AbortController();
@@ -39,8 +40,10 @@ export async function main(): Promise<void> {
     const tooling = createDevTools({ host, signal: controller.signal, allowMcpSkills: true });
     const build = await fs.readFile(path.join(__dirname, '..', 'build-info.json'), 'utf8').then(text => JSON.parse(text)).catch(() => ({}));
     const projects = createClaudeProjectActions({ host, signal: controller.signal, pluginRoot: path.resolve(__dirname, '..'), version: build.version,
-      pickFolder: process.platform === 'darwin' ? async () => {
-        const result = await host.runProcess({ executable: '/usr/bin/osascript', args: ['-e', 'POSIX path of (choose folder with prompt "Choose a MainSequence repositories folder")'], cwd: process.cwd(), signal: controller.signal, timeoutMs: 120_000 });
+      pickFolder: process.platform === 'darwin' ? async (_initial, purpose) => {
+        // Fixed prompts only: nothing from the request reaches the AppleScript source.
+        const prompt = purpose === 'repository' ? 'Choose a repository folder' : 'Choose a MainSequence repositories folder';
+        const result = await host.runProcess({ executable: '/usr/bin/osascript', args: ['-e', `POSIX path of (choose folder with prompt "${prompt}")`], cwd: process.cwd(), signal: controller.signal, timeoutMs: 120_000 });
         return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
       } : undefined });
     const result = await executeClaudeEnvelope(envelope, { devtools: async request =>
@@ -48,7 +51,9 @@ export async function main(): Promise<void> {
       projects: request => request.action === 'agent-icons'
         ? createClaudeAgentIcons({ host, signal: controller.signal }).dispatch(request)
         : CLAUDE_DEPLOYMENT_ACTIONS.has(request.action)
-          ? createClaudeDeployments({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
+          ? createClaudeDeployments({ host, signal: controller.signal }).dispatch(request)
+          : CLAUDE_LOCAL_ACTIONS.has(request.action)
+            ? createClaudeLocalRepositories({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
     process.stdout.write(JSON.stringify({ type: 'result', id, result }) + '\n');
   } catch (error) {
     process.stdout.write(JSON.stringify({ type: 'result', id, result: claudeFailure(action, error, controller.signal.aborted) }) + '\n');

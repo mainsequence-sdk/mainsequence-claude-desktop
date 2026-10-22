@@ -1,4 +1,4 @@
-import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget, sameUid, repositoryForPath, localPathFor, organizationRoot, cloneDestination } from './model.mjs';
 import { primitives, OPERATION_STATUS, OPERATION_KIND } from './primitives.mjs';
 import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
@@ -35,6 +35,8 @@ export function renderPane(ui, state, actions, options = {}) {
   const busy = (scope, action) => state.operations.some(op => op.status === 'running' && op.label === `${scope} · ${action}`);
   const running = state.operations.filter(op => op.status === 'running').length;
   const runningSetups = state.operations.filter(op => op.setupTarget && op.status === 'running');
+  // The clone shown on an open repository page is that repository's, not whichever the fields last named.
+  const pageSetup = state.tab === 'Code' && state.codeDetail && !state.codeDetail.root ? setupKey({ ...f, repositoryUid: state.codeDetail.repositoryUid }) : null;
   const { auth, session, signedIn, signedOut } = signedInState(state);
   const environments = rows(state.results['devtools.mcp-environments']?.data);
   const environment = environments.find(r => r.uid === f.mcpEnvironment);
@@ -62,15 +64,15 @@ export function renderPane(ui, state, actions, options = {}) {
       return inline([status('warning', `Choose an organization environment to see ${VIEW_NOUN[state.tab]}.`),
         !environments.length && !signedOut && button('blocker-environments', 'Load environments', actions.refreshEnvironments, { plain: true })]);
     }
-    if (state.tab === 'Code' && !f.baseDir) return inline([status('warning', 'Choose a repositories folder before setting up repositories.'), button('blocker-folder', 'Choose folder', project('pick-folder', { destination: 'baseDir' }), { plain: true })]);
+    if (state.tab === 'Code' && !f.baseDir) return inline([status('warning', 'Choose a repositories folder to find and clone repositories.'), button('blocker-folder', 'Choose folder', project('pick-folder', { destination: 'baseDir' }), { plain: true })]);
     return null;
   })();
   const header = column([
     options.placement === 'dock' ? inline([brand, Box({ flexGrow: 1 }), chips], { justifyContent: 'space-between', flexWrap: 'wrap' }) : column([brand, chips]),
     navigation, blocker,
-    state.tab !== 'Activity' && runningSetups.some(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f)))
-      ? column(runningSetups.filter(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f))).map(op =>
-      inline([status('warning', `Setting up ${op.context}: ${op.progress}`), button(`show-setup-activity-${op.id}`, 'View progress', () => actions.tab('Activity'), { plain: true, dim: true })], { flexWrap: 'wrap' })), { gap: 0 }) : null,
+    state.tab !== 'Activity' && runningSetups.some(op => op.setupTarget !== pageSetup)
+      ? column(runningSetups.filter(op => op.setupTarget !== pageSetup).map(op =>
+      inline([status('warning', `Cloning ${op.context}: ${op.progress}`), button(`show-setup-activity-${op.id}`, 'View progress', () => actions.tab('Activity'), { plain: true, dim: true })], { flexWrap: 'wrap' })), { gap: 0 }) : null,
     state.workspaceAttachment && inline([status(state.workspaceAttachment.error ? 'error' : state.workspaceAttachment.running ? 'warning' : 'success', state.workspaceAttachment.message),
       state.workspaceAttachment.error && button('workspace-attach-retry', 'Retry adding repositories', actions.attachWorkspace, { plain: true })], { flexWrap: 'wrap' }),
     state.problem && status('error', state.problem),
@@ -141,7 +143,7 @@ export function renderPane(ui, state, actions, options = {}) {
         op.result && toggle(`activity-${op.id}`, 'Details')]),
       op.result?.effects?.message && status('warning', op.result.effects.message),
       state.expanded[`activity-${op.id}`] && Code({ source: resultText(op.result), language: 'json', wrap: 'wrap' }),
-    ])) : [empty('No activity yet', 'Set up a repository, connect an MCP or talk to an agent. Progress and results appear here.',
+    ])) : [empty('No activity yet', 'Open or clone a repository, connect an MCP or talk to an agent. Progress and results appear here.',
       [button('activity-projects', 'Open Code', () => actions.tab('Code'), { plain: true }), button('activity-mcp', 'Open Tools', () => actions.tab('Tools'), { plain: true })])]),
   ]);
 
@@ -197,34 +199,39 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated, environ
   const listed = state.results['devtools.repositories'];
   const remote = rows(listed?.data);
   const locals = rows(state.results['projects.local-repositories']?.data);
-  const localFor = uid => locals.find(r => String(r.repositoryUid) === String(uid));
   const typeLabel = r => r.code_repository_type === 'vite_react' ? 'Vite / React' : r.primary_language || r.code_repository_type || 'Repository';
   const detail = state.codeDetail;
   if (detail) {
-    const selected = remote.find(r => String(r.uid) === String(detail.repositoryUid));
+    const selected = remote.find(r => sameUid(r.uid, detail.repositoryUid || (detail.root ? repositoryForPath(state, detail.root) : '')));
     const local = detail.root;
     const back = button('code-back', '← Code', actions.closeCode, { plain: true, dim: true });
     if (!local) {
-      // Remote-only repository: choose a branch, then set it up under the repositories folder.
+      // No known copy: open an existing checkout, or clone a branch into the repositories folder.
       const branches = rows(selected?.branches).map(r => ({ value: r.repository_branch, label: r.repository_branch }));
       const name = selected?.code_repository_name || selected?.name || detail.repositoryUid;
-      const setup = state.operations.findLast(op => op.setupTarget === setupKey(f));
+      const setup = state.operations.findLast(op => op.setupTarget === setupKey({ ...f, repositoryUid: detail.repositoryUid }));
       const settingUp = setup?.status === 'running';
-      return column([back, heading(name), caption(`${selected ? typeLabel(selected) : 'Repository'} · not on this computer`),
-        card('Set up', [
+      const searched = organizationRoot(state) || f.baseDir;
+      return column([back, heading(name), caption(selected ? typeLabel(selected) : 'Repository'),
+        card('On this computer', [
+          text(searched ? `No copy found in ${searched}, in this session's folder or in folders you opened here.` : "No copy found in this session's folder or in folders you opened here.", { wrap: 'wrap' }),
+          caption('Already checked out somewhere else? Open that folder: it is matched to this repository by its Git remote and branch.'),
+          buttons([button('code-use-folder', 'Open existing folder…', () => actions.openFolder(detail.repositoryUid), { plain: true })]),
+        ]),
+        card('Clone', [
           select('repository-branch', 'Branch', branches, f.branch, value => actions.field('branch', value)),
-          !branches.length && muted('This repository has no branches available for setup yet.'),
-          line('Destination', f.baseDir || 'Choose a repositories folder in Settings'),
-          toggle('setup-install', state.expanded['setup-install'] ? 'Install dependencies after setup' : 'Install dependencies after setup (off)'),
-          buttons([button('setup', settingUp ? 'Setting up…' : 'Set up', () => actions.setup(!!state.expanded['setup-install']),
+          !branches.length && muted('This repository has no registered branches to clone yet.'),
+          line('Destination', cloneDestination(state, selected) || f.baseDir || 'Choose a repositories folder in Settings'),
+          toggle('setup-install', state.expanded['setup-install'] ? 'Install dependencies after cloning' : 'Install dependencies after cloning (off)'),
+          buttons([button('setup', settingUp ? 'Cloning…' : 'Clone', () => actions.setup(!!state.expanded['setup-install']),
             { primary: true, available: !!f.branch && !!f.baseDir && !settingUp, reason: settingUp ? '' : !f.baseDir ? 'Choose a repositories folder first.' : !f.branch ? 'Choose a branch first.' : '' })]),
           setup && column([
             status(settingUp ? 'warning' : setup.status === 'success' ? 'success' : setup.status === 'cancelled' ? 'info' : 'error',
-              settingUp ? 'Setting up locally…' : setup.status === 'success' ? 'Local setup completed' : setup.status === 'cancelled' ? 'Setup cancelled' : 'Setup failed'),
+              settingUp ? 'Cloning into the repositories folder…' : setup.status === 'success' ? 'Clone completed' : setup.status === 'cancelled' ? 'Clone cancelled' : 'Clone failed'),
             caption(setup.context), text(setup.progress, { wrap: 'wrap' }),
-            settingUp && button('cancel-setup', setup.cancelled ? 'Cancelling…' : 'Cancel setup', () => actions.cancel(setup.id), { plain: true, available: !setup.cancelled }),
+            settingUp && button('cancel-setup', setup.cancelled ? 'Cancelling…' : 'Cancel clone', () => actions.cancel(setup.id), { plain: true, available: !setup.cancelled }),
             setup.result?.effects && status('warning', setup.result.effects.message),
-            setup.status === 'failure' && caption('Review the error and any partial changes before starting setup again.'),
+            setup.status === 'failure' && caption('Review the error and any partial changes before cloning again.'),
             setup.result?.data?.root && button('setup-open', 'Open local repository', () => actions.openCode({ root: setup.result.data.root, repositoryUid: detail.repositoryUid }), { primary: true }),
             button('setup-activity', 'View activity', () => actions.tab('Activity'), { plain: true, dim: true }),
           ], { gap: 0 }),
@@ -239,7 +246,7 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated, environ
     const sdkLine = sdk.updateAvailable === true ? ['warning', `${sdk.installed || 'installed'} → ${sdk.latest || 'newer'} available`] : sdk.installed ? ['success', `${sdk.installed} up to date`] : sdk.hint ? ['info', sdk.hint] : null;
     return column([
       inline([back, local === state.cwd && badge('This session')], { justifyContent: 'space-between' }),
-      heading(basename(local)), caption(local),
+      heading(selected?.code_repository_name || basename(local)), caption(local),
       card('Status', [
         input('root', 'Folder'), buttons([button('pick-root', 'Choose folder', project('pick-folder', { destination: 'root' }), { plain: true, dim: true })]),
         select('project-type', 'Repository type', [{ value: '', label: 'Detect automatically' }, { value: 'python', label: 'Python' }, { value: 'vite_react', label: 'Vite / React' }], f.projectType, value => actions.field('projectType', value)),
@@ -284,35 +291,49 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated, environ
       ]),
     ]);
   }
-  // List: the session folder, every remote repository with its local state, and local copies.
+  // List: the session folder (as its repository when it is one), every remote repository with
+  // where it is on this computer, and other local copies under the repositories folder.
   const search = f.codeSearch.trim().toLowerCase();
   const matches = name => !search || String(name || '').toLowerCase().includes(search);
+  const branchCount = r => rows(r.branches).length ? ` · ${rows(r.branches).length} ${rows(r.branches).length === 1 ? 'branch' : 'branches'}` : '';
+  const sessionUid = repositoryForPath(state, state.cwd);
+  const sessionRepository = remote.find(r => sameUid(r.uid, sessionUid));
+  const sessionName = sessionRepository?.code_repository_name || sessionRepository?.name || basename(state.cwd) || 'Current folder';
+  const showSession = (matches(sessionName) || matches(basename(state.cwd))) && (state.codeFilter === 'all' || !!sessionRepository);
   const items = [];
-  const seen = new Set();
+  const seen = new Set([state.cwd]);
   for (const r of remote) {
-    const local = localFor(r.uid);
-    if (local) seen.add(local.path);
+    const local = localPathFor(state, r.uid);
+    // The session row stands for the repository checked out in this session's folder.
+    if (local === state.cwd) continue;
+    if (local) seen.add(local);
     const name = r.code_repository_name || r.name || r.uid;
     if (!matches(name)) continue;
     if (state.codeFilter === 'local' && !local) continue;
-    items.push({ key: `repository-${r.uid}`, name, meta: `${typeLabel(r)}${rows(r.branches).length ? ` · ${rows(r.branches).length} ${rows(r.branches).length === 1 ? 'branch' : 'branches'}` : ''}`, local: local?.path, uid: r.uid });
+    items.push({ key: `repository-${r.uid}`, name, meta: `${typeLabel(r)}${branchCount(r)}`, local, uid: r.uid });
   }
   for (const local of locals) {
-    if (seen.has(local.path) || !matches(local.name) || local.path === state.cwd) continue;
-    items.push({ key: `local-${local.path}`, name: local.name, meta: local.isGitRepository === false ? 'Folder' : 'Local repository', local: local.path, uid: local.repositoryUid || '' });
+    if (seen.has(local.path)) continue;
+    const uid = local.repositoryUid || repositoryForPath(state, local.path);
+    const repository = remote.find(r => sameUid(r.uid, uid));
+    const name = repository?.code_repository_name || local.name;
+    if (!matches(name)) continue;
+    items.push({ key: `local-${local.path}`, name, meta: repository ? `${typeLabel(repository)} · another local copy` : local.isGitRepository === false ? 'Folder' : 'Local repository', local: local.path, uid: uid || '' });
   }
   return column([
     inline([p.grow(p.Input({ key: 'field-codeSearch', value: f.codeSearch, placeholder: 'Search repositories', onInput: value => actions.field('codeSearch', value), onSubmit: value => actions.field('codeSearch', value) })),
       button('code-filter-all', 'All', () => actions.codeFilter('all'), state.codeFilter === 'all' ? {} : { plain: true, dim: true }),
       button('code-filter-local', 'Local', () => actions.codeFilter('local'), state.codeFilter === 'local' ? {} : { plain: true, dim: true }),
-      button('list-repositories', state.repositoriesLoading ? 'Loading…' : 'Refresh', actions.refreshRepositories, { plain: true, dim: true, available: !state.repositoriesLoading })], { flexWrap: 'wrap' }),
-    !search && state.codeFilter === 'all' && row('code-session', [inline([title(basename(state.cwd) || 'Current folder'), badge('This session')]), caption(state.cwd)],
-      [button('code-open-session', 'Open', () => actions.openCode({ root: state.cwd }), { plain: true })]),
+      button('list-repositories', state.repositoriesLoading ? 'Loading…' : 'Refresh', actions.refreshRepositories, { plain: true, dim: true, available: !state.repositoriesLoading }),
+      button('code-open-folder', 'Open folder…', () => actions.openFolder(), { plain: true, dim: true })], { flexWrap: 'wrap' }),
+    showSession && row('code-session', [inline([title(sessionName), badge('This session'), sessionRepository && badge('Local', 'success')]),
+      caption(sessionRepository ? `${typeLabel(sessionRepository)} · ${state.cwd}` : state.cwd)],
+      [button('code-open-session', 'Open', () => actions.openCode({ root: state.cwd, repositoryUid: sessionUid }), { plain: true })]),
     gated ? null : listed?.status === 'failure' && status('error', listed.summary),
     gated ? null : state.results['projects.local-repositories']?.status === 'failure' && status('warning', state.results['projects.local-repositories'].summary),
     ...items.map(item => row(item.key, [inline([title(item.name), item.local && badge('Local', 'success')]), caption(item.meta)], [
       item.local ? button(`open-${item.key}`, 'Open', () => actions.openCode({ root: item.local, repositoryUid: item.uid }), { plain: true })
-        : button(`setup-${item.key}`, 'Set up', () => actions.openCode({ repositoryUid: item.uid }), { primary: true })])),
+        : button(`setup-${item.key}`, 'Clone', () => actions.openCode({ repositoryUid: item.uid }), { primary: true })])),
     !gated && listed?.status === 'success' && !items.length && empty(search ? 'No matching repositories' : state.codeFilter === 'local' ? 'No local copies yet' : 'No repositories', search ? 'Try another search.' : 'Repositories available to your account appear here.'),
     !gated && !listed && !state.repositoriesLoading && empty('Repositories', 'Load the repositories available to your MainSequence account.', [button('code-load', 'Load repositories', actions.refreshRepositories, { primary: true })]),
   ]);

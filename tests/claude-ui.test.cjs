@@ -301,6 +301,141 @@ test('repositories list remote and local copies as rows; setup opens a detail wh
   await f.press('code-back'); assert.ok(f.find(await f.pane(), 'open-repository-repo-1'));
 });
 
+function folderFixture(stores, options = {}) {
+  let picked = '';
+  const identities = { '/work/repo': 'repo-1', '/elsewhere/ontology': 'repo-2', ...(options.identities || {}) };
+  const f = fixture({ stores, respond: domain => {
+    const q = domain.request, action = q.action;
+    if (action === 'repositories') return success(action, [
+      { uid: 'repo-1', code_repository_name: 'Pricing', code_repository_type: 'python', branches: [{ uid: 'b-1', repository_branch: 'main' }, { uid: 'b-2', repository_branch: 'develop' }] },
+      { uid: 'repo-2', code_repository_name: 'Ontology', branches: [{ uid: 'b-3', repository_branch: 'main' }] },
+      { uid: 'repo-3', code_repository_name: 'Backend', branches: [{ uid: 'b-4', repository_branch: 'main' }] }]);
+    if (action === 'workspace-profile') return success(action, { organization: 'acme' });
+    if (action === 'local-repositories') return success(action, { organizationRoot: '/repos/acme/projects', items: [] });
+    if (action === 'existing-folders') return success(action, { existing: q.paths.filter(folder => !(options.gone || []).includes(folder)) });
+    if (action === 'identify-folder') {
+      const uid = identities[q.root];
+      return success(action, uid ? { root: q.root, matched: true, repositoryUid: uid, repositoryName: 'fixture', branch: 'feature/x', registeredBranch: 'main' } : { root: q.root, matched: false, reason: 'No repository matches.' });
+    }
+    if (action === 'status') return success(action, { project: { root: q.root, branch: 'feature/x', commit: 'abc1234', projectType: 'python' }, capabilities: [] });
+    if (action === 'pick-folder') return success(action, { path: picked, cancelled: false });
+    return success(action, {});
+  } });
+  f.pick = value => { picked = value; };
+  f.requests = action => f.calls.filter(c => c.request?.request.action === action).map(c => c.request.request);
+  return f;
+}
+
+test('checkouts anywhere on disk are matched by Git identity: the session folder stands for its repository and opened folders are remembered', async () => {
+  const { register } = await load(); const stores = new Map(), backend = 'https://api.main-sequence.app';
+  let f = folderFixture(stores); register(f.on); await f.emit('session.start');
+  await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  // The session folder is not under the repositories folder; the platform names its repository.
+  const asked = f.requests('identify-folder');
+  assert.equal(asked.length, 1); assert.equal(asked[0].root, '/work/repo'); assert.equal(asked[0].backend, backend);
+  assert.deepEqual(asked[0].branches, ['main', 'develop'], 'registered branch names, most common first');
+  let tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, 'code-session')), /Pricing.*This session.*Local/);
+  assert.equal(f.find(tree, 'repository-repo-1'), undefined, 'the session row stands for its repository');
+  assert.deepEqual(stores.get('repository-folders'), { [backend]: { 'repo-1': '/work/repo' } });
+  await f.press('code-open-session');
+  assert.equal(f.requests('status').at(-1).root, '/work/repo');
+  assert.match(JSON.stringify(await f.pane()), /"Pricing"/, 'the detail names the repository');
+  assert.equal(f.requests('identify-folder').length, 1, 'a known folder is not asked about again');
+
+  // A repository with no known copy says where the pane looked and offers the folder you already have.
+  await f.press('code-back');
+  assert.equal(f.find(await f.pane(), 'setup-repository-repo-2').props.label, 'Clone');
+  await f.press('setup-repository-repo-2'); tree = await f.pane();
+  const page = JSON.stringify(tree);
+  assert.match(page, /No copy found in \/repos\/acme\/projects, in this session's folder or in folders you opened here\./);
+  assert.doesNotMatch(page, /not on this computer|Set up/);
+  assert.equal(f.find(tree, 'setup').props.label, 'Clone');
+  assert.match(page, /\/repos\/acme\/projects\/ontology-repo-2/, 'the clone destination is the canonical folder');
+  f.pick('/elsewhere/ontology'); await f.press('code-use-folder');
+  assert.equal(f.requests('pick-folder').at(-1).purpose, 'repository');
+  tree = await f.pane();
+  assert.ok(f.find(tree, 'sync'), 'the chosen checkout opens as a local repository');
+  assert.match(JSON.stringify(tree), /"Ontology"/);
+  assert.equal(f.calls.some(c => c.toast), false, 'no mismatch to report');
+  assert.deepEqual(stores.get('repository-folders'), { [backend]: { 'repo-1': '/work/repo', 'repo-2': '/elsewhere/ontology' } });
+  await f.press('code-back'); tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, 'repository-repo-2')), /Local/);
+  await f.press('open-repository-repo-2'); assert.equal(f.requests('status').at(-1).root, '/elsewhere/ontology');
+
+  // A folder of another repository, or of none, is opened and the mismatch is explained.
+  await f.press('code-back'); await f.press('setup-repository-repo-3');
+  f.pick('/elsewhere/ontology'); await f.press('code-use-folder');
+  assert.equal(f.calls.filter(c => c.toast).at(-1).toast, 'That folder is a checkout of Ontology, not Backend.');
+  await f.press('code-back'); await f.press('setup-repository-repo-3');
+  f.pick('/elsewhere/notes'); await f.press('code-use-folder');
+  assert.match(f.calls.filter(c => c.toast).at(-1).toast, /could not be matched to Backend/);
+  await f.press('code-back'); assert.ok(f.find(await f.pane(), 'setup-repository-repo-3'));
+
+  // After a restart the saved folders are checked, not identified again; a folder that is gone is forgotten.
+  f = folderFixture(stores, { gone: ['/elsewhere/ontology'] }); register(f.on); await f.emit('session.start');
+  await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  assert.deepEqual(f.requests('existing-folders').map(q => q.paths), [['/work/repo', '/elsewhere/ontology']]);
+  assert.equal(f.requests('identify-folder').length, 0);
+  tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, 'code-session')), /Pricing/);
+  assert.ok(f.find(tree, 'setup-repository-repo-2'), 'the forgotten folder no longer marks Ontology as local');
+  assert.deepEqual(stores.get('repository-folders'), { [backend]: { 'repo-1': '/work/repo' } });
+});
+
+test('Clone always targets the repository whose page is open, even after the session folder was checked elsewhere', async () => {
+  const { register } = await load(); const f = folderFixture(new Map()); register(f.on); await f.emit('session.start');
+  await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  await f.press('setup-repository-repo-2');
+  // Checking this session's folder from Home names its repository (Pricing) as the operation target.
+  await f.press('tab-Home'); await f.press('home-status');
+  assert.equal(f.requests('status').at(-1).root, '/work/repo');
+  await f.press('tab-Code'); await f.press('setup');
+  assert.match(f.find(await f.pane(), 'confirm-action') && JSON.stringify(await f.pane()), /Clone branch main into \/repos\/acme\/projects\/ontology-repo-2\./);
+  await f.press('confirm-action');
+  const clone = f.requests('setup').at(-1);
+  assert.equal(clone.repositoryUid, 'repo-2'); assert.equal(clone.branch, 'main'); assert.equal(clone.baseDir, '/repos');
+});
+
+test('canonical folders named after a branch UID by earlier tools count as local copies of their repository', async () => {
+  const { register } = await load(); const uid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const branchFolder = `/repos/acme/projects/alpacaconnectors-${uid(21)}`, unknownFolder = `/repos/acme/projects/scratch-${uid(99)}`;
+  const f = fixture({ respond: domain => {
+    const q = domain.request, action = q.action;
+    if (action === 'repositories') return success(action, [{ uid: uid(1), code_repository_name: 'alpaca-connectors', branches: [{ uid: uid(21), repository_branch: 'main' }] },
+      { uid: uid(2), code_repository_name: 'Ontology', branches: [{ uid: uid(22), repository_branch: 'main' }] }]);
+    if (action === 'workspace-profile') return success(action, { organization: 'acme' });
+    // devtools' scan matches repository UIDs only, so neither folder carries one.
+    if (action === 'local-repositories') return success(action, { organizationRoot: '/repos/acme/projects', items: [
+      { name: `alpacaconnectors-${uid(21)}`, path: branchFolder, isGitRepository: true }, { name: `scratch-${uid(99)}`, path: unknownFolder, isGitRepository: true }] });
+    if (action === 'identify-folder') return success(action, { root: q.root, matched: false });
+    return success(action, {});
+  } });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  const tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, `repository-${uid(1)}`)), /Local/);
+  await f.press(`open-repository-${uid(1)}`);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'status').at(-1).request.request.root, branchFolder);
+  await f.press('code-back');
+  assert.equal(f.find(await f.pane(), `local-${branchFolder}`), undefined, 'not listed twice');
+  assert.ok(f.find(await f.pane(), `local-${unknownFolder}`), 'a UUID that names no listed repository or branch stays a plain local folder');
+  assert.ok(f.find(await f.pane(), `setup-repository-${uid(2)}`));
+  assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'identify-folder').map(c => c.request.request.root), ['/work/repo'], 'only the unknown session folder is asked about');
+});
+
+test('a session folder the platform does not recognize stays a plain folder and is asked about once', async () => {
+  const { register } = await load(); const stores = new Map();
+  const f = folderFixture(stores, { identities: { '/work/repo': '' } }); register(f.on); await f.emit('session.start');
+  await f.press('tab-Settings'); await f.field('baseDir', '/repos'); await f.press('tab-Code');
+  let tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, 'code-session')), /"repo".*This session/);
+  for (const uid of ['repo-1', 'repo-2', 'repo-3']) assert.ok(f.find(tree, `setup-repository-${uid}`));
+  await f.press('code-open-session'); await f.press('code-back'); await f.press('list-repositories');
+  assert.equal(f.requests('identify-folder').length, 1);
+  assert.equal(stores.has('repository-folders'), false);
+  await f.press('code-filter-local'); assert.equal(f.find(await f.pane(), 'code-session'), undefined);
+});
+
 test('SDK update is unavailable unless fresh status explicitly supports and offers an update', async () => {
   const { register } = await load(); let supported = false;
   const f = fixture({ respond: domain => success(domain.request.action, { updateAvailable: true, updateSupported: supported }) });
@@ -913,15 +1048,15 @@ test('setup displays streamed progress, prevents duplicates, and retains target-
   assert.equal(f.find(tree, 'setup').props.disabled, true);
   setup(); await flush(); assert.equal(f.find(await f.pane(), 'confirm-action'), undefined);
   assert.equal(f.calls.filter(c => c.request?.request.action === 'setup').length, 1);
-  await f.press('tab-Settings'); assert.match(JSON.stringify(await f.pane()), /Setting up Repo a · main: Cloning Repo a/);
+  await f.press('tab-Settings'); assert.match(JSON.stringify(await f.pane()), /Cloning Repo a · main: Cloning Repo a/);
   await f.press('tab-Code'); await f.press('code-back'); await f.press('setup-repository-b');
-  tree = await f.pane(); assert.doesNotMatch(JSON.stringify(f.find(tree, 'setup')), /Setting up/);
-  assert.match(JSON.stringify(tree), /Setting up Repo a · main/, 'another repository still shows the running setup in the header');
+  tree = await f.pane(); assert.doesNotMatch(JSON.stringify(f.find(tree, 'setup')), /Cloning…/);
+  assert.match(JSON.stringify(tree), /Cloning Repo a · main/, 'another repository still shows the running clone in the header');
   await f.press('code-back'); await f.press('setup-repository-a');
   f.find(await f.pane(), 'repository-branch').props.onSelect('main'); await flush();
   assert.match(JSON.stringify(await f.pane()), /Cloning Repo a/);
   f.finishSetup(success('setup',{root:'/repos/a'})); await flush();
-  tree = await f.pane(); assert.match(JSON.stringify(tree), /Local setup completed/);
+  tree = await f.pane(); assert.match(JSON.stringify(tree), /Clone completed/);
   assert.ok(f.find(tree, 'setup-open')); assert.equal(f.find(tree, 'cancel-setup'), undefined);
 });
 
@@ -937,7 +1072,7 @@ test('setup failure and cancellation release controls and never retry the operat
       await flush();
     }
     const tree = await f.pane();
-    assert.match(JSON.stringify(tree), cancelled ? /Setup cancelled/ : /The cloned folder remains/);
+    assert.match(JSON.stringify(tree), cancelled ? /Clone cancelled/ : /The cloned folder remains/);
     assert.equal(!!f.find(tree, 'setup').props.disabled, false);
     assert.equal(f.calls.filter(c => c.request?.request.action === 'setup').length, 1);
   }

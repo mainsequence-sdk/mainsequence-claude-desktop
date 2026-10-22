@@ -8,7 +8,7 @@ export type ClaudeProjectRequest = ProjectOperationRequest
   | { action: 'runtime-diagnostics' }
   | { action: 'workspace-preferences' }
   | { action: 'workspace-profile'; backend: string }
-  | { action: 'pick-folder'; initialPath?: string }
+  | { action: 'pick-folder'; initialPath?: string; purpose?: 'repository' | 'repositories' }
   | { action: 'open-container'; root: string }
   | { action: 'open-project-workspace' | 'read-project-workspace'; root: string; backend: string; environmentUid: string; projectUid: string };
 export const CLAUDE_PROJECT_ACTIONS = new Set([
@@ -17,7 +17,8 @@ export const CLAUDE_PROJECT_ACTIONS = new Set([
 export type ClaudeProjectOptions = {
   host: HostServices; signal?: AbortSignal; env?: NodeJS.ProcessEnv;
   version?: string; pluginRoot?: string; configPath?: string;
-  pickFolder?: (initialPath?: string) => Promise<string | undefined>;
+  /** `purpose` selects one of the host's fixed prompts: a single repository or the repositories folder. */
+  pickFolder?: (initialPath?: string, purpose?: 'repository' | 'repositories') => Promise<string | undefined>;
   openContainer?: (root: string) => Promise<void>;
 };
 
@@ -61,7 +62,7 @@ export function createClaudeProjectActions(options: ClaudeProjectOptions) {
       } else if (request.action === 'pick-folder') {
         if (!options.pickFolder) throw new ToolingError('UNSUPPORTED_ACTION', 'This Desktop host does not expose a native folder picker.');
         const initial = request.initialPath === undefined ? undefined : absolute(request.initialPath);
-        const selected = await options.pickFolder(initial);
+        const selected = await options.pickFolder(initial, request.purpose === 'repository' ? 'repository' : 'repositories');
         data = selected ? { path: await directory(selected), cancelled: false } : { cancelled: true };
       } else if (request.action === 'open-project-workspace' || request.action === 'read-project-workspace') {
         const root = await directory(request.root);

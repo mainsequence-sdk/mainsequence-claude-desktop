@@ -86,17 +86,40 @@ Technical JSON is hidden until requested.
 ## Code
 
 Code lists the session folder first, then every repository available to the account
-through shared devtools APIs, each marked **Local** when a canonical checkout exists,
-and any other local copies found under the repositories folder. A search field and an
-All / Local filter narrow the list. A remote-only row offers **Set up**: its detail
-shows the branch (a single available branch is selected automatically), the
-destination and an optional **Install dependencies after setup** toggle. Setup uses the
-canonical `<base>/<organization>/projects/<name>-<uid>` layout and repository SSH
-identity. Setup shows its streamed progress beside the disabled Set up button
-immediately after confirmation, can be cancelled there, stays visible in the header
-while you work elsewhere, and reports completion or failure; a successful setup
-reopens the same repository as a local detail. Retry is explicit and never replays
-automatically.
+through shared devtools APIs, and any other local copies found under the repositories
+folder. A search field, an All / Local filter and **Open folder…** narrow or extend the
+list.
+
+A repository is **Local** wherever its checkout is, not only under the repositories
+folder. The pane recognizes a checkout in this order:
+
+1. the scan of `<base>/<organization>/projects/`, where a folder name ending in the
+   repository's UID, or in the UID of one of its branches (the name earlier tools gave
+   their clones), identifies it without a request;
+2. a folder already matched in an earlier session, saved per backend in the plugin store
+   (`repository-folders`) and checked for existence once per pane session; a folder that
+   no longer exists is forgotten;
+3. the platform's Git-context resolution, the lookup the VS Code extension uses for its
+   open workspace: the folder's canonical origin identity and checked-out branch select
+   one registered repository branch you can see. When that branch is not registered (a
+   feature branch), the worker tries up to eight registered branch names, most common
+   first, and stops at the first match. The session folder is asked about when Code
+   loads; any other folder when you open it, choose it or check its status. A folder
+   that matches nothing is asked about once per pane session.
+
+When the session folder is a checkout of a listed repository, its row carries that
+repository's name and stands for it, so the repository is not listed twice.
+
+A repository with no known copy says where the pane looked and offers **Open existing
+folder…** for a checkout elsewhere; choosing a folder of another repository, or of none,
+opens it and says so. Its **Clone** card shows the branch (a single available branch is
+selected automatically), the destination and an optional **Install dependencies after
+cloning** toggle. Cloning uses the canonical `<base>/<organization>/projects/<name>-<uid>`
+layout and repository SSH identity. It shows its streamed progress beside the disabled
+Clone button immediately after confirmation, can be cancelled there, stays visible in
+the header while you work elsewhere, and reports completion or failure; a successful
+clone reopens the same repository as a local detail. Retry is explicit and never
+replays automatically.
 
 Opening a local row makes that folder the operation target and shows its detail:
 status (branch, commit, type, SDK), **Dependencies**, **Instructions and skills** and
