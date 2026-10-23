@@ -106,7 +106,9 @@ export function createClaudeAgentIcons(options: { host: HostServices; signal?: A
         || input.includePoses !== undefined && typeof input.includePoses !== 'boolean'
         || input.includePoses && input.agentUids.length !== 1) throw new ToolingError('INVALID_REQUEST', 'Choose up to four visible agents.');
       const requested = new Set(input.agentUids.map(uuid));
-      const identity = await session.status(backend, true);
+      // Sign-in saved the account with the session; icon batches must not ask the backend for it again.
+      let identity = await session.status(backend);
+      if (identity.authenticated && !identity.username) identity = await session.status(backend, true);
       if (!identity.authenticated || identity.username !== input.expectedAccount) throw new ToolingError('AUTH_REJECTED', 'Refresh agents after changing account.');
       const projection = await session.request<unknown>(backend, 'GET', `/api/v1/command-center/agents/?organization_environment_uid=${environmentUid}`);
       if (!Array.isArray(projection)) throw new ToolingError('API_ERROR', 'The agent icon directory is unavailable.');

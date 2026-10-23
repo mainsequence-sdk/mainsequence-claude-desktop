@@ -20,6 +20,22 @@ const flush = async () => {
   }
 };
 const success = (action, data) => ({ schemaVersion: 1, action, status: 'success', summary: `${action} completed.`, data });
+const devtools = require('@dev-mainsequence/devtools');
+/** What the worker's mcp-catalog answers for saved connections and their tools: devtools' own definitions and bindings (ADR 0004). */
+function catalogData(rows, toolsFor, extra = {}) {
+  const definitions = [], bindings = {};
+  for (const row of rows) {
+    const tools = toolsFor(row);
+    for (const definition of devtools.projectToolDefinitions(row, tools)) {
+      if (bindings[definition.name]) continue;
+      const tool = tools.find(item => devtools.projectToolName(row.backend, row.mcp_connection.organization_environment_uid, row.resource_release_uid, item.name) === definition.name);
+      definitions.push(definition); bindings[definition.name] = devtools.projectToolBinding(row, tool);
+    }
+  }
+  return { backend: rows[0]?.backend || 'https://api.main-sequence.app', file: '/fixture/project-tool-catalog.json', refreshed: true, count: definitions.length,
+    connections: rows.map(row => ({ backend: row.backend, releaseUid: row.resource_release_uid, environmentUid: row.mcp_connection.organization_environment_uid, environmentName: row.mcp_connection.organization_environment_name || '', name: row.name || row.display_name || row.resource_release_uid, tools: toolsFor(row).length })),
+    updatedAt: '2026-10-23T00:00:00.000Z', refreshing: false, unavailable: [], retained: 0, error: null, definitions, bindings, ...extra };
+}
 
 const projectId = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 function projectFixture() {
@@ -174,7 +190,7 @@ test('Desktop footer launcher survives pane closure and preserves native control
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'SessionMode', props: { modes: ['focus'] } }), { type: 'engine', ref: 1 });
   // A desktop footer draw may start the session's own startup reads; it never writes settings or opens anything else.
-  assert.equal(f.calls.slice(callsBefore).every(c => c.pane || ['workspace-preferences', 'auth-status', 'mcp-environments', 'mcp-list', 'mcp-discover', 'read-project-workspace'].includes(c.request?.request.action)), true);
+  assert.equal(f.calls.slice(callsBefore).every(c => c.pane || ['workspace-preferences', 'auth-status', 'mcp-environments', 'mcp-list', 'mcp-catalog', 'mcp-discover', 'read-project-workspace'].includes(c.request?.request.action)), true);
   assert.equal(f.calls.some(c => c.store), false);
   assert.equal(JSON.stringify(saved), settingsBefore);
   f.$.ui.open = async () => { throw new Error('private-host-error'); };
@@ -210,19 +226,27 @@ test('preview binds the exact container image and digest to the later write', as
   assert.equal(request.request.image, 'my:image'); assert.equal(request.request.expectedDigest, 'digest-123');
 });
 
-test('MCP tools refresh from exact releases, use flattened hook arguments, and confirm each call', async () => {
+test('MCP tools register from the shared catalog with devtools\' names, use flattened hook arguments, and confirm each call', async () => {
   const { register } = await load();
+  const rows = [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example', mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Research' } }];
+  const lookup = { name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } };
   const f = fixture({ respond: domain => {
     if (domain.request.action === 'mcp-environments') return success('mcp-environments',[{uid:'env-1',name:'Research'}]);
-    if (domain.request.action === 'mcp-list') return success('mcp-list', [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example', mcp_connection:{organization_environment_uid:'env-1'} }]);
-    if (domain.request.action === 'mcp-tools') return success('mcp-tools', { tools: [{ name: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] });
+    if (domain.request.action === 'mcp-list') return success('mcp-list', rows);
+    if (domain.request.action === 'mcp-catalog') return success('mcp-catalog', catalogData(rows, () => [lookup]));
+    if (domain.request.action === 'mcp-tools') return success('mcp-tools', { tools: [lookup] });
     return success(domain.request.action, {});
   } });
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools'); f.find(await f.pane(),'mcp-environment').props.onSelect('env-1'); await flush();
-  assert.equal(f.tools.length, 1);
+  assert.equal(f.tools.length, 1, 'the shared catalog and the forced read register one tool once');
+  assert.equal(f.tools[0].name, devtools.projectToolName('https://backend.example', 'env-1', 'release-1', 'lookup'), 'the name devtools gives it, the same in every host');
+  assert.deepEqual(f.tools[0].inputSchema, lookup.inputSchema);
+  assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'mcp-catalog').map(c => c.request.request.refresh), [undefined, 'force'], 'the shared catalog first, then a forced read');
   const full = 'mcp__mainsequence__' + f.tools[0].name;
   await f.emit('tool.call', { tool: full, tool_use_id: 'call-1', query: 'hello' });
-  assert.deepEqual(f.calls.filter(c => c.request).at(-1).request.request.arguments, { query: 'hello' });
+  const call = f.calls.filter(c => c.request).at(-1).request.request;
+  assert.equal(call.action, 'mcp-tool-call'); assert.deepEqual(call.arguments, { query: 'hello' });
+  assert.deepEqual([call.backend, call.environmentUid, call.releaseUid, call.tool], ['https://backend.example', 'env-1', 'release-1', 'lookup'], 'the binding devtools returned');
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__missing' })).deny, /no longer connected/);
 });
 
@@ -230,12 +254,13 @@ test('MCP labels and tool descriptions use the release UID when display names ar
   const { register } = await load();
   for (const name of [undefined, '', '   ', null, 17, 'Named project']) {
     const connection = { resource_release_uid: 'release-1', name, backend: 'https://backend.example',
-      mcp_connection: { organization_environment_uid: 'env-1' } };
+      mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Research' } };
     const f = fixture({ respond: domain => {
       const action = domain.request.action;
       if (action === 'mcp-environments') return success(action, [{ uid: 'env-1', name: 'Research' }]);
       if (action === 'mcp-discover') return success(action, { count: 1, results: [{ ...connection, name: 'Discovered project' }] });
       if (action === 'mcp-list') return success(action, [connection]);
+      if (action === 'mcp-catalog') return success(action, catalogData([connection], () => [{ name: 'lookup', inputSchema: { type: 'object' } }]));
       if (action === 'mcp-tools') return success(action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
       return success(action, {});
     } });
@@ -250,10 +275,11 @@ test('MCP labels and tool descriptions use the release UID when display names ar
     assert.equal(f.find(tree, 'mcp-add-release-1'), undefined, 'an already connected release shows a badge, not Connect');
     await f.press('tools-back');
     assert.equal(f.tools.length, 1);
-    assert.equal(f.tools[0].description, `MainSequence ${display} [Research]: lookup`);
+    // devtools labels a tool with the release's name, else its repository's name, else the release UID: the same text in every host.
+    assert.equal(f.tools[0].description, `MainSequence ${name === 'Named project' ? name : 'release-1'} [Research]: lookup`);
     const tool = 'mcp__mainsequence__' + f.tools[0].name;
     assert.equal((await f.emit('tool.call', { tool, tool_use_id: 'call-1', query: 'value' })).isError, undefined);
-    const request = f.calls.filter(call => call.request?.request.action === 'mcp-call').at(-1).request.request;
+    const request = f.calls.filter(call => call.request?.request.action === 'mcp-tool-call').at(-1).request.request;
     assert.equal(request.releaseUid, 'release-1'); assert.deepEqual(request.arguments, { query: 'value' });
   }
 });
@@ -393,8 +419,10 @@ test('environment selection scopes tools and denies stale calls, including chang
  const {register}=await load();let asks=0;let approve;
  const f=fixture({respond:d=>{
   const q=d.request;
+  const rows=[{backend:'https://api.main-sequence.app',resource_release_uid:'release-'+q.environmentUid,name:'Same project',mcp_connection:{organization_environment_uid:q.environmentUid,organization_environment_name:q.environmentUid==='research'?'Research':'Production'}}];
   if(q.action==='mcp-environments')return success(q.action,[{uid:'research',name:'Research'},{uid:'production',name:'Production',isProduction:true}]);
-  if(q.action==='mcp-list')return success(q.action,[{backend:'https://api.main-sequence.app',resource_release_uid:'release-'+q.environmentUid,name:'Same project',mcp_connection:{organization_environment_uid:q.environmentUid}}]);
+  if(q.action==='mcp-list')return success(q.action,rows);
+  if(q.action==='mcp-catalog')return success(q.action,catalogData(rows,()=>[{name:'lookup',inputSchema:{type:'object'}}]));
   if(q.action==='mcp-tools')return success(q.action,{tools:[{name:'lookup',inputSchema:{type:'object'}}]});
   return success(q.action,{count:0,results:[]});
  }});register(f.on);await f.emit('session.start');await f.press('tab-Tools');
@@ -406,8 +434,8 @@ test('environment selection scopes tools and denies stale calls, including chang
  const pending=f.emit('tool.call',{tool:old,query:'hello'});await flush();
  f.find(await f.pane(),'mcp-environment').props.onSelect('production');await flush();approve('Run tool');
  assert.match((await pending).deny,/environment changed/);assert.match((await f.emit('tool.call',{tool:old})).deny,/no longer connected/);assert.equal(asks,1);
- assert.equal(f.calls.some(c=>c.request?.request.action==='mcp-call'),false);
- assert.ok(f.calls.filter(c=>c.request&&['mcp-list','mcp-discover','mcp-tools'].includes(c.request.request.action)).every(c=>c.request.request.environmentUid));
+ assert.equal(f.calls.some(c=>c.request&&['mcp-call','mcp-tool-call'].includes(c.request.request.action)),false);
+ assert.ok(f.calls.filter(c=>c.request&&['mcp-list','mcp-discover','mcp-tools','mcp-catalog'].includes(c.request.request.action)).every(c=>c.request.request.environmentUid));
  assert.equal(f.calls.some(c=>c.request?.request.action==='mcp-remove'),false);
  assert.equal(f.calls.filter(c=>c.store==='mcp-environments').at(-1).value['https://api.main-sequence.app'],'production');
 });
@@ -417,8 +445,10 @@ test('saved MCP environment restores only its tools in a new session without cha
  const f=fixture({saved:{backend,baseDir:'/saved',provider:{keep:true}},environments:{[backend]:'research','https://other.example':'production'},respond:d=>{
   const q=d.request;
   if(q.action==='workspace-preferences')return success(q.action,{backend:'https://default.example',baseDir:'/default'});
+  const rows=[{backend,resource_release_uid:'r',name:'Project',mcp_connection:{organization_environment_uid:'research',organization_environment_name:'Research'}}];
   if(q.action==='mcp-environments')return success(q.action,[{uid:'research',name:'Research'}]);
-  if(q.action==='mcp-list')return success(q.action,[{backend,resource_release_uid:'r',name:'Project',mcp_connection:{organization_environment_uid:'research'}}]);
+  if(q.action==='mcp-list')return success(q.action,rows);
+  if(q.action==='mcp-catalog')return success(q.action,catalogData(rows,()=>[{name:'lookup',inputSchema:{type:'object'}}]));
   if(q.action==='mcp-tools')return success(q.action,{tools:[{name:'lookup',inputSchema:{type:'object'}}]});
   return success(q.action,{});
  }});register(f.on);await f.emit('session.start',{surface:'desktop'});for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
@@ -442,8 +472,10 @@ test('late tool registration cannot replace the current environment tool map', a
   const { register } = await load();
   const f = fixture({ respond: d => {
     const q = d.request;
+    const rows = [{ backend: 'https://api.main-sequence.app', resource_release_uid: 'r', name: 'Project', mcp_connection: { organization_environment_uid: q.environmentUid, organization_environment_name: q.environmentUid === 'a' ? 'A' : 'B' } }];
     if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'a', name: 'A' }, { uid: 'b', name: 'B' }]);
-    if (q.action === 'mcp-list') return success(q.action, [{ backend: 'https://api.main-sequence.app', resource_release_uid: 'r', name: 'Project', mcp_connection: { organization_environment_uid: q.environmentUid } }]);
+    if (q.action === 'mcp-list') return success(q.action, rows);
+    if (q.action === 'mcp-catalog') return success(q.action, catalogData(rows, () => [{ name: 'lookup', inputSchema: { type: 'object' } }]));
     if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
     return success(q.action, {});
   } });
@@ -460,7 +492,7 @@ test('late tool registration cannot replace the current environment tool map', a
   finish(); await flush();
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[0].name })).deny, /no longer connected/);
   assert.equal((await f.emit('tool.call', { tool: 'mcp__mainsequence__' + f.tools[1].name })).isError, undefined);
-  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').at(-1).request.request.environmentUid, 'b');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-tool-call').at(-1).request.request.environmentUid, 'b');
 });
 
 const agentId = n => `00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
@@ -788,12 +820,15 @@ test('Tools lists connections as rows, adds MCPs through search with confirmatio
   const { register } = await load(); const connected = [];
   const f = fixture({ respond: d => {
     const q = d.request;
+    const rows = () => connected.map(uid => ({ resource_release_uid: uid, name: `MCP ${uid}`, backend: 'https://api.main-sequence.app', mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Research' } }));
+    const lookup = { name: 'lookup', description: 'Find things', inputSchema: { type: 'object' } };
     if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Research' }]);
-    if (q.action === 'mcp-list') return success(q.action, connected.map(uid => ({ resource_release_uid: uid, name: `MCP ${uid}`, backend: 'https://api.main-sequence.app', mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Research' } })));
+    if (q.action === 'mcp-list') return success(q.action, rows());
+    if (q.action === 'mcp-catalog') return success(q.action, catalogData(rows(), () => [lookup]));
     if (q.action === 'mcp-discover') return success(q.action, { count: 2, results: ['r1', 'r2'].map(uid => ({ resource_release_uid: uid, name: `MCP ${uid}`, mcp_connection: { organization_environment_uid: 'env-1' } })) });
     if (q.action === 'mcp-add') connected.push(q.releaseUid);
     if (q.action === 'mcp-remove') connected.splice(connected.indexOf(q.releaseUid), 1);
-    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', description: 'Find things', inputSchema: { type: 'object' } }] });
+    if (q.action === 'mcp-tools') return success(q.action, { tools: [lookup] });
     return success(q.action, {});
   } });
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
@@ -970,16 +1005,19 @@ test('a backend blip during an MCP refresh keeps the remembered name and the ear
   const { register } = await load();
   const connected = ['crm', 'other']; let degraded = false;
   const labels = { crm: 'MainSequenceCRMAPI', other: 'alpaca-connectors' };
+  const row = (uid, named = true) => ({ backend: 'https://api.main-sequence.app', resource_release_uid: uid, ...(named ? { display_name: labels[uid] } : {}), mcp_connection: { organization_environment_uid: 'env', organization_environment_name: 'Production' } });
+  const tools = r => [{ name: `lookup_${r.resource_release_uid}`, inputSchema: { type: 'object' } }];
   const f = fixture({ respond: d => {
     const q = d.request;
     if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env', name: 'Production' }]);
     // The name is an optional backend lookup: while the backend restarts the listing comes back without it.
-    if (q.action === 'mcp-list') return success(q.action, connected.map(uid => ({ backend: 'https://api.main-sequence.app', resource_release_uid: uid,
-      ...(degraded ? {} : { display_name: labels[uid] }), mcp_connection: { organization_environment_uid: 'env' } })));
+    if (q.action === 'mcp-list') return success(q.action, connected.map(uid => row(uid, !degraded)));
+    // devtools' shared catalog keeps a connection's earlier tools and stored name while its catalog cannot be read, and names it.
+    if (q.action === 'mcp-catalog') return success(q.action, catalogData(connected.map(uid => row(uid)), tools, degraded ? { unavailable: connected.map(uid => labels[uid]), retained: connected.length } : {}));
     if (q.action === 'mcp-tools') return degraded ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The backend could not be reached.' }
-      : success(q.action, { tools: [{ name: `lookup_${q.releaseUid}`, inputSchema: { type: 'object' } }] });
+      : success(q.action, { tools: tools({ resource_release_uid: q.releaseUid }) });
     if (q.action === 'mcp-remove') connected.splice(connected.indexOf(q.releaseUid), 1);
-    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: 'ok' }] });
+    if (q.action === 'mcp-tool-call') return success(q.action, { content: [{ type: 'text', text: 'ok' }] });
     return success(q.action, {});
   } });
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
@@ -996,9 +1034,9 @@ test('a backend blip during an MCP refresh keeps the remembered name and the ear
   assert.equal(f.find(tree, 'mcp-connected-other'), undefined);
   assert.match(JSON.stringify(tree), /MainSequenceCRMAPI could not be read now; its earlier tools stay registered/);
   assert.equal((await f.emit('tool.call', { tool: crmTool, tool_use_id: 'call-1' })).isError, undefined, 'the remaining MCP keeps its earlier tools');
-  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').at(-1).request.request.releaseUid, 'crm');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-tool-call').at(-1).request.request.releaseUid, 'crm');
   assert.match((await f.emit('tool.call', { tool: otherTool, tool_use_id: 'call-2' })).deny, /no longer connected/, 'the removed MCP loses its tools');
-  assert.equal(f.tools.length, 2, 'nothing was re-registered under a different name');
+  assert.equal(new Set(f.tools.map(tool => tool.name)).size, 2, 'nothing was re-registered under a different name');
   // The next successful refresh re-reads the catalog and clears the warning.
   degraded = false;
   await f.press('mcp-open-crm'); await f.press('toggle-tools-advanced'); await f.press('mcp-register'); await f.press('tools-back');
@@ -1013,10 +1051,11 @@ test('a failed MCP listing during a refresh keeps the current environment tools 
   const f = fixture({ respond: d => {
     const q = d.request;
     if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env', name: 'Production' }]);
-    if (q.action === 'mcp-list') return listingFails ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The backend could not be reached.' }
-      : success(q.action, [{ backend: 'https://api.main-sequence.app', resource_release_uid: 'crm', display_name: 'MainSequenceCRMAPI', mcp_connection: { organization_environment_uid: 'env' } }]);
+    const rows = [{ backend: 'https://api.main-sequence.app', resource_release_uid: 'crm', display_name: 'MainSequenceCRMAPI', mcp_connection: { organization_environment_uid: 'env', organization_environment_name: 'Production' } }];
+    if (q.action === 'mcp-list') return listingFails ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The backend could not be reached.' } : success(q.action, rows);
+    if (q.action === 'mcp-catalog') return success(q.action, catalogData(rows, () => [{ name: 'lookup', inputSchema: { type: 'object' } }]));
     if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
-    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: 'ok' }] });
+    if (q.action === 'mcp-tool-call') return success(q.action, { content: [{ type: 'text', text: 'ok' }] });
     return success(q.action, {});
   } });
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
@@ -1032,17 +1071,18 @@ test('slow MCP tool reads cannot block discovery or replace another selected MCP
   const { register } = await load();
   const f = fixture({respond: d => {
     const q = d.request;
-    const connections = ['a','b'].map(uid => ({backend:'https://api.main-sequence.app',resource_release_uid:uid,name:`MCP ${uid}`,mcp_connection:{organization_environment_uid:'env'}}));
+    const connections = ['a','b'].map(uid => ({backend:'https://api.main-sequence.app',resource_release_uid:uid,name:`MCP ${uid}`,mcp_connection:{organization_environment_uid:'env',organization_environment_name:'Research'}}));
     return success(q.action, q.action === 'mcp-environments' ? [{uid:'env',name:'Research'}]
       : ['mcp-list','mcp-discover'].includes(q.action) ? connections
+        : q.action === 'mcp-catalog' ? catalogData(connections, row => [{name:`lookup_${row.resource_release_uid}`,inputSchema:{type:'object'}}])
         : q.action === 'mcp-tools' ? {tools:[{name:`lookup_${q.releaseUid}`,inputSchema:{type:'object'}}]} : {});
   }});
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
-  // Oldest pending mcp-tools request is released first.
+  // Oldest pending catalog request (the two mcp-catalog reads of a registration, then each mcp-tools detail read) is released first.
   const original = f.$.process.spawn, gates = [];
   f.$.process.spawn = input => {
     const envelope = JSON.parse(input.input);
-    if (envelope.request.request.action !== 'mcp-tools') return original(input);
+    if (!['mcp-tools', 'mcp-catalog'].includes(envelope.request.request.action)) return original(input);
     let release; const gate = new Promise(resolve => { release = resolve; }); gates.push(release);
     const child = original(input);
     const stream = (async function*(){ await gate; for await (const chunk of child) yield chunk; })(); stream.result = child.result; return stream;
@@ -1064,9 +1104,12 @@ test('large MCP catalogs list every tool and page the direct-call selector withi
   const { register } = await load();
   const f = fixture({respond: d => {
     const q = d.request;
+    const rows = [{resource_release_uid:'release',name:'CRM',backend:'https://api.main-sequence.app',mcp_connection:{organization_environment_uid:'env',organization_environment_name:'Production'}}];
+    const tools = Array.from({length:130}, (_, i) => ({name:`crm_tool_${i}`,description:`Tool ${i}`,inputSchema:{type:'object'}}));
     return success(q.action, q.action === 'mcp-environments' ? [{uid:'env',name:'Production'}]
-      : ['mcp-list','mcp-discover'].includes(q.action) ? [{resource_release_uid:'release',name:'CRM',backend:'https://api.main-sequence.app',mcp_connection:{organization_environment_uid:'env'}}]
-      : q.action === 'mcp-tools' ? {tools:Array.from({length:130}, (_, i) => ({name:`crm_tool_${i}`,description:`Tool ${i}`,inputSchema:{type:'object'}}))} : {});
+      : ['mcp-list','mcp-discover'].includes(q.action) ? rows
+      : q.action === 'mcp-catalog' ? catalogData(rows, () => tools)
+      : q.action === 'mcp-tools' ? {tools} : {});
   }});
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools');
   f.find(await f.pane(), 'mcp-environment').props.onSelect('env'); await flush();
@@ -1125,30 +1168,39 @@ test('pressing Agents during startup keeps the signed-in account, the saved envi
   assert.equal(f.calls.filter(c => c.request?.request.action === 'agent-icons').length, 1, 'icons load once');
 });
 
-test('registered tool results reach Claude as content blocks, forwarding the MCP blocks and never a bare object', async () => {
+test('registered tool results reach Claude as content blocks, forwarding the blocks the worker shaped and never a bare object', async () => {
   const { register, toolResult } = await load();
-  const blocks = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'The MCP tool completed.',
-    data: { content: [{ type: 'text', text: 'Found 2 contacts' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }], isError: false, structuredContent: { count: 2 } } });
+  // The worker answers mcp-tool-call with devtools' projectToolResult (ADR 0004): the remote blocks, then a JSON
+  // block with summary, effects, error and structuredContent. The hook converts blocks and nothing else.
+  const shaped = devtools.projectToolResult;
+  const blocks = toolResult({ schemaVersion: 1, action: 'mcp-tool-call', status: 'success', summary: 'The MCP tool completed.',
+    data: shaped({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'The MCP tool completed.',
+      data: { content: [{ type: 'text', text: 'Found 2 contacts' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }], isError: false, structuredContent: { count: 2 } } }) });
   assert.ok(Array.isArray(blocks.result)); assert.deepEqual(blocks.result[0], { type: 'text', text: 'Found 2 contacts' });
   assert.deepEqual(blocks.result[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }, 'MCP images become Messages API images');
-  const other = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'ok', data: { content: [
+  const other = toolResult({ schemaVersion: 1, action: 'mcp-tool-call', status: 'success', summary: 'ok', data: shaped({ schemaVersion: 1, action: 'mcp-call', status: 'success', summary: 'ok', data: { content: [
     { type: 'resource_link', uri: 'file:///report.pdf', name: 'report' }, { type: 'audio', data: 'BBBB', mimeType: 'audio/wav' },
-    { type: 'resource', resource: { uri: 'mem://x', blob: 'CCCC', mimeType: 'application/pdf' } }, { type: 'image', data: 'DDDD', mimeType: 'image/svg+xml' }] } });
+    { type: 'resource', resource: { uri: 'mem://x', blob: 'CCCC', mimeType: 'application/pdf' } }, { type: 'image', data: 'DDDD', mimeType: 'image/svg+xml' }] } }) });
   assert.deepEqual(other.result.map(b => b.type), ['text', 'text', 'text', 'text'], 'non-API blocks become text');
   assert.match(other.result[0].text, /report\.pdf/); assert.doesNotMatch(JSON.stringify(other.result), /BBBB|CCCC|DDDD/, 'binary payloads are not inlined as text');
   assert.match(blocks.result[2].text, /"count":2/); assert.equal(blocks.isError, undefined);
-  const failed = toolResult({ schemaVersion: 1, action: 'mcp-call', status: 'failure', summary: 'The MCP tool reported an error.', error: { code: 'API_ERROR', message: 'boom' },
-    data: { content: [{ type: 'text', text: 'missing uid' }], isError: true } });
+  const failure = { schemaVersion: 1, action: 'mcp-call', status: 'failure', summary: 'The MCP tool reported an error.', error: { code: 'API_ERROR', message: 'boom' },
+    data: { content: [{ type: 'text', text: 'missing uid' }], isError: true } };
+  const failed = toolResult({ ...failure, action: 'mcp-tool-call', data: shaped(failure) });
   assert.equal(failed.isError, true); assert.equal(failed.result[0].text, 'missing uid'); assert.match(failed.result[1].text, /API_ERROR/);
+  // The host's own tools and a worker that failed before shaping anything still answer with one JSON text block.
   const plain = toolResult({ schemaVersion: 1, action: 'agent-send', status: 'success', summary: 'Sent.', data: { message: 'Reply', accessToken: 'secret-token' } });
   assert.deepEqual(plain.result.map(b => b.type), ['text']); assert.match(plain.result[0].text, /Reply/); assert.doesNotMatch(plain.result[0].text, /secret-token/);
+  const stopped = toolResult({ schemaVersion: 1, action: 'mcp-tool-call', status: 'failure', summary: 'The operation timed out.', error: { code: 'PROCESS_TIMEOUT', message: 'The operation timed out.' } });
+  assert.equal(stopped.isError, true); assert.match(stopped.result[0].text, /PROCESS_TIMEOUT/);
   // Through the hooks: an MCP tool call and an agent send both answer with blocks.
+  const rows = [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example', mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Research' } }];
   const f = fixture({ respond: domain => {
     const q = domain.request;
     if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Research' }]);
-    if (q.action === 'mcp-list') return success(q.action, [{ resource_release_uid: 'release-1', name: 'Project', backend: 'https://backend.example', mcp_connection: { organization_environment_uid: 'env-1' } }]);
-    if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] });
-    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: 'hello back' }], isError: false });
+    if (q.action === 'mcp-list') return success(q.action, rows);
+    if (q.action === 'mcp-catalog') return success(q.action, catalogData(rows, () => [{ name: 'lookup', inputSchema: { type: 'object' } }]));
+    if (q.action === 'mcp-tool-call') return success(q.action, { content: [{ type: 'text', text: 'hello back' }] });
     return success(q.action, {});
   } });
   register(f.on); await f.emit('session.start'); await f.press('tab-Tools'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
@@ -1227,9 +1279,11 @@ function reloadFixture(options = {}) {
     if (q.action === 'workspace-preferences') return success(q.action, { backend, baseDir: '/repos' });
     if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'reload@example.test' });
     if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'env-1', name: 'Production' }]);
-    if (q.action === 'mcp-list') return success(q.action, [{ resource_release_uid: 'release-1', name: 'BackofficeBackend', backend, mcp_connection: { organization_environment_uid: 'env-1' } }]);
+    const rows = [{ resource_release_uid: 'release-1', name: 'BackofficeBackend', backend, mcp_connection: { organization_environment_uid: 'env-1', organization_environment_name: 'Production' } }];
+    if (q.action === 'mcp-list') return success(q.action, rows);
+    if (q.action === 'mcp-catalog') return success(q.action, catalogData(rows, () => [{ name: 'get_current_user', inputSchema: { type: 'object' } }]));
     if (q.action === 'mcp-tools') return success(q.action, { tools: [{ name: 'get_current_user', inputSchema: { type: 'object' } }] });
-    if (q.action === 'mcp-call') return success(q.action, { content: [{ type: 'text', text: '{"user_uid":"u-1"}' }], isError: false });
+    if (q.action === 'mcp-tool-call') return success(q.action, { content: [{ type: 'text', text: '{"user_uid":"u-1"}' }] });
     return success(q.action, {});
   } });
 }
@@ -1264,7 +1318,7 @@ test('a model call to a MainSequence tool right after a reload waits for registr
   assert.equal(f.tools.length, 0);
   const answer = await f.emit('tool.call', { tool: name, tool_use_id: 'after-reload' });
   assert.deepEqual(answer, { result: [{ type: 'text', text: '{"user_uid":"u-1"}' }] });
-  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-call').length, 1);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-tool-call').length, 1);
   assert.match((await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_unknown_0' })).deny, /no longer connected/, 'an unknown name is still refused');
 });
 

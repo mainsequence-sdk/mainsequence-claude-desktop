@@ -29,7 +29,7 @@ function operationTitle(action) {
     'refresh-token': 'Renew MainSequence session', repositories: 'Refresh code repositories', setup: 'Set up repository',
     status: 'Check repository status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
     'mcp-discover': 'Find MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect MCP',
-    'mcp-remove': 'Disconnect MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool',
+    'mcp-remove': 'Disconnect MCP', 'mcp-tools': 'Read MCP tools', 'mcp-call': 'Call MCP tool', 'mcp-catalog': 'Register MCP tools', 'mcp-tool-call': 'Call MCP tool',
     'agents-list': 'Find agents', 'agent-get': 'Read agent details', 'agent-session': 'Open agent conversation', 'agent-readiness': 'Prepare agent', 'agent-send': 'Send agent message',
     'agent-task-get': 'Check agent task', 'agent-task-wait': 'Wait for agent task', 'agent-task-cancel': 'Cancel agent task',
     'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
@@ -71,7 +71,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   // Session results depend on the backend alone: an environment or folder change while
   // the sign-in check is in flight must not discard it.
   const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
-  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', 'mcp-catalog', 'mcp-tool-call', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
 }
@@ -107,7 +107,8 @@ function devRequest(state, action, extra = {}) {
       values.environmentUid = f.mcpEnvironment;
     }
     if (['mcp-add', 'mcp-remove', 'mcp-tools', 'mcp-call'].includes(action)) values.releaseUid = state.selectedMcp;
-    if (action === 'mcp-discover') Object.assign(values, { search: f.mcpSearch, limit: 25, offset: 0 });
+    // Discovery rows are labelled with their repository's name by devtools; saved connections carry their names.
+    if (action === 'mcp-discover') Object.assign(values, { search: f.mcpSearch, limit: 25, offset: 0, enrichNames: true });
     if (action === 'mcp-call') {
       const args = JSON.parse(f.mcpArguments);
       if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be a JSON object.');
@@ -188,23 +189,18 @@ function apiBlock(block) {
   return { type: 'text', text: clean(JSON.stringify({ ...rest, ...(binary ? { omitted: 'binary content' } : {}) })) };
 }
 
-/** Claude accepts a registered tool's result as text, content blocks or nothing: never a bare object. */
+/** Claude accepts a registered tool's result as text, content blocks or nothing: never a bare object.
+ * A project tool's result arrives from the worker already shaped by devtools (`mcp-tool-call`: the remote
+ * blocks, then a JSON block with summary, effects, error and structuredContent; devtools ADR 0004); this
+ * only converts the blocks. A host tool's own blocks pass the same way, and a bare ActionResult becomes
+ * one JSON text block. */
 export function toolResult(value) {
   const result = publicValue(value);
   const data = record(result?.data);
-  const blocks = Array.isArray(data.content) ? data.content.filter(block => block && typeof block === 'object' && typeof block.type === 'string') : null;
-  const extra = { summary: result?.summary, ...(result?.effects ? { effects: result.effects } : {}), ...(result?.error ? { error: result.error } : {}),
-    ...(data.structuredContent !== undefined ? { structuredContent: data.structuredContent } : {}) };
-  const content = blocks?.length ? [...blocks, ...(result?.status !== 'success' || data.structuredContent !== undefined ? [{ type: 'text', text: JSON.stringify(extra) }] : [])]
-    : [{ type: 'text', text: JSON.stringify(blocks ? extra : result) }];
-  return { result: content.map(apiBlock), ...(result?.status !== 'success' ? { isError: true } : {}) };
-}
-
-function toolName(backend, environment, release, name) {
-  const value = `${backend}:${environment}:${release}:${name}`;
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619) >>> 0;
-  return `ms_${String(name).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 42)}_${hash.toString(16)}`;
+  const blocks = Array.isArray(data.content) ? data.content.filter(block => block && typeof block === 'object' && typeof block.type === 'string') : [];
+  const content = blocks.length ? blocks
+    : [{ type: 'text', text: JSON.stringify(Array.isArray(data.content) ? { summary: result?.summary, ...(result?.error ? { error: result.error } : {}) } : result) }];
+  return { result: content.map(apiBlock), ...(result?.status !== 'success' || data.isError === true ? { isError: true } : {}) };
 }
 
 function refreshTools($, state) {
@@ -242,49 +238,53 @@ async function toolsReady($, state) {
 
 async function refreshToolsNow($, state) {
   const revision = state.contextRevision;
-  // Tools registered by the previous run stay registered with Claude. A saved connection
-  // whose catalog cannot be read right now (a backend restart, a network blip) keeps its
-  // earlier tools until a later refresh reads it; a removed connection loses them here.
+  // Tools registered by the previous run stay registered with Claude. Names, definitions and
+  // bindings come from devtools' shared project-tool registry (ADR 0004): its catalog file keeps
+  // a connection's earlier tools while its catalog cannot be read (a backend restart, a network
+  // blip) and names it; a removed connection loses them there. Removed names are refused below.
   const previous = state.mcpTools;
   state.mcpTools = {};
   if (!state.fields.mcpEnvironment || state.preferencesLoading) return;
   const environmentUid = state.fields.mcpEnvironment;
-  const kept = (test) => Object.fromEntries(Object.entries(previous).filter(([, entry]) => entry.environmentUid === environmentUid && test(entry)));
+  const kept = () => Object.fromEntries(Object.entries(previous).filter(([, entry]) => entry.environmentUid === environmentUid));
+  // The pane lists the environment's connections from this listing.
   const listed = await execute($, state, devRequest(state, 'mcp-list'), true);
   if (state.closed || revision !== state.contextRevision) return;
-  if (listed.status !== 'success') { state.mcpTools = kept(() => true); state.results['mcp.registration'] = publicValue(listed); update($); }
+  if (listed.status !== 'success') { state.mcpTools = kept(); state.results['mcp.registration'] = publicValue(listed); update($); }
   else {
-    const next = {};
-    const unavailable = [];
-    let retained = 0;
-    for (const connection of rows(listed.data)) {
-      if (connection.mcp_connection?.organization_environment_uid !== environmentUid) continue;
-      const releaseUid = connection.resource_release_uid;
-      const backend = connection.backend;
-      const answer = await execute($, state, request('devtools', 'mcp-tools', { backend, environmentUid, releaseUid }), true);
+    // The first registration of an environment comes from the shared catalog file at once, before
+    // any connection is read; the forced read that follows brings it up to date. Later refreshes
+    // (connect, disconnect, Re-register) read the connections directly.
+    const cold = !Object.keys(kept()).length;
+    const registered = new Map();
+    let any = false;
+    for (const step of cold ? [{}, { refresh: 'force' }] : [{ refresh: 'force' }]) {
+      const answer = await execute($, state, devRequest(state, 'mcp-catalog', step), true);
       if (state.closed || revision !== state.contextRevision) return;
-      if (answer.status !== 'success') {
-        const earlier = kept(entry => entry.backend === backend && entry.releaseUid === releaseUid);
-        Object.assign(next, earlier); retained += Object.keys(earlier).length;
-        unavailable.push(mcpDisplayName(connection)); continue;
-      }
-      for (const tool of rows(record(answer.data).tools).slice(0, 80)) {
-        const name = toolName(backend, environmentUid, releaseUid, tool.name);
-        const full = `mcp__${$.plugin.name}__${name}`;
-        next[full] = { backend, environmentUid, releaseUid, tool: tool.name };
-        await $.tool.register({ name, description: clean(`MainSequence ${mcpDisplayName(connection)} [${environmentLabel(state)}]: ${tool.description || tool.name}`), inputSchema: record(tool.inputSchema) });
+      const data = record(answer.data);
+      const definitions = Array.isArray(data.definitions) ? data.definitions : answer.status === 'success' ? [] : null;
+      if (!definitions) { if (!any) state.mcpTools = kept(); state.results['mcp.registration'] = publicValue(answer); update($); continue; }
+      const bindings = record(data.bindings), next = {};
+      for (const definition of definitions) {
+        const binding = record(bindings[definition.name]);
+        if (typeof definition.name !== 'string' || !definition.name || typeof binding.tool !== 'string') continue;
+        const full = `mcp__${$.plugin.name}__${definition.name}`;
+        next[full] = { backend: binding.backend, environmentUid: binding.environmentUid, releaseUid: binding.releaseUid, tool: binding.tool };
+        const spec = { name: definition.name, description: clean(definition.description || definition.name), inputSchema: record(definition.inputSchema) };
+        const identity = JSON.stringify(spec);
+        if (registered.get(spec.name) === identity) continue;
+        registered.set(spec.name, identity);
+        await $.tool.register(spec);
         if (state.closed || revision !== state.contextRevision) return;
       }
+      state.mcpTools = next; any = true;
+      const count = Object.keys(next).length, unavailable = rows(data.unavailable).map(clean), retained = Number(data.retained) || 0;
+      state.results['mcp.registration'] = answer.status !== 'success' ? publicValue(answer) : { schemaVersion: 1, action: 'mcp-registration', status: 'success',
+        summary: !unavailable.length ? `${count} MainSequence tools available from the next prompt.`
+          : `${count} MainSequence tools available from the next prompt. ${unavailable.join(', ')} could not be read now${retained ? '; its earlier tools stay registered' : ''}. Refresh to try again.`,
+        data: { unavailable, retained } };
+      update($);
     }
-    // Removed servers' previously registered names are refused by the handler below.
-    if (state.closed || revision !== state.contextRevision) return;
-    state.mcpTools = next;
-    const count = Object.keys(next).length;
-    state.results['mcp.registration'] = { schemaVersion: 1, action: 'mcp-registration', status: 'success',
-      summary: !unavailable.length ? `${count} MainSequence tools available from the next prompt.`
-        : `${count} MainSequence tools available from the next prompt. ${unavailable.join(', ')} could not be read now${retained ? '; its earlier tools stay registered' : ''}. Refresh to try again.`,
-      data: { unavailable, retained } };
-    update($);
   }
   // The deployment status tool is registered once per environment selection. It reads only, and the
   // handler denies it while no environment is selected, so a failed MCP listing must not withhold it.
@@ -757,7 +757,8 @@ export function register(on, options = {}) {
     if (answer !== 'Run tool') return { deny: 'The user cancelled this MainSequence action.' };
     if (state.closed || revision !== state.contextRevision || state.mcpTools[e.tool] !== entry) return { deny: 'The selected environment changed. Review the tool in the current environment.' };
     const { tool, tool_use_id, agentId, ...arguments_ } = e;
-    const result = await execute($, state, request('devtools', 'mcp-call', { ...entry, arguments: arguments_ }));
+    // mcp-call answered in the shared result shape (devtools ADR 0004); the blocks are converted below.
+    const result = await execute($, state, request('devtools', 'mcp-tool-call', { ...entry, arguments: arguments_ }));
     return toolResult(result);
   }).catch(() => ({ deny: 'MainSequence could not confirm or run this tool call.' }));
   on('session.end', async ($, e, next) => {
