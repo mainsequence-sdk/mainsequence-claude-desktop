@@ -240,6 +240,20 @@ refresh and is named in a warning under the list; **Refresh** or **Re-register t
 reads it again. Only a disconnected MCP loses its tools, and a failed listing keeps the
 current environment's tools in place.
 
+Since 0.4.19 the registered tools come from devtools' shared project-tool registry (devtools
+ADR 0004): the hook asks the worker for the catalog (`mcp-catalog`) and registers what it
+returns, first from the shared `project-tool-catalog.json` beside `mcp-connections.json`, so
+the environment's tools are available at once at startup, then after a forced read of every
+connection. Names, descriptions (`MainSequence <release name> [<environment>]: <tool>`),
+schemas and results are the bytes devtools produces, so a tool has the same name in Claude
+and in the Codex plugin; a remote tool name longer than 32 characters is cut there (none in
+the current CRM catalog), its hash and identity unchanged. The retention of an unreadable
+connection's tools lives in that shared file. A tool call runs devtools' `mcp-tool-call` in
+one worker: the remote blocks and a JSON block with summary, effects, error and structured
+content, converted to Messages API blocks by the hook. devtools gives the project request
+120 s and honours a tool's advertised timeout up to 300 s, and its error messages name the
+endpoint, the request and the status.
+
 Activity shows actual operations from the session, their running/completed/failed/
 cancelled status, progress text, outcome and partial-effect warnings. Result details
 are collapsed. Cancellation stops the worker stream; it does not promise rollback.

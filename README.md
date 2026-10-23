@@ -181,3 +181,15 @@ listing labels the connection without asking the backend. A connection saved by 
 version is completed by the first listing that can read its names. Only the Add MCP search
 still labels its rows live, from the repository branch each row names. See the
 [release notes](docs/releases/0.4.18.md).
+
+### 0.4.19 — shared project-tool registry
+
+Registered MCP tools come from devtools 0.3.12's shared project-tool registry (devtools
+ADR 0004): the same names, descriptions, schemas and result shape the Codex plugin registers,
+so one remote tool has one name in both hosts. At startup the tools register at once from
+the shared catalog file, before any connection is read; a forced read follows. The hook keeps
+registration, the per-call confirmation and the Messages API block conversion; the worker
+shapes a project tool's result (`mcp-tool-call`). devtools gives a project request 120 s and
+honours a tool's advertised timeout, and its error messages name the endpoint, request and
+status. `claudeMcpNames.ts` is gone: names come stored with the connection, and discovery
+rows are labelled by devtools. See the [release notes](docs/releases/0.4.19.md).

@@ -126,7 +126,8 @@ require(${JSON.stringify(path.join(packageRoot, 'dist/claudeRunner.js'))}).main(
 
   const lookups = () => calls.filter(call => call.server === 'platform' && call.path !== '/mcp').length;
   const saved = () => fs.readFile(store, 'utf8').then(JSON.parse);
-  const discovered = await run('mcp-discover');
+  // The hook asks for repository names on discovery rows (enrichNames); saved connections carry theirs.
+  const discovered = await run('mcp-discover', { enrichNames: true });
   assert.equal(discovered.status, 'success');
   assert.deepEqual(discovered.data.results.map(row => row.name), ['app', 'app']);
   assert.deepEqual(discovered.data.results.map(row => row.display_name), ['BackofficeBackend', 'alpaca-connectors'], 'discovery rows are labelled from their branch');

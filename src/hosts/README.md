@@ -13,10 +13,11 @@ through the pinned devtools package's public API.
   icon responses to JSON inside the public session service, preserving that
   service's credential and renewal policy. It limits bytes, validates exact
   environment membership and delivery paths, and derives APNG frame-zero stills.
-- `claudeMcpNames.ts` adds repository names to MCP presentation results using
-  existing release metadata and the public RepositoryClient. Labels contain just
-  the name. Exact release/environment matching preserves routing; optional name
-  lookup failures preserve the original result and never rewrite saved connections.
+- MCP names need no adapter since devtools 0.3.1 stores them with the saved connection
+  and labels discovery rows on request (`enrichNames`); `claudeMcpNames.ts` was removed
+  in 0.4.19. Registered project tools (names, definitions, results and the shared
+  catalog) come from devtools' project-tool registry (devtools ADR 0004) through the
+  `mcp-catalog` and `mcp-tool-call` actions; the hook only registers, asks and renders.
 
 - `claudeDeployments.ts` reads the environment's deployment history, one run and its
   logs through the public session service, projecting only what the pane and the
