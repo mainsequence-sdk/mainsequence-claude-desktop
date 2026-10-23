@@ -594,6 +594,56 @@ test('failed media revalidation retains a displayed icon', async () => {
  assert.ok(svgNodes(await f.pane()).some(node => node.props.source.includes('<text>idle</text>')));
 });
 
+test('agent icons are re-checked on their own while Agents is shown, with the held ETag, and only changed ones are redrawn', async () => {
+ // The backend's icon for the agent: a tag and an image. The fixture answers a held tag with "unchanged".
+ let tag = '"tag-one"', image = iconImage('one');
+ const media = [];
+ const f = await agentFixture({ respond: r => {
+   if (r.action !== 'agent-icons') return undefined;
+   media.push(r);
+   return success(r.action, { environmentUid: r.environmentUid, account: 'agent-user@example.test', icons: Object.fromEntries(r.agentUids.map(uid =>
+     r.known?.[uid] === tag ? [uid, { images: {}, toolPoses: {}, etag: tag, unchanged: true, posesLoaded: false }]
+       : [uid, { images: { idle: image, ...(r.includePoses ? { thinking: iconImage('one-thinking') } : {}) }, toolPoses: {}, etag: tag, posesLoaded: r.includePoses }])) });
+ } });
+ const shown = async () => svgNodes(await f.pane()).find(node => node.props.width === 20)?.props.source;
+ assert.ok((await shown()).includes('<text>one</text>'));
+ assert.equal(media.length, 1); assert.equal(media[0].known, undefined, 'the first read holds no tag');
+ const poll = () => f.timers.filter(t => t.ms === 60000 && !t.cancelled);
+ const track = timer => { const cancel = timer.cancel; timer.cancel = () => { timer.cancelled = true; cancel(); }; return timer; };
+ assert.equal(poll().length, 1, 'one re-check timer while the Agents list is shown'); track(poll()[0]);
+ // Unchanged: the held tag goes out, the drawn icon stays, nothing is redrawn from an empty record.
+ poll()[0].callback(); await flush();
+ assert.equal(media.length, 2); assert.deepEqual(media[1].known, { [agentUid]: '"tag-one"' }); assert.equal(media[1].includePoses, false);
+ assert.ok((await shown()).includes('<text>one</text>'));
+ // Changed in Command Center: the next re-check gets the new image and tag, and the pane redraws it.
+ tag = '"tag-two"'; image = iconImage('two');
+ poll()[0].callback(); await flush();
+ assert.deepEqual(media[2].known, { [agentUid]: '"tag-one"' });
+ assert.ok((await shown()).includes('<text>two</text>'));
+ poll()[0].callback(); await flush();
+ assert.deepEqual(media[3].known, { [agentUid]: '"tag-two"' }, 'the new tag is held from then on');
+ assert.ok((await shown()).includes('<text>two</text>'));
+ // A failed re-check keeps the drawn icon and its tag.
+ const unavailable = f.$.process.spawn; f.$.process.spawn = input => { const envelope = JSON.parse(input.input); if (envelope.request.request.action !== 'agent-icons') return unavailable(input);
+   const line = JSON.stringify({ type: 'result', id: envelope.id, result: { schemaVersion: 1, action: 'agent-icons', status: 'failure', summary: 'Optional media unavailable' } }) + '\n';
+   const stream = (async function* () { yield { stream: 'stdout', text: line }; return { code: 0, signal: null }; })(); stream.result = Promise.resolve({ code: 0, signal: null }); return stream; };
+ poll()[0].callback(); await flush(); assert.ok((await shown()).includes('<text>two</text>')); f.$.process.spawn = unavailable;
+ // The timer follows the section and the pane: another section or a closed pane stops it; Agents brings it back.
+ await f.press('tab-Tools'); assert.equal(poll().length, 0, 'no re-check off the Agents section');
+ await f.press('tab-Agents'); assert.equal(poll().length, 1); track(poll()[0]);
+ await f.emit('ui.close', { id: 'mainsequence', origin: { kind: 'person' } }); assert.equal(poll().length, 0, 'no re-check while the pane is closed');
+ await f.pane(); assert.equal(poll().length, 1, 'reopening the pane on Agents resumes it'); track(poll()[0]);
+ // Refresh re-lists and re-checks at once, regardless of age; Details loads poses without a tag.
+ const before = media.length; await f.press('agents-refresh');
+ assert.ok(media.length > before); assert.deepEqual(media.at(-1).known, { [agentUid]: '"tag-two"' });
+ await f.press(`agent-details-${agentUid}`); assert.equal(media.at(-1).includePoses, true); assert.equal(media.at(-1).known, undefined);
+ assert.ok(svgNodes(await f.pane()).some(node => node.props.width === 32 && node.props.source.includes('<text>two</text>')));
+ // No tag or image is persisted, and an environment change ends the re-check.
+ assert.doesNotMatch(JSON.stringify([...f.stores.values()]), /tag-two|<svg/);
+ await f.press('agents-back'); f.find(await f.pane(), 'mcp-environment').props.onSelect(agentId(9)); await flush();
+ assert.equal(poll().length, 0, 'an environment without agents has nothing to re-check');
+});
+
 test('Talk resolves a session and prefills an editable draft with no auto-send or introduction',async()=>{
  const f=await agentFixture({draft:'What is the exposure?'});
  assert.doesNotMatch(JSON.stringify(await f.pane()),/Explain portfolio risk/);

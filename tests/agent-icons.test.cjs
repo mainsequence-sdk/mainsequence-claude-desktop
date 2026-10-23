@@ -19,7 +19,8 @@ function fixture(overrides = {}) {
       if (path === '/api/v1/users/me/') return Response.json({ username: overrides.account || account });
       if (path === '/api/v1/command-center/agents/') return Response.json(overrides.projection || [{ agentUid: id(1), commandCenterIcon: icon }]);
       assert.ok(path.startsWith(base));
-      return new Response(overrides.bytes || animatedIcon(), { status: overrides.status || 200, headers: { 'Content-Type': overrides.mime || 'image/png' } });
+      if (overrides.status === 304) return new Response(null, { status: 304, headers: overrides.etag ? { ETag: overrides.etag } : {} });
+      return new Response(overrides.bytes || animatedIcon(), { status: overrides.status || 200, headers: { 'Content-Type': overrides.mime || 'image/png', ...(overrides.etag ? { ETag: overrides.etag } : {}) } });
     } });
   return { client, calls };
 }
@@ -105,6 +106,39 @@ test('missing, unsupported and oversized media are optional presentation failure
     const result = await fixture(override).client.dispatch(input);
     assert.equal(result.status, 'success'); assert.equal(result.data.icons[id(1)].images.idle, null);
   }
+});
+
+test('revalidation sends the held ETag only to the canonical icon route and reports an unchanged icon without bytes', async () => {
+  const tag = 'W/"' + 'a'.repeat(64) + '"', fresh = '"' + 'b'.repeat(64) + '"';
+  // A first read carries the backend's tag with the image.
+  const first = fixture({ etag: tag }), loaded = await first.client.dispatch(input);
+  assert.equal(loaded.data.icons[id(1)].etag, tag); assert.ok(loaded.data.icons[id(1)].images.idle.animated);
+  assert.equal(first.calls.some(c => c.init.headers['If-None-Match']), false, 'no conditional request without a held tag');
+  // The held tag is sent as If-None-Match to the icon route only; a 304 keeps the bytes out of the result.
+  const same = fixture({ status: 304, etag: tag }), unchanged = await same.client.dispatch({ ...input, known: { [id(1)]: tag } });
+  assert.equal(unchanged.status, 'success');
+  assert.deepEqual(JSON.parse(JSON.stringify(unchanged.data.icons[id(1)])), { rendering: 'color', imageRendering: 'pixelated', toolPoses: { crm: 'crm' }, images: {}, etag: tag, unchanged: true, posesLoaded: false });
+  assert.deepEqual(same.calls.map(c => [new URL(c.url).pathname, c.init.headers['If-None-Match'] ?? null]), [['/api/v1/users/me/', null], ['/api/v1/command-center/agents/', null], [base, tag]]);
+  assert.doesNotMatch(JSON.stringify(unchanged), /bytes|data:image/);
+  // A route that sends tags but ignores If-None-Match answers 200 with the same tag: still unchanged, bytes dropped unread.
+  for (const again of [tag, tag.slice(2)]) {
+    const repeated = fixture({ etag: again }), kept = await repeated.client.dispatch({ ...input, known: { [id(1)]: tag } });
+    assert.equal(kept.data.icons[id(1)].unchanged, true); assert.deepEqual(Object.keys(kept.data.icons[id(1)].images), []); assert.equal(kept.data.icons[id(1)].etag, tag);
+    assert.equal(repeated.calls.at(-1).init.headers['If-None-Match'], tag);
+  }
+  // A changed icon answers 200 with its new tag and new image.
+  const changed = fixture({ etag: fresh }), replaced = await changed.client.dispatch({ ...input, known: { [id(1)]: tag } });
+  assert.equal(replaced.data.icons[id(1)].etag, fresh); assert.ok(replaced.data.icons[id(1)].images.idle.source.includes('data:image/png'));
+  assert.equal(changed.calls.at(-1).init.headers['If-None-Match'], tag);
+  // A tag that is not one, for an agent not requested, or together with poses, is refused before any request.
+  for (const known of [{ [id(2)]: tag }, { [id(1)]: 'not-a-tag' }, { [id(1)]: tag + '\n' }, [tag]]) {
+    const f = fixture({ etag: tag }); assert.equal((await f.client.dispatch({ ...input, known })).error.code, 'INVALID_REQUEST'); assert.equal(f.calls.length, 0);
+  }
+  assert.equal((await fixture().client.dispatch({ ...input, includePoses: true, known: { [id(1)]: tag } })).error.code, 'INVALID_REQUEST');
+  // A 304 for an agent whose tag was never held is impossible, and an icon without a tag has none to send back.
+  const untagged = fixture(), plain = await untagged.client.dispatch(input);
+  assert.equal(plain.data.icons[id(1)].etag, null);
+  assert.equal((await fixture({ status: 404 }).client.dispatch({ ...input, known: { [id(1)]: tag } })).data.icons[id(1)].etag, null);
 });
 
 test('pose priority matches Command Center and missing poses retain idle', async () => {

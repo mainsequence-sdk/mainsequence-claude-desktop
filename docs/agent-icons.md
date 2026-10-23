@@ -83,7 +83,21 @@ They are excluded from Activity, model tool results and the plugin store.
 Idle assets load in batches of at most four visible Agents. Details/Talk preload
 up to twelve declared poses for one Agent. Requests share an in-flight guard and
 a five-minute in-memory cache. A failed read gets a one-minute backoff; a failed
-media refresh keeps an existing image. Refresh forces revalidation. Backend,
-account, environment and host-session changes discard presentation state; late
-old-context responses cannot repopulate it. There is no on-disk media cache or
-background animation timer.
+media refresh keeps an existing image. Backend, account, environment and
+host-session changes discard presentation state; late old-context responses
+cannot repopulate it. There is no on-disk media cache or background animation
+timer.
+
+Since 0.4.20 an icon changed in Command Center reaches an open pane on its own.
+Every listing of the Agents section (environment selection, paging, Refresh)
+re-checks the listed Agents' idle icons regardless of age, and while the pane
+stays on Agents the hook re-checks them once a minute. A re-check sends the
+backend the entity tag (`ETag`) it holds for each drawn icon as `If-None-Match`,
+on the canonical icon route only. An icon the backend answers with 304, or with 200
+and the same tag (the route sends tags but does not yet answer conditional requests,
+so the worker compares them itself and drops the bytes unread), keeps its image and
+tag; a changed one arrives with its new tag and is redrawn; a failed re-check keeps
+the drawn icon. The timer stops when the pane closes or
+another section is shown, and a section left open pauses re-checking after four
+hours until Refresh. Poses are still read with Details and Talk only. Tags live in
+session memory with the images and are never stored.

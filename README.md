@@ -193,3 +193,12 @@ shapes a project tool's result (`mcp-tool-call`). devtools gives a project reque
 honours a tool's advertised timeout, and its error messages name the endpoint, request and
 status. `claudeMcpNames.ts` is gone: names come stored with the connection, and discovery
 rows are labelled by devtools. See the [release notes](docs/releases/0.4.19.md).
+
+### 0.4.20 — agent icons follow Command Center
+
+An agent icon changed in Command Center reaches an open pane without Refresh: every listing
+of the Agents section re-checks the listed agents' idle icons, and while the pane stays on
+Agents the hook re-checks them once a minute, sending the backend each icon's entity tag so an
+unchanged icon is kept without being decoded again and only a changed one is redrawn. The timer stops when the pane
+closes or another section is shown. See the [release notes](docs/releases/0.4.20.md) and
+[agent icons](docs/agent-icons.md).

@@ -10,7 +10,7 @@ const update = ($) => $.ui.invalidate('ui.render');
 
 async function openPane($, state) {
   await $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true });
-  state.paneOpen = true; syncDeploymentPolling($, state);
+  state.paneOpen = true; syncDeploymentPolling($, state); syncAgentIconPolling($, state);
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
 }
@@ -354,8 +354,8 @@ function actionsFor($, state) {
     tab: tab => {
       if (!VIEWS.includes(tab)) return;
       state.tab = tab; state.confirmation = null;
-      // Remote-run polling follows the section: timers for a run no longer shown are cancelled here.
-      syncDeploymentPolling($, state); update($);
+      // Remote-run polling and the agent icon re-check follow the section: timers for what is no longer shown are cancelled here.
+      syncDeploymentPolling($, state); syncAgentIconPolling($, state); update($);
       // While startup is still resolving the session, initializeWorkspace loads the
       // environments for whichever section is open; a second load here would clear
       // and refetch agents, tools and icons.
@@ -394,7 +394,7 @@ function actionsFor($, state) {
       await saveBinding($, state, binding); refresh($);
     })()),
     refreshEnvironments: () => background(loadEnvironments($, state)),
-    refreshAgents: () => { state.agentIconTimes = {}; background(loadAgents($, state)); },
+    refreshAgents: () => { state.agentIconTimes = {}; state.agentIconPolls = 0; background(loadAgents($, state)); },
     nextAgents: () => background(loadAgents($, state, state.agentOffset + 25)),
     previousAgents: () => background(loadAgents($, state, Math.max(0, state.agentOffset - 25))),
     agentDetails: uid => background(getAgent($, state, uid).then(result => { if (result) { state.agentDetail = result.agent; state.tab = 'Agents'; update($); } })),
@@ -705,14 +705,14 @@ export function register(on, options = {}) {
     const ui = $.ui.resolve(e), actions = actionsFor($, state);
     wakeOnDesktop($, state, e);
     // A pane draw proves the pane is open: remote-run polling resumes for the section shown.
-    if (!state.paneOpen) { state.paneOpen = true; try { syncDeploymentPolling($, state); } catch { /* polling is optional */ } }
+    if (!state.paneOpen) { state.paneOpen = true; try { syncDeploymentPolling($, state); syncAgentIconPolling($, state); } catch { /* polling is optional */ } }
     if (state.paneFault) return renderRecovery(ui, state, actions);
     try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
     catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
   });
   on('ui.close', { id: 'mainsequence' }, ($, e, next) => {
     // Nothing polls a remote run while the pane is closed; reopening it resumes.
-    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list');
+    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list'); syncAgentIconPolling($, state);
     return next(e);
   });
   on('ui.fault', { component: 'Pane', requestId: 'mainsequence' }, ($, e, next) => {
@@ -1079,8 +1079,9 @@ function clearAgents($, state) {
   for (const op of state.running.values()) if (['devtools · agent-readiness', 'devtools · agent-send'].includes(op.label) && op.cancel) void op.cancel().catch(() => {});
   state.agentRevision++; state.agentListRevision++; state.agentSelection++; state.agentTools = {}; state.agentBindings = {}; state.agentPreparing = {}; state.agentDrafts = {};
   state.agentDetail = null; state.agentsLoading = false; state.agentOffset = 0; state.fields.agentSearch = ''; state.agentAccount = ''; state.activeAgent = null;
-  state.agentIcons = {}; state.agentIconLoads.clear(); state.agentIconTimes = {}; state.agentCommandOutputs.clear();
+  state.agentIcons = {}; state.agentIconLoads.clear(); state.agentIconTimes = {}; state.agentIconPolls = 0; state.agentCommandOutputs.clear();
   delete state.results['devtools.agents-list']; delete state.results['devtools.agent-get'];
+  syncAgentIconPolling($, state);
   // Already-sent requests keep their original binding and persist their own result.
   refresh($);
 }
@@ -1092,13 +1093,17 @@ async function ensureAgentHost($, state) {
   return true;
 }
 
-async function loadAgentIcons($, state, uids, includePoses = false) {
+/** Idle icons for the listed agents, or the poses of one selected agent. A listing and the Agents
+ * poll pass `revalidate`: idle icons are re-checked regardless of age, each with the ETag the hook
+ * holds, so an unchanged icon costs the backend a 304 and keeps its image; otherwise a loaded icon
+ * is kept for five minutes. */
+async function loadAgentIcons($, state, uids, includePoses = false, revalidate = false) {
   if (!state.agentAccount || state.closed) return;
   const revision = state.agentRevision, selection = context(state), account = state.agentAccount;
   const now = await $.clock.now();
   const selected = [...new Set(uids.filter(uuid))].filter(uid => {
     const key = `${uid}:${includePoses ? 'poses' : 'idle'}`;
-    return !state.agentIconLoads.has(key) && now - (state.agentIconTimes[key] ?? -Infinity) >= 300000;
+    return !state.agentIconLoads.has(key) && (revalidate && !includePoses || now - (state.agentIconTimes[key] ?? -Infinity) >= 300000);
   });
   for (let offset = 0; offset < selected.length; offset += includePoses ? 1 : 4) {
     if (state.closed || revision !== state.agentRevision || selection !== context(state) || account !== state.agentAccount) return;
@@ -1107,8 +1112,9 @@ async function loadAgentIcons($, state, uids, includePoses = false) {
     const ticket = {};
     for (const key of keys) state.agentIconLoads.set(key, ticket);
     try {
+      const known = includePoses ? {} : Object.fromEntries(batch.flatMap(uid => { const held = state.agentIcons[uid]; return typeof held?.etag === 'string' && held.images?.idle ? [[uid, held.etag]] : []; }));
       const result = await execute($, state, request('projects', 'agent-icons', { backend: state.fields.backend,
-        environmentUid: state.fields.mcpEnvironment, expectedAccount: account, agentUids: batch, includePoses }), true);
+        environmentUid: state.fields.mcpEnvironment, expectedAccount: account, agentUids: batch, includePoses, ...(Object.keys(known).length ? { known } : {}) }), true);
       if (state.closed || revision !== state.agentRevision || selection !== context(state) || account !== state.agentAccount) return;
       const data = result.data;
       if (result.status !== 'success' || data?.environmentUid !== state.fields.mcpEnvironment || data?.account !== account) {
@@ -1119,13 +1125,17 @@ async function loadAgentIcons($, state, uids, includePoses = false) {
       for (const uid of batch) {
         // One agent's malformed or empty record must never cost the others in its batch their icons.
         try {
-          const icon = data.icons?.[uid];
+          const icon = data.icons?.[uid], old = state.agentIcons[uid];
+          // The backend answered the held ETag with 304: the drawn icon is current.
+          if (icon?.unchanged === true && old?.images?.idle) { state.agentIconTimes[`${uid}:idle`] = now; continue; }
           if (icon?.images && typeof icon.images === 'object') {
-            const old = state.agentIcons[uid];
             const images = Object.fromEntries(Object.entries(icon.images).map(([pose, image]) => [pose, image || old?.images?.[pose] || null]));
             // An agent without an idle asset has nothing to keep: only reuse poses of the same, present idle image.
             const keepPoses = !includePoses && !!old?.images && typeof images.idle?.source === 'string' && old.images.idle?.source === images.idle.source;
-            state.agentIcons[uid] = { ...icon, images: { ...(keepPoses ? old.images : {}), ...images },
+            const { unchanged, ...delivered } = icon;
+            state.agentIcons[uid] = { ...delivered, images: { ...(keepPoses ? old.images : {}), ...images },
+              // The tag belongs to the idle image kept: the delivered one's, or the retained one's.
+              etag: icon.images.idle ? (typeof icon.etag === 'string' ? icon.etag : null) : old?.etag ?? null,
               posesLoaded: includePoses || (keepPoses && !!old.posesLoaded) };
             if (!keepPoses && !includePoses) delete state.agentIconTimes[`${uid}:poses`];
           } else delete state.agentIcons[uid];
@@ -1151,8 +1161,40 @@ async function loadAgents($, state, offset = 0) {
       state.agentAccount = result.data?.account || ''; state.agentOffset = offset;
     }
     state.results['devtools.agents-list'] = publicValue(result);
-    if (result.status === 'success') void loadAgentIcons($, state, rows(result.data).map(agent => agent.uid));
-  } finally { if (revision === state.agentListRevision && selection === context(state)) { state.agentsLoading = false; refresh($); } }
+    if (result.status === 'success') void loadAgentIcons($, state, rows(result.data).map(agent => agent.uid), false, true);
+  } finally { if (revision === state.agentListRevision && selection === context(state)) { state.agentsLoading = false; syncAgentIconPolling($, state); refresh($); } }
+}
+
+// Agent icons change in Command Center without any event reaching the pane. While the pane shows
+// the Agents section, the listed agents' idle icons are re-checked once a minute with the ETags
+// the hook holds; an unchanged icon costs a 304, a changed one is redrawn. Nothing polls while the
+// pane is closed or another section is shown, and a long-open section pauses after four hours
+// until Refresh. Poses still load with Details and Talk only.
+const AGENT_ICON_POLL_MS = 60000, AGENT_ICON_POLL_LIMIT = 240;
+function agentIconPollWanted(state) {
+  return !state.closed && state.paneOpen && state.tab === 'Agents' && !!state.fields.mcpEnvironment && !!state.agentAccount
+    && rows(state.results['devtools.agents-list']?.data).length > 0 && state.agentIconPolls < AGENT_ICON_POLL_LIMIT;
+}
+/** Start or stop the one-minute icon timer so it matches what is shown. */
+function syncAgentIconPolling($, state) {
+  const wanted = agentIconPollWanted(state);
+  if (!wanted && state.agentIconTimer) {
+    const timer = state.agentIconTimer;
+    state.agentIconTimer = null; timer.cancel();
+    state.timers = state.timers.filter(item => item !== timer);
+  }
+  if (wanted && !state.agentIconTimer) {
+    const timer = $.clock.every(AGENT_ICON_POLL_MS, () => { void pollAgentIcons($, state).catch(() => {}); });
+    state.timers.push(timer); state.agentIconTimer = timer;
+  }
+}
+async function pollAgentIcons($, state) {
+  if (!agentIconPollWanted(state)) { syncAgentIconPolling($, state); return; }
+  state.agentIconPolls++;
+  const uids = rows(state.results['devtools.agents-list']?.data).map(agent => agent.uid);
+  if (uuid(state.agentDetail?.uid) && !uids.includes(state.agentDetail.uid)) uids.push(state.agentDetail.uid);
+  await loadAgentIcons($, state, uids, false, true);
+  if (!agentIconPollWanted(state)) syncAgentIconPolling($, state);
 }
 
 async function getAgent($, state, uid) {

@@ -41,7 +41,10 @@ CSS injected into the Desktop application.
 
 The local candidate also shows [platform agent icons](agent-icons.md) in the agent
 directory, details, composer activity band and attributed command/tool rows. Existing native
-transcript content and footer controls remain visible.
+transcript content and footer controls remain visible. Since 0.4.20 an icon changed in Command
+Center reaches an open pane on its own: every listing of the Agents section re-checks the listed
+agents' icons, and while the pane stays on Agents they are re-checked once a minute with the
+backend's entity tags, so only a changed icon is redrawn.
 
 Git/SSH, uv for Python, npm for frontend repositories and Docker/buildx for builds are
 required only for the corresponding operations. They are not installed silently.

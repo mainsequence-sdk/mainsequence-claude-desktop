@@ -34,7 +34,7 @@ export function initialState(options = {}) {
     workspaceAttachment: null, attachedRepositories: new Set(),
     editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
     agentRevision: 0, agentListRevision: 0, agentOffset: 0, agentDetail: null, agentAccount: '', agentTools: {}, activeAgent: null, agentsLoading: false, agentSelection: 0, agentPreparing: {}, agentBindings: {}, agentDrafts: {}, agentSave: Promise.resolve(),
-    agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentCommandOutputs: new Map(),
+    agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentIconTimer: null, agentIconPolls: 0, agentCommandOutputs: new Map(),
     // Deployments: remote state read from the environment's deployment history, never a local operation.
     deployView: '', deployOrigin: 'code', deployHistory: [], deployList: null, deployListLoading: false, deployListError: '',
     deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,

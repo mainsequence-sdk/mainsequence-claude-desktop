@@ -1,5 +1,51 @@
 # Claude Desktop plugin verification
 
+## 0.4.20 — agent icons follow Command Center (2026-10-24)
+
+Reported: icons changed in Command Center did not appear in the open pane; Refresh or a new Code
+session showed them. Cause: the pane fetched an agent's idle icon when it listed agents and kept it
+for five minutes in session memory, and nothing re-listed while the Agents section stayed open.
+Checked read-only on 2026-10-23 against the local backend before the change: the agent projection,
+the per-agent icon route and the inline directory icon all served the new bytes at once (same
+SHA-256 in all three), so neither the backend nor the worker held an old copy.
+
+Fix: every listing of the Agents section re-checks the listed agents' idle icons regardless of age,
+and while the pane is open on Agents the hook re-checks them once a minute (`$.clock.every`,
+stopped when the pane closes or another section is shown; paused after 240 polls until Refresh).
+A re-check passes the worker the entity tag held for each drawn icon (`known`); the worker sends it
+as `If-None-Match` on the canonical icon route only and reports the icon `unchanged` on a 304, or
+on a 200 that carries the same tag, without decoding the bytes. The hook keeps the drawn icon and
+its tag for an unchanged or failed re-check and redraws a changed one.
+
+Backend finding: `/api/v1/command-center/agents/<uid>/icon/` sends a weak `ETag` (the asset's
+SHA-256) but answered 200 with the full image to every `If-None-Match` form tried (the weak tag
+as sent, its strong form, and `*`), so the worker's own comparison is what spares the decode today;
+honouring conditional requests on that route is a backend follow-up.
+
+Live check on 2026-10-24 against the local backend `http://127.0.0.1:8000` (environment
+`18595d12-…`, Production, seven agents) with the built 0.4.20 artifact, its packaged worker and
+the shared machine session; only Claude's host APIs were simulated by a harness:
+
+| Step | Result | Duration |
+| --- | --- | --- |
+| Agents section opened | listing, then two `agent-icons` reads without tags (four and three agents), seven icons drawn, all with tags | 12.1 s and 8.2 s |
+| one-minute timer | registered once the list was shown | – |
+| first re-check | two reads carrying four and three held tags; every icon `unchanged`, no bytes delivered, nothing redrawn | 6.8 s and 5.7 s |
+| second re-check | the same, seven unchanged | 3.8 s and 9.5 s |
+| Tools section, back to Agents, pane closed | timer cancelled, registered again, cancelled | – |
+
+The changed-icon path was exercised by the hook and worker tests (a new tag and image arrive, the
+pane redraws them, the new tag is held from then on) and, before the change, by watching the
+backend serve newly uploaded icons under new tags; no icon was changed in Command Center during
+the live check.
+
+Automated verification (`npm run release:check` with Desktop's bundled Code 2.1.304): 99 Node
+tests (new: the worker's conditional request, its 304 and same-tag 200 as unchanged, a changed tag
+delivering, refused `known` shapes; the hook's one-minute re-check with the held tag, retained
+icon on an unchanged or failed re-check, redraw on change, timer lifecycle across sections and pane
+close, Refresh and Details), loader validation and the ten native simulator tests, documentation
+links, packaging and the distribution check (87 files in the ZIP). Bundles devtools 0.3.12.
+
 ## 0.4.19 — shared project-tool registry (2026-10-23)
 
 Registered MCP tools come from devtools 0.3.12's shared project-tool registry (devtools ADR 0004,
