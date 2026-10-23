@@ -37,6 +37,22 @@ the distribution check (86 files in the ZIP). Built from the registry archive of
 (`npm ci --ignore-scripts`; its integrity in `package-lock.json` and `build-info.json` is the
 registry's `dist.integrity`).
 
+### Published 0.4.19 evidence
+
+On 2026-10-23 (UTC) `npm run publish:claude` from source `0ebc3d2` published
+[release 0.4.19](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.19)
+(preview) with the ZIP and its checksum, after re-verifying the distribution snapshot and comparing
+the downloaded bytes with the built ones; the catalog and distribution metadata were committed to
+main as `f2d7910`. Archive SHA-256:
+`48d23226e6f44d6867e1c8b72ce2d56682d147c5263e4884bddf5fd451607e24`.
+
+`npm run verify:published` with Desktop's bundled Code 2.1.304, the same day: the public catalog,
+ZIP and checksum were downloaded anonymously and matched; a disposable configuration added the
+marketplace from the repository URL and installed `mainsequence@mainsequence-desktop` 0.4.19 with
+the pinned devtools 0.3.12 and its registry integrity; native validation, the ten simulator tests
+and the standalone worker passed. The normal user installation was not updated by this check, and
+live GUI acceptance in Desktop's own window remains a separate step.
+
 ## 0.4.18 — MCP names stored with the saved connection (2026-10-21)
 
 Cause of the recurring **Unnamed MCP**: a saved connection held only its release UID and
