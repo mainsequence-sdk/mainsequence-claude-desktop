@@ -1,5 +1,42 @@
 # Claude Desktop plugin verification
 
+## 0.4.19 — shared project-tool registry (2026-10-23)
+
+Registered MCP tools come from devtools 0.3.12's shared project-tool registry (devtools ADR 0004,
+PR mainsequence-sdk/mainsequence-devtools#19). The hook asks the worker for the catalog
+(`mcp-catalog`) and registers the names, descriptions and schemas devtools produces, first from the
+shared `project-tool-catalog.json` beside `mcp-connections.json`, then after a forced read of every
+connection; a tool call is answered by the worker with `mcp-tool-call`, already in the shared
+result shape. `src/hosts/claudeMcpNames.ts` is removed. The same bytes name and describe the tools
+in the Codex plugin, so `ms_crm_contacts_list_183f8138` is one tool in both hosts (the frozen name
+vector in devtools' tests).
+
+Live check on 2026-10-23 against the local backend `http://127.0.0.1:8000` (environment
+`18595d12-…`, Production) with the built 0.4.19 artifact, its packaged worker, the shared machine
+session and the saved MainSequenceCRMAPI connection; only Claude's host APIs were simulated by a
+harness (the plugin store was read, never written; `$.ui.ask` answered **Run tool**), and only a
+read-only tool was called:
+
+| Step | Result | Duration |
+| --- | --- | --- |
+| Startup reads (`workspace-preferences`, `auth-status`, `mcp-environments`, `mcp-list`) | signed in, Production restored, the `crm` connection listed | 0.9 s in all |
+| `mcp-catalog` from the shared file | 72 tools registered at once, `ms_crm_contacts_list_183f8138` among them, described `MainSequence crm [Production]: List CRM contacts with bounded paging and filters.` | 64 ms |
+| `mcp-catalog`, forced re-read | the same 72 tools, catalog re-read, nothing unavailable; `ms_deployment_status` registered after it | 3.7 s |
+| `mcp__mainsequence__ms_crm_contacts_list_183f8138` with `page_size: 1` | confirmation "Run MainSequence tool crm_contacts_list in Production?", then `mcp-tool-call` success: two text blocks (the remote page, `code: ok` with one contact, then devtools' summary block), `isError` absent | 9.7 s |
+
+The first forced re-read of the day, before the shared file held this backend's scope, took 773 s
+and wrote the scope with no connection and nothing named unavailable; a direct `mcp-tools` for the
+same connection right after took 11 s (72 tools), a direct forced `mcp-catalog` 3.8 s, and the run
+above then passed twice. The cause of that first read was not established (the CRM release is
+scaled to zero when idle; devtools' per-request budget is 120 s and its lock wait 120 s). It is a
+devtools follow-up: a refresh that reads nothing should name the connection as unavailable.
+
+Automated verification (`npm run release:check` with Desktop's bundled Code 2.1.304): 97 Node
+tests, loader validation and the ten native simulator tests, documentation links, packaging and
+the distribution check (86 files in the ZIP). Built from the registry archive of devtools 0.3.12
+(`npm ci --ignore-scripts`; its integrity in `package-lock.json` and `build-info.json` is the
+registry's `dist.integrity`).
+
 ## 0.4.18 — MCP names stored with the saved connection (2026-10-21)
 
 Cause of the recurring **Unnamed MCP**: a saved connection held only its release UID and
