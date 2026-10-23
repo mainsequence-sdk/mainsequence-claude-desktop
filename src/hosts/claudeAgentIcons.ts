@@ -6,7 +6,23 @@ type Icon = { rendering: 'mask' | 'color'; imageRendering: 'auto' | 'pixelated';
   poses: Record<string, string>; toolPoses: Record<string, string> };
 export type AgentIconImage = { source: string; stillSource: string; animated: boolean };
 export type ClaudeAgentIconsRequest = { action: 'agent-icons'; backend: string; environmentUid: string;
-  expectedAccount: string; agentUids: string[]; includePoses?: boolean };
+  expectedAccount: string; agentUids: string[]; includePoses?: boolean;
+  /** The ETag of the idle icon the hook already holds, per requested agent: an unchanged icon is reported, not resent. */
+  known?: Record<string, string> };
+
+/** A backend entity tag as the icon route sends it (`"…"` or `W/"…"`); anything else is no tag. */
+export function entityTag(value: unknown): string | null {
+  return typeof value === 'string' && /^(?:W\/)?"[\x21\x23-\x7e]{1,200}"$/.test(value) ? value : null;
+}
+/** Weak comparison (RFC 9110 §8.8.3.2): the same opaque tag names the same icon bytes, strong or weak. */
+export const sameEntity = (a: string | null, b: string | null): boolean => !!a && !!b && a.replace(/^W\//, '') === b.replace(/^W\//, '');
+const headerRecord = (headers: HeadersInit | undefined): Record<string, string> => {
+  const record: Record<string, string> = {};
+  if (headers instanceof Headers) headers.forEach((value, name) => { record[name] = value; });
+  else if (Array.isArray(headers)) for (const [name, value] of headers) record[name] = value;
+  else Object.assign(record, headers ?? {});
+  return record;
+};
 
 function uuid(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)) {
@@ -71,11 +87,22 @@ export function nativeAgentIcon(bytes: Buffer, mime: string, icon: Pick<Icon, 'r
 export function createClaudeAgentIcons(options: { host: HostServices; signal?: AbortSignal;
   env?: NodeJS.ProcessEnv; fetch?: typeof fetch }) {
   const transport = options.fetch ?? fetch;
+  // Revalidation: the hook's known ETag travels only to the canonical icon route it was read from,
+  // as If-None-Match. A 304, or a 200 that carries the same tag again (the route sends ETags but
+  // does not yet answer conditional requests), comes back as an "unchanged" record without bytes.
+  const conditional = new Map<string, string>();
   const session = createSessionService(options.host, { env: options.env, signal: options.signal,
     fetch: async (input, init) => {
-      const response = await transport(input, init);
       const url = new URL(String(input));
-      if (!/^\/api\/v1\/command-center\/agents\/[a-f0-9-]{36}\/icon\/(?:[a-zA-Z0-9_-]+\/)?$/.test(url.pathname) || !response.ok) return response;
+      const media = /^\/api\/v1\/command-center\/agents\/[a-f0-9-]{36}\/icon\/(?:[a-zA-Z0-9_-]+\/)?$/.test(url.pathname);
+      const known = media ? conditional.get(url.pathname) : undefined;
+      const response = await transport(input, known ? { ...init, headers: { ...headerRecord(init?.headers), 'If-None-Match': known } } : init);
+      if (!media) return response;
+      if (known && (response.status === 304 || response.ok && sameEntity(entityTag(response.headers.get('etag')), known))) {
+        await response.body?.cancel();
+        return new Response(JSON.stringify({ unchanged: true, etag: known }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (!response.ok) return response;
       const mime = response.headers.get('content-type')?.split(';')[0].trim();
       if (mime !== 'image/png' && mime !== 'image/svg+xml' && mime !== 'image/webp') {
         await response.body?.cancel(); throw new ToolingError('API_ERROR', 'The agent icon format is unsupported.');
@@ -95,7 +122,7 @@ export function createClaudeAgentIcons(options: { host: HostServices; signal?: A
       } finally { await reader.cancel().catch(() => {}); }
       // SessionService owns JWT selection/renewal. Its public request method reads JSON;
       // adapt only canonical icon responses to JSON inside that authenticated transport.
-      return new Response(JSON.stringify({ bytes: Buffer.concat(parts).toString('base64'), mime }),
+      return new Response(JSON.stringify({ bytes: Buffer.concat(parts).toString('base64'), mime, etag: entityTag(response.headers.get('etag')) }),
         { status: 200, headers: { 'Content-Type': 'application/json' } });
     } });
 
@@ -106,6 +133,15 @@ export function createClaudeAgentIcons(options: { host: HostServices; signal?: A
         || input.includePoses !== undefined && typeof input.includePoses !== 'boolean'
         || input.includePoses && input.agentUids.length !== 1) throw new ToolingError('INVALID_REQUEST', 'Choose up to four visible agents.');
       const requested = new Set(input.agentUids.map(uuid));
+      const known: Record<string, string> = Object.create(null);
+      if (input.known !== undefined) {
+        const invalid = new ToolingError('INVALID_REQUEST', 'known maps requested agents to the ETag of their idle icon.');
+        if (!input.known || typeof input.known !== 'object' || Array.isArray(input.known) || input.includePoses) throw invalid;
+        for (const [agentUid, tag] of Object.entries(input.known)) {
+          if (!requested.has(uuid(agentUid)) || !entityTag(tag)) throw invalid;
+          known[uuid(agentUid)] = tag as string;
+        }
+      }
       // Sign-in saved the account with the session; icon batches must not ask the backend for it again.
       let identity = await session.status(backend);
       if (identity.authenticated && !identity.username) identity = await session.status(backend, true);
@@ -133,25 +169,35 @@ export function createClaudeAgentIcons(options: { host: HostServices; signal?: A
         }
         const icon: Icon = { rendering: raw.rendering, imageRendering: raw.rendering === 'color' && raw.imageRendering === 'pixelated' ? 'pixelated' : 'auto',
           url: base, poses, toolPoses };
-        const load = async (url: string) => {
+        const load = async (url: string): Promise<{ image: AgentIconImage | null; etag: string | null } | 'unchanged'> => {
           try {
-            const data = await session.request<{ bytes: string; mime: string }>(backend, 'GET', url);
-            return nativeAgentIcon(Buffer.from(data.bytes, 'base64'), data.mime, icon);
+            const data = await session.request<{ bytes?: string; mime?: string; etag?: unknown; unchanged?: boolean }>(backend, 'GET', url);
+            if (data.unchanged === true) return 'unchanged';
+            return { image: nativeAgentIcon(Buffer.from(String(data.bytes ?? ''), 'base64'), String(data.mime ?? ''), icon), etag: entityTag(data.etag) };
           } catch (error) {
             if (options.signal?.aborted || error instanceof ToolingError && ['AUTH_REJECTED', 'NOT_AUTHENTICATED'].includes(error.code)) throw error;
-            return null;
+            return { image: null, etag: null };
           }
         };
         const images: Record<string, AgentIconImage | null> = Object.create(null);
-        images.idle = await load(base);
+        conditional.clear();
+        if (known[agentUid]) conditional.set(base, known[agentUid]);
+        const idle = await load(base);
+        conditional.clear();
+        if (idle === 'unchanged') {
+          icons[agentUid] = { rendering: icon.rendering, imageRendering: icon.imageRendering, toolPoses, images, etag: known[agentUid], unchanged: true, posesLoaded: false };
+          continue;
+        }
+        images.idle = idle.image;
         let total = JSON.stringify(images).length;
         if (input.includePoses) for (const [pose, url] of Object.entries(poses)) {
-          const image = await load(url), length = JSON.stringify(image).length;
+          const loaded = await load(url), image = loaded === 'unchanged' ? null : loaded.image, length = JSON.stringify(image).length;
           if (total + length > 2500000) break;
           total += length; images[pose] = image;
         }
         icons[agentUid] = { rendering: icon.rendering, imageRendering: icon.imageRendering, toolPoses, images,
-          posesLoaded: input.includePoses === true };
+          // The tag names the idle bytes delivered here; a dropped idle has none to revalidate.
+          etag: idle.image ? idle.etag : null, posesLoaded: input.includePoses === true };
       }
       return { schemaVersion: 1, action: input.action, status: 'success', summary: 'Agent icons loaded.',
         data: { environmentUid, account: identity.username, icons } };
