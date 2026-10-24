@@ -356,3 +356,7 @@ Publish devtools first and verify registry integrity matches the exact lockfile 
 releasing this plugin. Until publication, CI builds upstream's
 `codex/linux-session-errors` branch and checks the resulting archive. The public
 marketplace keeps its published release until the new distributable is published.
+
+Source archive builds use the Node runtime pinned in CI/release workflows: different
+Node/zlib builds can produce different gzip bytes for the same tar payload. Exact
+archive integrity remains mandatory.
