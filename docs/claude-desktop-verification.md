@@ -46,6 +46,22 @@ icon on an unchanged or failed re-check, redraw on change, timer lifecycle acros
 close, Refresh and Details), loader validation and the ten native simulator tests, documentation
 links, packaging and the distribution check (87 files in the ZIP). Bundles devtools 0.3.12.
 
+### Published 0.4.20 evidence
+
+On 2026-10-24 `npm run publish:claude` from source `ecd551e` published
+[release 0.4.20](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.20)
+(preview) with the ZIP and its checksum, after re-verifying the distribution snapshot and comparing
+the downloaded bytes with the built ones; the catalog and distribution metadata were committed to
+main as `ec606f8`. Archive SHA-256:
+`94bccf285b1b78c5385a43cf862093f228e649132526d3ef9d195b98123eb3d3`.
+
+`npm run verify:published` with Desktop's bundled Code 2.1.304, the same day: the public catalog,
+ZIP and checksum were downloaded anonymously and matched; a disposable configuration added the
+marketplace from the repository URL and installed `mainsequence@mainsequence-desktop` 0.4.20 with
+the pinned devtools 0.3.12 and its registry integrity; native validation, the ten simulator tests
+and the standalone worker passed. The normal user installation was not updated by this check, and
+the one-minute re-check in Desktop's own window remains a step for the installed plugin.
+
 ## 0.4.19 — shared project-tool registry (2026-10-23)
 
 Registered MCP tools come from devtools 0.3.12's shared project-tool registry (devtools ADR 0004,
