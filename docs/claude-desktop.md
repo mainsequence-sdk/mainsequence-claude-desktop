@@ -334,3 +334,25 @@ results so another backend's state is not displayed as current.
 
 See [distribution](claude-desktop-distribution.md) and
 [architecture](adr/0004-claude-desktop-mod.md).
+
+## Linux credential-store diagnostics
+
+[Devtools issue #24](https://github.com/mainsequence-sdk/mainsequence-devtools/issues/24)
+fixes shared error handling used by both plugins. The Claude worker preserves optional
+`error.reason` metadata and fixed messages; it does not copy a Secret Service adapter
+or Codex's launcher allowlist. Session access, locked stores, denied access, missing
+services and unknown helper failures remain distinguishable without echoing helper
+output, environment values or credentials.
+
+The packaged-worker regression uses an isolated home, a fake secret-tool and a loopback
+backend. It checks auth-status, login, refresh-token and logout with missing desktop
+context and forced locked/service/permission/helper failures, then verifies a machine
+session with available context. Settings displays the shared message without replacing
+it with an unlock instruction. All 102 Node tests and release/distribution checks pass.
+The installed native Claude loader validates the built plugin; all 10 native simulator
+tests pass. These checks do not claim a live Claude GUI authentication failure.
+
+Publish devtools first and verify registry integrity matches the exact lockfile before
+releasing this plugin. Until publication, CI builds upstream's
+`codex/linux-session-errors` branch and checks the resulting archive. The public
+marketplace keeps its published release until the new distributable is published.

@@ -136,3 +136,10 @@ installs into a disposable configuration. See
 [distribution](docs/claude-desktop-distribution.md),
 [architecture](docs/adr/0004-claude-desktop-mod.md) and
 [agent interactions](docs/adr/0005-user-authored-agent-interactions.md).
+
+## Linux credential-store errors
+
+The worker preserves shared devtools `error.reason` metadata and safe messages for
+unavailable desktop sessions, missing services, locked stores and helper failures.
+Authentication and secure storage stay in devtools; Claude uses the same checked
+archive as Codex. See [diagnostics and verification](docs/claude-desktop.md#linux-credential-store-diagnostics).

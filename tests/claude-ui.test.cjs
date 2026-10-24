@@ -1537,3 +1537,15 @@ test('ms_deployment_status reads the branchâ€™s latest run and the failed stepâ€
   assert.match((await none.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-6' })).deny, /Choose a MainSequence organization environment/);
   assert.equal(none.calls.some(c => c.request?.request.action.startsWith('deployment-')), false);
 });
+
+test('Settings displays the shared desktop-session diagnostic without replacing it with an unlock instruction', async () => {
+  const { register } = await load();
+  const message = 'The Linux desktop session bus is unavailable to this process. Forward DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR.';
+  const f = fixture({ respond: domain => ['auth-status', 'login'].includes(domain.request.action)
+    ? { schemaVersion: 1, action: domain.request.action, status: 'failure', summary: message, error: { code: 'STORE_ERROR', reason: 'SESSION_UNAVAILABLE', message } }
+    : success(domain.request.action, {}) });
+  register(f.on); await f.emit('session.start'); await f.press('tab-Settings'); await f.press('settings-login');
+  await f.press('tab-Activity');
+  const tree = JSON.stringify(await f.pane());
+  assert.match(tree, /desktop session bus is unavailable/); assert.doesNotMatch(tree, /Unlock it before signing in/);
+});

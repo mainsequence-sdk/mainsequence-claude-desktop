@@ -14,5 +14,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci --ignore-scripts
+      - run: node scripts/install-devtools.cjs
+        env:
+          # Until 0.3.14 is published, build the exact checked archive from upstream.
+          DEVTOOLS_SOURCE_REF: codex/linux-session-errors
       - run: npm run release:check

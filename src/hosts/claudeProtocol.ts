@@ -32,7 +32,7 @@ export function claudeFailure(action: string, error: unknown, cancelled = false)
   const failure = cancelled ? new ToolingError('CANCELLED', 'The action was cancelled.')
     : error instanceof ToolingError ? error : new ToolingError('INTERNAL_ERROR', 'The Desktop action could not complete. Check Activity and runtime diagnostics.');
   return { schemaVersion: 1, action, status: failure.code === 'CANCELLED' ? 'cancelled' : 'failure',
-    summary: failure.message, error: { code: failure.code, message: failure.message } };
+    summary: failure.message, error: { code: failure.code, message: failure.message, ...(failure.reason ? { reason: failure.reason } : {}) } };
 }
 
 export async function executeClaudeEnvelope(input: unknown, handlers: {
