@@ -119,14 +119,11 @@ command handling, per-Claude-session mappings, confirmations and Activity. Host 
 functions stay in `hooks/register.mjs` because Claude's effect analysis follows
 helpers only within the same module. The view lives in `agentView.mjs`.
 
-See [ADR 0005](adr/0005-user-authored-agent-interactions.md) and the
-[verification record](claude-desktop-verification.md) for the distinction between
-contract tests, native simulator checks and actual Desktop acceptance.
+See [ADR 0005](adr/0005-user-authored-agent-interactions.md).
 
 ## Verification and coordinated release
 
-Claude **0.4.5** pins the exact public **@dev-mainsequence/devtools@0.2.6**
-archive with its registry URL and integrity. The shared library remains in
+The plugin pins an exact public `@dev-mainsequence/devtools` archive with its registry URL and integrity. The shared library remains in
 mainsequence-devtools; no backend or other adapter changes are required.
 
 For local verification, run `npm ci --ignore-scripts`, then

@@ -1,13 +1,10 @@
 # MainSequence for Claude Desktop Code
 
-MainSequence provides a native pane in local Claude Desktop Code sessions. Since
-0.4.11 the layout is a status header plus five sections with one active selection:
+MainSequence provides a native pane in local Claude Desktop Code sessions. The layout is a status header plus five sections with one active selection:
 **Home, Code, Projects, Agents, Tools**. The header shows the account, the organization
 environment, a running-operations counter that opens **Activity**, and **Settings**.
 There is no Accounts page, rotation configuration or launcher strip above the chat.
-Earlier releases used seven peer sections (General, Repositories, Current Repository,
-Projects, MCP, Agents, Activity); the redesign analysis, kept outside the repository, records why
-they were merged. The MainSequence emblem
+The MainSequence emblem
 comes from MainSequencePublic.
 
 ## Installation and opening
@@ -39,10 +36,9 @@ does not patch the Desktop application or register an unsupported toolbar button
 The approved browser preview defines grouping, navigation and content, not custom
 CSS injected into the Desktop application.
 
-The local candidate also shows [platform agent icons](agent-icons.md) in the agent
+The pane shows [platform agent icons](agent-icons.md) in the agent
 directory, details, composer activity band and attributed command/tool rows. Existing native
-transcript content and footer controls remain visible. Since 0.4.20 an icon changed in Command
-Center reaches an open pane on its own: every listing of the Agents section re-checks the listed
+transcript content and footer controls remain visible. An icon changed in Command Center reaches an open pane on its own: every listing of the Agents section re-checks the listed
 agents' icons, and while the pane stays on Agents they are re-checked once a minute with the
 backend's entity tags, so only a changed icon is redrawn.
 
@@ -116,7 +112,7 @@ not silently migrate other projects or rewrite their provider settings.
 
 ### Deployments
 
-A local repository detail has a **Deploys** card (since 0.4.16) with the latest
+A local repository detail has a **Deploys** card with the latest
 workflow run or deployment of the checked-out branch in the selected organization
 environment: its state in the host's status colour, repository · branch · commit,
 when it started and its duration, and a progress rail of step glyphs (● succeeded,
@@ -229,8 +225,8 @@ session starts with only the saved, validated environment's tools. New registrat
 are available from the next prompt. Exact release identities remain pinned.
 
 Connecting or disconnecting an MCP re-reads the environment's saved connections and
-each one's tool catalog (since 0.4.17, a refresh tolerates a backend that is briefly
-unreachable, such as a local development server restarting). Since 0.4.18 a connection's
+each one's tool catalog (a refresh tolerates a backend that is briefly
+unreachable, such as a local development server restarting). A connection's
 names are stored with it: connecting an MCP reads the release's name and its repository's
 name and saves them in `mcp-connections.json` as `name`, `display_name` and
 `code_repository_branch_uid`, so a listing labels the connection without a backend
@@ -243,7 +239,7 @@ refresh and is named in a warning under the list; **Refresh** or **Re-register t
 reads it again. Only a disconnected MCP loses its tools, and a failed listing keeps the
 current environment's tools in place.
 
-Since 0.4.19 the registered tools come from devtools' shared project-tool registry (devtools
+The registered tools come from devtools' shared project-tool registry (devtools
 ADR 0004): the hook asks the worker for the catalog (`mcp-catalog`) and registers what it
 returns, first from the shared `project-tool-catalog.json` beside `mcp-connections.json`, so
 the environment's tools are available at once at startup, then after a forced read of every
@@ -310,7 +306,7 @@ table. Dormant legacy extension panels/scripts are not treated as active feature
 
 ## Claude accounts and provider preservation
 
-Claude account switching is removed in 0.4.0. The plugin has no account list,
+The plugin does not switch Claude accounts. It has no account list,
 sign-in/rotation controls, usage thresholds, token projection, quota polling,
 credential refresh/recovery loop or account-related prompt/model-dispatch hooks. The worker rejects
 the former `accounts` domain. Claude's own account and provider controls manage
@@ -326,10 +322,8 @@ This feature consumes existing human Project APIs; no backend endpoints or schem
 ## Upgrade, removal and troubleshooting
 
 Update through the plugin manager or install the built archive. Fully close old
-Code sessions and start fresh sessions after upgrading from 0.3.x. An already
-running old plugin process retains its old hooks until it exits. This release does
-not try to rewrite authentication inside that process or delete stored profiles.
-Disabling/uninstalling the plugin does not revoke MainSequence credentials or
+Code sessions and start fresh sessions after upgrading. An already
+running old plugin process retains its old hooks until it exits. Disabling/uninstalling the plugin does not revoke MainSequence credentials or
 remove projects. Use MainSequence's confirmed Sign out action only when desired.
 
 If the pane is missing, verify a local Code session with the plugin enabled, then
@@ -338,6 +332,5 @@ For operation failures, inspect Activity before retrying; cancellation can leave
 partial filesystem effects. Backend changes clear stale connection/repository
 results so another backend's state is not displayed as current.
 
-See [verification](claude-desktop-verification.md),
-[distribution](claude-desktop-distribution.md) and
+See [distribution](claude-desktop-distribution.md) and
 [architecture](adr/0004-claude-desktop-mod.md).

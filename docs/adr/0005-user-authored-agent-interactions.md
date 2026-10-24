@@ -4,13 +4,13 @@ Date: 2026-10-15
 
 Status: Accepted and implemented in Claude 0.4.4 / devtools 0.2.5. Written before implementation on 2026-10-15; live session opening,
 composer prefilling and reload/resume were verified in Desktop the same day.
-See the [verification record](../claude-desktop-verification.md#044-user-authored-agent-interactions)
+See the verification record (removed on 2026-10-24; in Git history)
 for the tested scope and remaining live-message boundary.
 
 Amended 2026-10-16: the owner approved readiness preparation on Talk. The
 0.4.5 / devtools 0.2.6 amendment was recorded before implementation. Readiness
 and draft preservation were verified in Desktop on 2026-10-16; see the
-[0.4.5 verification record](../claude-desktop-verification.md#045-readiness-and-agent-defaults).
+verification record (removed on 2026-10-24; in Git history).
 
 ## Context
 

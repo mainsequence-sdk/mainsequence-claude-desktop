@@ -39,7 +39,7 @@ fs.rmSync(distribution, { recursive: true, force: true });
 fs.mkdirSync(path.join(distribution, '.claude-plugin'), { recursive: true });
 const catalog = {
   name: 'mainsequence-desktop', owner: { name: 'MainSequence', url: 'https://mainsequence.io' },
-  description: 'MainSequence plugins for Claude Desktop Code. Preview channel.',
+  description: 'MainSequence plugins for Claude Desktop Code.',
   plugins: [{ name: manifest.name, version: manifest.version, description: manifest.description,
     homepage: `https://github.com/${repository}`, license: 'MIT',
     source: { source: 'archive', url: `https://github.com/${repository}/releases/download/v${manifest.version}/${path.basename(archive)}`, sha256: digest } }],

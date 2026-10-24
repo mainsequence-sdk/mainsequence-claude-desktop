@@ -1,204 +1,138 @@
-# MainSequence for Claude Desktop Code
+# MainSequence for Claude Desktop
 
-MainSequence adds one native developer-tools pane with a status header and five
-sections: **Home, Code, Projects, Agents and Tools**. The header shows the signed-in
-account, the organization environment, running operations (which open **Activity**)
-and **Settings**, where MainSequence browser login, session renewal, connection checks
-and workspace settings live. The pane uses the MainSequence emblem and Claude's own
-theme; it adds no strip above the prompt.
+MainSequence for Claude Desktop puts your MainSequence account inside Claude Desktop's
+Code sessions: one native pane with **Home, Code, Projects, Agents** and **Tools**, agent
+conversations from Claude's own composer, project MCP tools Claude can call, and the
+deployment status of your repositories. It is the plugin `mainsequence` in the
+`mainsequence-desktop` marketplace, distributed as a ZIP from this repository's releases.
 
-[Version **0.4.11**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.11)
-is the pane redesign: lists of rows instead of dropdowns, one
-primary action per view, status colours, disabled-with-reason controls, confirmations
-that keep the navigation visible, and `/ms @agent <message>` naming the receiving agent.
-
-The current local build adds [animated agent icons](docs/agent-icons.md) to the
-directory, details and conversation UI, using the platform’s existing icon assets.
-
-[Version **0.4.4**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.4)
-uses Claude's native theme and compact agent rows: name, details and Talk on the
-same row. Section buttons have no surrounding cards or custom colors.
-Talk opens or resumes the selected agent's session using Claude's session ID and
-prefills the existing input without sending. Each agent keeps its own status.
-
-[Version **0.4.3**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.3) adds a persistent **MainSequence** button in the Code session
-footer. It reopens the existing pane after it is closed;
-`/ms` remains an optional fallback. Opening the pane does not submit a chat prompt
-or save settings. See [verification](docs/claude-desktop-verification.md) for native
-and live Desktop evidence.
-
-[Version **0.4.2**](https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/tag/v0.4.2) adds [environment-scoped agents and direct conversation through
-Claude](docs/agents.md). MCP and Agents share the selected environment; agent
-introductions and approved follow-ups use the existing MainSequence gateway.
-
-Version **0.4.1** adds editable workspace defaults and an organization-environment
-selector that scopes MCP discovery and tool use. Saved settings take precedence,
-and defaults work without saving.
-
-Version **0.4.0** removed Claude account switching, rotation, quota controls,
-credential overrides and account workers. Claude manages its own accounts and model
-providers. Existing credentials, saved profiles and provider configuration are
-retained; this release has no account migration or deletion routine.
+It is built on the shared [MainSequence developer tooling](https://github.com/mainsequence-sdk/mainsequence-devtools),
+which also powers the [VS Code extension](https://github.com/mainsequence-sdk/ms-vscode-extension)
+and the [Codex plugin](https://github.com/mainsequence-sdk/mainsequence-codex-plugin).
+One sign-in on your machine serves all three and the `mainsequence` and
+`command-center-sdk` command lines.
 
 ## Install
 
-Use the published marketplace in Claude Desktop: **Customize → Plugins → Add
-marketplace → Add from repository**, then enter
-`https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git`.
-Install MainSequence from `mainsequence-desktop` and enable it in a local Code
-session. The marketplace serves the published version; a local build does not
-update it. Node 22+ is required.
+You need Claude Desktop with local Code sessions and plugin support (the plugin's startup
+guard requires the bundled Code engine 2.1.286 or newer), Node 22 or newer, and a
+MainSequence account. Repository setup needs Git and SSH; Python repositories need `uv`,
+Vite + React repositories need npm; local image builds need Docker with buildx. None of
+these are installed silently. The plugin runs on macOS and Linux. On Windows the shared
+sign-in cannot be kept between sessions, so the plugin is not supported there yet.
 
-For an approved local build, use the ZIP produced by `npm run pack:claude` with
-Claude's **Add plugin → Upload plugin** flow. Restart existing Code sessions after
-upgrading from 0.3.x so the removed hooks cannot remain loaded in an old process.
-See [installation, features and upgrade behavior](docs/claude-desktop.md).
+1. In Claude Desktop open **Customize → Plugins → Add marketplace → Add from repository**
+   and enter `https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git`.
+2. Install **MainSequence** from `mainsequence-desktop`. The catalog points at a versioned
+   ZIP with a pinned SHA-256; nothing is built or downloaded from npm on your machine.
+3. Enable the plugin in a local Code session and press **MainSequence** in the session
+   footer to open the pane. Opening it submits no prompt and saves nothing. `/ms` opens
+   it too.
 
-## Architecture and development
+To update, refresh the marketplace, update the plugin and start a fresh Code session.
+`/reload-plugins` only reloads the installed copy. To install a specific build, download
+a release ZIP and use **Add plugin → Upload plugin**. If Claude cannot find Node, set its
+path in the plugin's Node executable setting or under **Settings → Advanced → Runtime &
+diagnostics → Executable overrides**.
 
-This repository owns Claude UI, lifecycle hooks, worker transport, tests and
-releases. Shared functionality comes from the exact `@dev-mainsequence/devtools`
-package API and is bundled into the portable ZIP. Desktop needs no sibling checkout
-or runtime npm download.
+## Sign in and choose an environment
 
-Version **0.4.4** pins the public devtools **0.2.5** archive and implements
-[ADR 0005](docs/adr/0005-user-authored-agent-interactions.md). The lockfile records
-the registry URL and integrity. Use `npm ci --ignore-scripts` and the
-[coordinated release procedure](docs/agents.md#verification-and-coordinated-release).
+1. Press **Settings** in the pane header and choose **Sign in with browser**. The hosted
+   MainSequence login opens in your browser; account creation is part of that flow. The
+   session is saved in your operating system's credential store (the login Keychain on
+   macOS, Secret Service on Linux), where the VS Code extension, the Codex plugin and the
+   MainSequence command lines find it too. **Check connection**, and under **Manage
+   account** **Renew session** and **Sign out**, are in the same place.
+2. The backend defaults to `https://api.main-sequence.app`. If your organization runs its
+   own MainSequence deployment, set its API URL as the backend in Settings before signing
+   in. Set the **Command Center URL** there as well, so project and repository links open
+   in Command Center, and the **repositories folder** where local checkouts go. Edits
+   apply at once; **Save settings** keeps them for future sessions.
+3. Choose an **organization environment** in the pane header. Nothing is selected for
+   you, not even Production. Agents, MCPs, projects and deployments are shown for that
+   environment, and the MainSequence tools Claude calls are bound to it.
 
-Run `npm run release:check` after installing the exact dependency. Set
-`MS_CLAUDE_DESKTOP_BINARY` for native loader validation and simulator tests.
+## What you can do
 
-- [Architecture and dependency boundaries](docs/adr/0004-claude-desktop-mod.md)
-- [Agent interaction decision and verification requirements](docs/adr/0005-user-authored-agent-interactions.md)
-- [Distribution, updates and rollback](docs/claude-desktop-distribution.md)
-- [Verification and remaining host limitations](docs/claude-desktop-verification.md)
-- [Shared devtools source](https://github.com/mainsequence-sdk/mainsequence-devtools)
+- **Home.** A **Next steps** card until you have signed in, chosen an environment and a
+  repositories folder; **This session** with the Code session's folder, **Check status**
+  and **Update SDK** when one is available; and the last three operations.
+- **Code.** The session folder, every repository of your account (marked **Local** when a
+  canonical checkout exists) and other local copies under the repositories folder. **Set
+  up** clones a repository into `<folder>/<organization>/projects/<name>-<uid>` with its
+  deploy key and an endpoint-only `.env`, optionally installing dependencies. A local
+  repository's detail offers status, dependencies, instructions and skills, folder,
+  terminal, containers and a confirmed delete, plus a **Deploys** card with the latest run
+  of the checked-out branch, its step timeline and logs, and the environment's deployment
+  history.
+- **Projects.** The environment's MainSequence projects with their repository branches.
+  **Set up project locally** prepares every member branch in its own checkout, opens the
+  workspace in Claude through its native folder link, and adds each checkout to the new
+  session with `/add-dir`, without a model turn.
+- **Agents.** The environment's agents with descriptions, skills and example questions.
+  **Talk** opens or resumes the agent's conversation, waits for it to be ready and fills
+  Claude's input with `/ms @<agent-handle> `. Write your message after the prefix and
+  submit it yourself; the reply appears in the transcript with the agent's name, and the
+  composer stays addressed to that agent until you press **End** or **Switch agent** in
+  the band above it. Task-capable agents take `/ms task @<handle> `. See
+  [Agents](docs/agents.md).
+- **Tools.** Connected project MCPs of the environment first; **Add MCP** searches its
+  releases. Every tool of a connected MCP is registered for Claude as `ms_<tool>_<hash>`
+  with the project's own schema, and Claude asks before each call. **Advanced** in an
+  MCP's detail calls a tool directly or re-registers the tools. The read-only
+  `ms_deployment_status` tool gives Claude the same deployment view as the Deploys card.
+- **Activity.** Running and finished operations with progress, results, cancellation and
+  partial-effect warnings. The running count also appears in Claude's status line.
 
-Signed terminal, changing the Code session's root, and container-session launching
-remain host limitations. Native layout chrome/placement is controlled by Claude.
+The [user guide](docs/claude-desktop.md) describes every section, and
+[agent icons](docs/agent-icons.md) how the platform's icons are shown.
 
-### 0.4.5 — prepare agents before writing
+## Troubleshooting
 
-Talk creates or resumes the same session and waits for the agent to become ready
-before prefilling Claude's existing input. Per-agent progress, cancellation and retry
-preserve drafts; no message is sent automatically. Explicit sends recheck readiness.
-Each agent also shows its default provider, model and thinking setting beneath its name.
-The shared implementation is devtools 0.2.6. MainSequence session renewal remains
-under Settings → MainSequence account → Manage account. Accounts, provider choices,
-saved settings and backend contracts require no migration.
+- **No pane.** Make sure it is a local Code session with the plugin enabled, then press
+  **MainSequence** in the footer or type `/ms`.
+- **Worker failures.** Open **Settings → Advanced → Runtime & diagnostics**.
+- **An operation failed.** Inspect **Activity** before retrying; a cancelled operation
+  can leave partial effects on disk and is never replayed automatically.
+- **After an update.** Fully close old Code sessions and start fresh ones; a running old
+  plugin process keeps its old hooks until it exits.
+- **Another backend's data is shown.** It is not: backend changes clear stale connection
+  and repository results.
+- Disabling or uninstalling the plugin does not revoke your MainSequence session or
+  remove any project; use **Sign out** for that.
 
-### 0.4.6 — MCP release connections
+Signed terminals, changing the Code session's root folder and launching container
+sessions are host limitations: the pane shows them disabled with the reason.
 
-Claude bundles devtools 0.2.7 so releases whose detail responses omit `name` can
-connect, register tools and receive tool calls. Saved connections without a display
-name use the release UID in selectors, tool descriptions and availability errors.
-Connection identity, environment scoping and tool-call confirmations remain intact.
+## Development
 
-### 0.4.7 — repositories and MainSequence projects
+This repository owns the Claude UI, lifecycle hooks, worker transport, tests and
+releases. Shared behaviour comes from the exact `@dev-mainsequence/devtools` package
+pinned in `package.json` and the lockfile, bundled into the portable ZIP; no sibling
+checkout or runtime npm download is used. Host API functions stay in
+`claude/hooks/register.mjs` because Claude's effect analysis follows helpers only within
+the same module.
 
-Repository setup and SDK actions now live in **Code** (called Repositories and
-Current Repository in 0.4.7). **Projects** lists real MainSequence projects in the environment
-shared with MCP and Agents, with links to their repositories and exact branches.
-Set the optional Command Center URL in Settings for platform links; otherwise
-repository links use the authorized GitHub binding.
+```sh
+npm ci --ignore-scripts
+npm run release:check
+```
 
-**Projects → select a project → Set up project locally** prepares missing
-repositories, creates or reuses its local Claude workspace and selects each
-assigned branch in an independent checkout. Existing edits are preserved and
-dirty branch switches stop with an explanation. Claude then opens the workspace
-through its native folder link, where you confirm the folder. Its displayed name
-matches the MainSequence project exactly. The enabled plugin then adds every
-repository to the new session using local `/add-dir` commands, without a model turn.
-See [local project setup](docs/claude-desktop.md#mainsequence-projects).
+`release:check` type-checks, builds, runs the Node tests, verifies the documentation,
+packs the ZIP and verifies the distribution in an isolated directory. Set
+`MS_CLAUDE_DESKTOP_BINARY` for native loader validation and the simulator tests, and
+disposable `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` for native checks;
+`npm run verify:claude` runs them. Tests use synthetic MainSequence responses; live GUI
+acceptance is recorded in each release's pull request.
 
-This version bundles devtools **0.2.8**, published to npm on 2026-10-20 from
-mainsequence-sdk/mainsequence-devtools#10 with provenance. `npm ci --ignore-scripts`
-installs it from the registry with the pinned integrity; `scripts/use-local-devtools.cjs`
-remains for testing an unpublished devtools archive. The ZIP includes the complete
-runtime; end users need no sibling checkout.
-
-### 0.4.11 — pane redesign
-
-The pane has a persistent header (account, environment, running operations,
-Settings) and five sections: **Home** (next steps, this session's repository status,
-recent activity), **Code** (one list of remote and local repositories with a detail
-view that is the operation target), **Projects**, **Agents** and **Tools** (connected
-MCPs first; Add MCP searches releases; the tool explorer sits under Advanced).
-Confirmations appear above the view instead of replacing it, unavailable actions are
-shown disabled with a reason, results and statuses use Claude's success, warning and
-error colours, and the running count also appears in Claude's status line. Talk fills
-Claude's input with `/ms @<agent-handle> ` so the command names the agent that receives
-the message; the explicit `/ms agent <uid> <message>` and `/ms task <uid> <message>`
-forms still work, a bare `/ms <message>` is refused with the prepared handles, and
-example questions in an agent's details fill the input when pressed. The composer band
-above the prompt gains **Switch agent**. No worker, backend, credential or
-configuration contract changes.
-
-### 0.4.12 — agent icons
-
-Agents with valid Command Center icons now show them even when another agent in the
-same batch has an empty icon record. See the [release notes](docs/releases/0.4.12.md).
-
-### 0.4.13 — tools after a reload
-
-MainSequence MCP tools stay usable after `/reload-plugins`: the plugin finishes startup
-from the desktop surface, its first draw, or the first tool call, and that call waits for
-registration instead of being refused. See the [release notes](docs/releases/0.4.13.md).
-
-### 0.4.14 — MCP content blocks
-
-MCP images and other non-text blocks are converted to the content blocks Claude
-accepts. See the [release notes](docs/releases/0.4.14.md).
-
-### 0.4.15 — large agent icons
-
-Icons larger than Claude can embed, such as Back Office Helper's 512 px PNG, are shrunk to
-at most 128 px instead of being dropped. See the [release notes](docs/releases/0.4.15.md).
-
-### 0.4.16 — deployments
-
-A local repository's Code detail shows the latest workflow run or deployment of its
-checked-out branch, opens the run with a step timeline, step records and cursor-paged
-logs, and lists the environment's deployments; active runs refresh every 10 s while shown.
-The read-only `ms_deployment_status` tool gives the model the same view, with the failed
-step's log tail on request. See [Deployments](docs/claude-desktop.md#deployments) and the
-[release notes](docs/releases/0.4.16.md).
-
-### 0.4.17 — MCP refresh tolerates backend blips
-
-Disconnecting or connecting an MCP while the backend is briefly unreachable no longer
-relabels the remaining MCPs **Unnamed MCP** or drops their tools: the pane keeps the last
-resolved name and the previously registered tools, names the unread MCP in a warning, and
-the worker falls back to the release's own name. See the
-[release notes](docs/releases/0.4.17.md).
-
-### 0.4.18 — MCP names stored with the connection
-
-A connected MCP's names live with its saved connection: devtools 0.3.1 reads the
-release's name and its repository's name when the MCP is connected and stores them, so a
-listing labels the connection without asking the backend. A connection saved by an earlier
-version is completed by the first listing that can read its names. Only the Add MCP search
-still labels its rows live, from the repository branch each row names. See the
-[release notes](docs/releases/0.4.18.md).
-
-### 0.4.19 — shared project-tool registry
-
-Registered MCP tools come from devtools 0.3.12's shared project-tool registry (devtools
-ADR 0004): the same names, descriptions, schemas and result shape the Codex plugin registers,
-so one remote tool has one name in both hosts. At startup the tools register at once from
-the shared catalog file, before any connection is read; a forced read follows. The hook keeps
-registration, the per-call confirmation and the Messages API block conversion; the worker
-shapes a project tool's result (`mcp-tool-call`). devtools gives a project request 120 s and
-honours a tool's advertised timeout, and its error messages name the endpoint, request and
-status. `claudeMcpNames.ts` is gone: names come stored with the connection, and discovery
-rows are labelled by devtools. See the [release notes](docs/releases/0.4.19.md).
-
-### 0.4.20 — agent icons follow Command Center
-
-An agent icon changed in Command Center reaches an open pane without Refresh: every listing
-of the Agents section re-checks the listed agents' idle icons, and while the pane stays on
-Agents the hook re-checks them once a minute, sending the backend each icon's entity tag so an
-unchanged icon is kept without being decoded again and only a changed one is redrawn. The timer stops when the pane
-closes or another section is shown. See the [release notes](docs/releases/0.4.20.md) and
-[agent icons](docs/agent-icons.md).
+To release: set the new version in `package.json` and `package-lock.json`, run
+`npm run release:check`, merge, and push an annotated tag `v<version>` whose message is
+the release notes. The release workflow builds, repeats the checks, creates the GitHub
+release for that tag with the ZIP, its checksum and those notes, and commits the updated
+marketplace catalog. `npm run publish:claude` does the same from a clean, pushed checkout.
+Published assets are immutable; a wrong release needs a new version. Afterwards,
+`npm run verify:published` checks the catalog, the ZIP and the checksum anonymously and
+installs into a disposable configuration. See
+[distribution](docs/claude-desktop-distribution.md),
+[architecture](docs/adr/0004-claude-desktop-mod.md) and
+[agent interactions](docs/adr/0005-user-authored-agent-interactions.md).

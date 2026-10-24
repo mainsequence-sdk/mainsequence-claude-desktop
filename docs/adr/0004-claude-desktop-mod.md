@@ -87,7 +87,7 @@ workspace with the project's exact name and open it through Claude's supported
 repository membership. The plugin stores the user's selected memberships, validates
 them in the new session and invokes native `/add-dir` for each sibling checkout.
 The UI reports attachment separately and offers a retry after a failed command.
-Claude owns folder trust and starting the conversation. The [verification record](../claude-desktop-verification.md)
+Claude owns folder trust and starting the conversation. The verification record (removed on 2026-10-24; in Git history)
 distinguishes these limitations and live GUI checks from automated fixture results.
 
 
