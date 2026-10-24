@@ -197,7 +197,7 @@ function main() {
   assert.equal(manifest.name, 'mainsequence'); assert.equal(manifest.version, pkg.version);
   assert.equal(info.version, pkg.version); assert.equal(info.host, 'claude-desktop-code'); assert.equal(info.workerProtocol, 1);
   for (const name of ['README.md', 'LICENSE', 'NOTICE', 'hooks/hooks.json', 'hooks/register.mjs', 'hooks/view.mjs',
-    'dist/claudeRunner.js', 'docs/claude-desktop.md', 'docs/claude-desktop-verification.md', 'docs/claude-desktop-distribution.md',
+    'dist/claudeRunner.js', 'docs/claude-desktop.md', 'docs/claude-desktop-distribution.md',
     'third_party/claude-account-rotator/LICENSE', 'third_party/claude-account-rotator/NOTICE']) {
     assert.ok(entries.some(entry => entry.name === name && !entry.directory), `Missing distribution file: ${name}`);
   }

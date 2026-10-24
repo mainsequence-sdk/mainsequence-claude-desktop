@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the checked preview and update the marketplace
+        description: Publish the checked release and update the marketplace
         type: boolean
         default: false
 permissions:

@@ -88,7 +88,7 @@ host-session changes discard presentation state; late old-context responses
 cannot repopulate it. There is no on-disk media cache or background animation
 timer.
 
-Since 0.4.20 an icon changed in Command Center reaches an open pane on its own.
+An icon changed in Command Center reaches an open pane on its own.
 Every listing of the Agents section (environment selection, paging, Refresh)
 re-checks the listed Agents' idle icons regardless of age, and while the pane
 stays on Agents the hook re-checks them once a minute. A re-check sends the

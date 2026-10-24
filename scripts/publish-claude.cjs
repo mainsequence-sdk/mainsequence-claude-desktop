@@ -43,11 +43,13 @@ try {
   else if (!/release not found/i.test(lookup.stderr || '')) throw new Error('Could not inspect the release.');
   if (!release) {
     const notes = path.join(temporary, 'notes.md');
-    const versionNotes = path.join(root, 'docs/releases', `${pkg.version}.md`);
-    const description = fs.existsSync(versionNotes) ? fs.readFileSync(versionNotes, 'utf8').trim()
-      : `MainSequence for Claude Desktop Code ${pkg.version} preview. Bundles @dev-mainsequence/devtools@${lock.version}.`;
+    // An annotated tag's message is the release notes; a lightweight tag gets a generic line.
+    const tagRef = spawnSync('git', ['for-each-ref', `refs/tags/${tag}`, '--format=%(objecttype)%0a%(contents)'], { cwd: root, encoding: 'utf8' }).stdout || '';
+    const [tagType, ...tagLines] = tagRef.split('\n');
+    const tagMessage = tagType === 'tag' ? tagLines.join('\n').trim() : '';
+    const description = tagMessage || `MainSequence for Claude Desktop Code ${pkg.version}. Bundles @dev-mainsequence/devtools@${lock.version}.`;
     fs.writeFileSync(notes, `${description}\n\nSource revision: ${revision}. Archive SHA-256: ${catalog.plugins[0].source.sha256}.\n`);
-    run('gh', ['release', 'create', tag, '--repo', repository, '--target', revision, '--draft', '--prerelease', '--title', `MainSequence Desktop ${pkg.version} preview`, '--notes-file', notes]);
+    run('gh', ['release', 'create', tag, '--repo', repository, '--target', revision, '--draft', '--title', `MainSequence Desktop ${pkg.version}`, '--notes-file', notes]);
     release = JSON.parse(run('gh', ['release', 'view', tag, '--repo', repository, '--json', 'isDraft,assets,tagName'], root, true));
   }
   const download = path.join(temporary, 'download'); fs.mkdirSync(download);
@@ -59,7 +61,7 @@ try {
     run('gh', ['release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', download]);
     if (!fs.readFileSync(path.join(download, name)).equals(fs.readFileSync(path.join(snapshot, name)))) throw new Error('Release bytes differ; published assets are immutable.');
   }
-  if (release.isDraft) run('gh', ['release', 'edit', tag, '--repo', repository, '--draft=false', '--prerelease']);
+  if (release.isDraft) run('gh', ['release', 'edit', tag, '--repo', repository, '--draft=false']);
   fs.copyFileSync(path.join(snapshot, 'claude-distribution', catalogFile), path.join(checkout, catalogFile));
   fs.writeFileSync(path.join(checkout, 'mainsequence-distribution.json'), JSON.stringify({ host: 'claude-desktop-code', version: pkg.version,
     devtools: lock.version, archiveSha256: catalog.plugins[0].source.sha256, sourceRevision: revision }, null, 2) + '\n');

@@ -4,7 +4,7 @@
     "name": "MainSequence",
     "url": "https://mainsequence.io"
   },
-  "description": "MainSequence plugins for Claude Desktop Code. Preview channel.",
+  "description": "MainSequence plugins for Claude Desktop Code.",
   "plugins": [
     {
       "name": "mainsequence",
