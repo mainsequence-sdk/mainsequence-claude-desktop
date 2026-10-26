@@ -96,7 +96,7 @@ test('foreign URLs, malformed selections and changed accounts never deliver icon
   }
   const f = fixture({ account: 'someone-else@example.test' });
   assert.equal((await f.client.dispatch(input)).error.code, 'AUTH_REJECTED'); assert.equal(f.calls.length, 1);
-  for (const change of [{ agentUids: [id(1),id(2)], includePoses: true }, { environmentUid: '../escape' }, { agentUids: Array(5).fill(id(1)) }]) {
+  for (const change of [{ agentUids: [id(1),id(2)], includePoses: true }, { environmentUid: '../escape' }, { agentUids: Array(9).fill(id(1)) }, { refresh: 'yes' }]) {
     assert.equal((await f.client.dispatch({ ...input, ...change })).error.code, 'INVALID_REQUEST');
   }
 });
@@ -158,4 +158,63 @@ test('agents without a custom icon render no image or placeholder', async () => 
   const ui = new Proxy({}, { get: () => () => assert.fail('A missing icon must draw nothing') });
   assert.equal(renderAgentIcon(ui, { agentIcons: {} }, id(1)), null);
   assert.equal(renderAgentIcon(ui, { agentIcons: { [id(1)]: { images: { idle: null } } } }, id(1)), null);
+});
+
+// The worker's shared cache: one file per backend, environment and account, read by every Claude session's worker.
+const os = require('node:os'), fsp = require('node:fs/promises'), nodePath = require('node:path');
+function cachedFixture(directory, clock, uids, overrides = {}) {
+  const calls = []; let inFlight = 0, peak = 0;
+  const projection = overrides.projection || uids.map(uid => ({ agentUid: uid, commandCenterIcon: { ...icon, url: `/api/v1/command-center/agents/${uid}/icon/`, poses: {}, toolPoses: {} } }));
+  const client = createClaudeAgentIcons({ host: createNodeHost(), cacheDirectory: directory, now: () => clock.now,
+    env: { MAINSEQUENCE_ENDPOINT: backend, MAINSEQUENCE_ACCESS_TOKEN: 'synthetic-icon-token' },
+    fetch: async url => {
+      const path = new URL(url).pathname; calls.push(path);
+      if (path === '/api/v1/users/me/') return Response.json({ username: account });
+      if (path === '/api/v1/command-center/agents/') return Response.json(projection);
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5)); inFlight--;
+      if (overrides.fail?.(path)) return new Response('missing', { status: 404 });
+      return new Response(animatedIcon(), { status: 200, headers: { 'Content-Type': 'image/png', ETag: '"tag"' } });
+    } });
+  return { client, calls, get peak() { return peak; } };
+}
+const iconReads = calls => calls.filter(path => path.endsWith('/icon/')).length;
+
+test('eight agents load in parallel, and every session\'s worker answers from one cache for ten minutes', async () => {
+  const directory = await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'ms-agent-icons-')), clock = { now: 1_000_000 };
+  const uids = Array.from({ length: 8 }, (_, i) => id(10 + i)), request = { ...input, agentUids: uids };
+  const first = cachedFixture(directory, clock, uids), loaded = await first.client.dispatch(request);
+  assert.equal(loaded.status, 'success'); assert.equal(Object.keys(loaded.data.icons).length, 8);
+  assert.ok(first.peak > 1 && first.peak <= 4, `icons load four at a time, not one by one (peak ${first.peak})`);
+  clock.now += 9 * 60_000;
+  const second = cachedFixture(directory, clock, uids), reused = await second.client.dispatch(request);
+  assert.equal(second.calls.some(path => path.startsWith('/api/v1/command-center/')), false, 'another session reads no directory or icon');
+  assert.deepEqual(JSON.parse(JSON.stringify(reused.data.icons)), JSON.parse(JSON.stringify(loaded.data.icons)));
+  const held = await second.client.dispatch({ ...request, known: { [uids[0]]: '"tag"' } });
+  assert.equal(held.data.icons[uids[0]].unchanged, true); assert.deepEqual(held.data.icons[uids[0]].images, {});
+  const refreshed = cachedFixture(directory, clock, uids); await refreshed.client.dispatch({ ...request, refresh: true });
+  assert.equal(iconReads(refreshed.calls), 8, 'Refresh reads every icon again');
+  clock.now += 11 * 60_000;
+  const later = cachedFixture(directory, clock, uids); await later.client.dispatch(request);
+  assert.equal(iconReads(later.calls), 8, 'an entry older than ten minutes is read again');
+  const [file] = (await fsp.readdir(directory)).filter(name => name.endsWith('.json'));
+  assert.equal((await fsp.stat(nodePath.join(directory, file))).mode & 0o777, 0o600);
+  assert.equal((await fsp.stat(directory)).mode & 0o777, 0o700);
+  assert.doesNotMatch(await fsp.readFile(nodePath.join(directory, file), 'utf8'), /synthetic-icon-token|Authorization/);
+  await fsp.rm(directory, { recursive: true, force: true });
+});
+
+test('a failed icon read is never kept, and an agent without an icon is not asked for again', async () => {
+  const directory = await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'ms-agent-icons-')), clock = { now: 1_000_000 };
+  const uids = [id(20), id(21), id(22)], request = { ...input, agentUids: uids };
+  // id(20) has an icon whose first read fails; id(21) is listed without one; id(22) is not in the directory.
+  const projection = [{ agentUid: id(20), commandCenterIcon: { ...icon, url: `/api/v1/command-center/agents/${id(20)}/icon/`, poses: {}, toolPoses: {} } }, { agentUid: id(21) }];
+  const first = cachedFixture(directory, clock, uids, { projection, fail: path => path.includes(id(20)) }), result = await first.client.dispatch(request);
+  assert.equal(result.data.icons[id(20)].images.idle, null); assert.equal(result.data.icons[id(20)].failed, true); assert.equal(result.data.icons[id(21)], undefined);
+  const second = cachedFixture(directory, clock, uids, { projection }), again = await second.client.dispatch(request);
+  assert.ok(again.data.icons[id(20)].images.idle.animated, 'the next request reads the failed icon again');
+  assert.deepEqual(second.calls.filter(path => path.startsWith('/api/v1/command-center/')), ['/api/v1/command-center/agents/', `/api/v1/command-center/agents/${id(20)}/icon/`]);
+  const third = cachedFixture(directory, clock, uids, { projection }); await third.client.dispatch(request);
+  assert.equal(third.calls.some(path => path.startsWith('/api/v1/command-center/')), false);
+  await fsp.rm(directory, { recursive: true, force: true });
 });

@@ -25,8 +25,59 @@ export function mcpDisplayName(value) {
   const name = [value?.display_name, value?.name].find(name => typeof name === 'string' && clean(name).trim());
   return name ? clean(name).trim() : 'Unnamed MCP';
 }
+/** Settings every MainSequence session shares. The session's own folder (`root`) is never one of them. */
+export const SHARED_SETTINGS = ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl'];
+export const SEARCH_FIELDS = [['project', 'projectSearch'], ['agent', 'agentSearch'], ['code', 'codeSearch'], ['mcp', 'mcpSearch']];
+/** The screen every session draws alike: the section, its open details and searches. The This session card is not in it. */
+export function viewSnapshot(state) {
+  const f = state.fields, code = state.codeDetail, detail = state.deployDetail;
+  return { tab: state.tab, context: `${f.backend}\n${f.mcpEnvironment}`,
+    search: Object.fromEntries(SEARCH_FIELDS.map(([key, field]) => [key, f[field] || ''])), codeFilter: state.codeFilter,
+    code: code ? { root: code.root || '', repositoryUid: String(code.repositoryUid || '') } : null,
+    deploy: state.deployView === 'list' ? { view: 'list', uid: '', kind: '', origin: state.deployOrigin }
+      : state.deployView === 'detail' && detail ? { view: 'detail', uid: detail.uid, kind: detail.kind, origin: state.deployOrigin } : null,
+    project: { uid: state.selectedProject || '', list: !!state.projectListView, offset: Number(state.projectPage?.offset) || 0 },
+    tools: { view: state.toolsView, uid: state.toolsView === 'detail' ? state.selectedMcp || '' : '' },
+    agent: { uid: state.agentDetail?.uid || '', offset: state.agentOffset || 0 } };
+}
+// Reads draw the session's own screen; every other operation is published to the other sessions' Activity.
+const READ_ACTIONS = new Set(['auth-status', 'repositories', 'status', 'sdk-status', 'mcp-environments', 'mcp-discover', 'mcp-list', 'mcp-tools', 'mcp-catalog',
+  'organization-projects', 'organization-project', 'local-repositories', 'workspace-profile', 'workspace-preferences', 'runtime-diagnostics', 'read-project-workspace',
+  'pick-folder', 'delete-local-preview', 'docker-preview', 'devcontainer-preview']);
+export const ACTIVITY_STALE_MS = 180000, ACTIVITY_KEEP_MS = 7 * 86400000;
+const ACTIVITY_STATES = new Set(['running', 'success', 'failure', 'cancelled']);
+export const publishedOperation = op => !READ_ACTIONS.has(String(op.label).split(' · ').pop());
+/** What a session publishes of one operation: the row Activity draws, never result data. */
+export function activityEntry(op) {
+  const result = op.result && { status: op.result.status, summary: clean(op.result.summary).slice(0, 500),
+    ...(op.result.effects?.message ? { effects: { message: clean(op.result.effects.message).slice(0, 500) } } : {}) };
+  return { id: clean(op.id), title: clean(op.title), context: clean(op.context).slice(0, 300), label: clean(op.label), status: op.status,
+    progress: clean(op.progress).slice(0, 500), startedAt: Number(op.startedAt) || 0,
+    ...(op.setupTarget ? { setupTarget: op.setupTarget, destination: clean(op.destination) } : {}), ...(result ? { result } : {}) };
+}
+/** The other sessions' published operations, oldest first. A running one whose session stopped reporting is drawn as interrupted. */
+export function remoteOperations(published, now) {
+  const operations = [];
+  for (const { session, at, operations: entries } of published) {
+    const stale = now - at > ACTIVITY_STALE_MS;
+    for (const entry of rows(entries)) {
+      if (!entry || typeof entry.id !== 'string' || !ACTIVITY_STATES.has(entry.status)) continue;
+      operations.push({ ...entry, startedAt: Number(entry.startedAt) || 0, remote: true, session: clean(session),
+        ...(stale && entry.status === 'running' ? { status: 'stale', progress: 'Stopped reporting: its Claude session may have closed.' } : {}) });
+    }
+  }
+  return operations.sort((a, b) => a.startedAt - b.startedAt).slice(-50);
+}
+/** This session's operations and the other sessions', in the order they started. */
+export function allOperations(state) {
+  const order = op => op.startedAt || Number.MAX_SAFE_INTEGER;
+  return [...state.remoteOperations, ...state.operations].sort((a, b) => order(a) - order(b));
+}
 export function initialState(options = {}) {
   return { tab: 'Home', expanded: {}, initPromise: null, toolRefresh: null, mcpNames: {}, booting: null, booted: false, paneFault: null, selectPages: {}, codeDetail: null, codeFilter: 'all', toolsView: 'list', projectListView: false, homeStatusRequested: false, contextRevision: 0, initializing: false, repositoriesLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
+    // Shared with the other sessions through the plugin store: the JSON each key last held here, and the writers' timers.
+    shared: { settings: '', environments: '', view: '', signals: null }, remoteOperations: [], syncing: null, syncedAt: 0, syncTimer: null,
+    settingsTimer: null, viewTimer: null, activityTimer: null, activityHeartbeat: null, activityPublished: false,
     fields: { backend: 'https://api.main-sequence.app', commandCenterUrl: '', projectSearch: '', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
       image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}', agentSearch: '', codeSearch: '',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },
@@ -34,7 +85,7 @@ export function initialState(options = {}) {
     workspaceAttachment: null, attachedRepositories: new Set(),
     editedSettings: new Set(), savedSettings: {}, environmentsLoading: false, environmentSelections: {}, preferencesLoading: false, operations: [], results: {}, selectedRepository: '', selectedLocal: '', selectedMcp: '',
     agentRevision: 0, agentListRevision: 0, agentOffset: 0, agentDetail: null, agentAccount: '', agentTools: {}, activeAgent: null, agentsLoading: false, agentSelection: 0, agentPreparing: {}, agentBindings: {}, agentDrafts: {}, agentSave: Promise.resolve(),
-    agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentIconTimer: null, agentIconPolls: 0, agentCommandOutputs: new Map(),
+    agentIcons: {}, agentIconLoads: new Map(), agentIconTimes: {}, agentIconTimer: null, agentIconRetry: null, agentIconPolls: 0, agentCommandOutputs: new Map(),
     // Deployments: remote state read from the environment's deployment history, never a local operation.
     deployView: '', deployOrigin: 'code', deployHistory: [], deployList: null, deployListLoading: false, deployListError: '',
     deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,

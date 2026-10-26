@@ -80,24 +80,34 @@ visible Agent UUIDs are accepted. Credentials stay in the public devtools sessio
 service; only bounded embedded image sources cross the private worker channel.
 They are excluded from Activity, model tool results and the plugin store.
 
-Idle assets load in batches of at most four visible Agents. Details/Talk preload
-up to twelve declared poses for one Agent. Requests share an in-flight guard and
-a five-minute in-memory cache. A failed read gets a one-minute backoff; a failed
-media refresh keeps an existing image. Backend, account, environment and
-host-session changes discard presentation state; late old-context responses
-cannot repopulate it. There is no on-disk media cache or background animation
-timer.
+Idle assets load in batches of at most eight visible Agents. Every batch has its own
+worker and they run at the same time; a worker reads the environment's directory once
+and its icons four at a time, so a page of Agents gets its icons together instead of
+one batch after another. Details/Talk preload up to twelve declared poses for one Agent.
+Requests share an in-flight guard and a ten-minute in-memory cache. A failed read (a slow
+backend's timeout, an error status) gets a one-minute backoff, after which the shown Agents
+ask for it again once; a failed media refresh keeps an existing image. Backend, account,
+environment and host-session changes discard presentation state; late old-context
+responses cannot repopulate it. There is no background animation timer.
 
-An icon changed in Command Center reaches an open pane on its own.
-Every listing of the Agents section (environment selection, paging, Refresh)
-re-checks the listed Agents' idle icons regardless of age, and while the pane
-stays on Agents the hook re-checks them once a minute. A re-check sends the
-backend the entity tag (`ETag`) it holds for each drawn icon as `If-None-Match`,
-on the canonical icon route only. An icon the backend answers with 304, or with 200
-and the same tag (the route sends tags but does not yet answer conditional requests,
-so the worker compares them itself and drops the bytes unread), keeps its image and
-tag; a changed one arrives with its new tag and is redrawn; a failed re-check keeps
-the drawn icon. The timer stops when the pane closes or
-another section is shown, and a section left open pauses re-checking after four
-hours until Refresh. Poses are still read with Details and Talk only. Tags live in
-session memory with the images and are never stored.
+Idle icons are also shared by every Claude session for ten minutes. The worker keeps
+them, with their tags, in one file per backend, environment and account under the
+MainSequence state folder (`claude-desktop/agent-icons`, owner-only). Within ten minutes
+of any session reading an icon, another session's worker answers it from that file
+without contacting the backend. An Agent the directory lists without an icon is
+remembered the same way; a read that failed is never kept, so the next request tries
+again. Poses are not kept there. The file holds image markup and tags only, never
+credentials.
+
+An icon changed in Command Center reaches an open pane on its own within ten minutes.
+While the pane stays on Agents the hook re-checks the listed Agents' idle icons every
+ten minutes, through the shared file. **Refresh** reads the list and every icon from
+the backend at once. A re-check sends the backend the entity tag (`ETag`) it holds for
+each drawn icon as `If-None-Match`, on the canonical icon route only. An icon the backend
+answers with 304, or with 200 and the same tag (the route sends tags but does not yet
+answer conditional requests, so the worker compares them itself and drops the bytes
+unread), keeps its image and tag; a changed one arrives with its new tag and is redrawn;
+a failed re-check keeps the drawn icon. The timer stops when the pane closes or another
+section is shown, and a section left open pauses re-checking after four hours until
+Refresh. Poses are still read with Details and Talk only. Icons and tags never enter
+the plugin store.

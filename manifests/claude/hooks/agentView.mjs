@@ -61,8 +61,8 @@ export function renderAgents(ui, state, actions) {
   const result = state.results['devtools.agents-list'], page = record(result?.data);
   const agents = rows(page).filter(agent => agent.environmentUid === state.fields.mcpEnvironment);
   return column([
-    inline([Box({ flexGrow: 1, flexShrink: 1, minWidth: 0, children: [Input({ key: 'field-agentSearch', value: state.fields.agentSearch, placeholder: 'Search agents', autoFocus: true, onInput: value => actions.field('agentSearch', value), onSubmit: value => { actions.field('agentSearch', value); actions.refreshAgents(); } })] }),
-      button('agents-search', 'Search', actions.refreshAgents, { plain: true }),
+    inline([Box({ flexGrow: 1, flexShrink: 1, minWidth: 0, children: [Input({ key: 'field-agentSearch', value: state.fields.agentSearch, placeholder: 'Search agents', autoFocus: true, onInput: value => actions.field('agentSearch', value), onSubmit: value => { actions.field('agentSearch', value); actions.searchAgents(); } })] }),
+      button('agents-search', 'Search', actions.searchAgents, { plain: true }),
       button('agents-refresh', state.agentsLoading ? 'Loading…' : 'Refresh', actions.refreshAgents, { plain: true, dim: true, available: !state.agentsLoading })]),
     result?.status === 'failure' && column([status('error', result.summary), button('agents-retry', 'Try again', actions.refreshAgents, { plain: true })]),
     state.agentsLoading && muted('Loading agents from this environment…'),

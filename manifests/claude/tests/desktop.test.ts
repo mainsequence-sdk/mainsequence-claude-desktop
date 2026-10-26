@@ -396,3 +396,52 @@ test('Deployments: the Code detail opens a recorded workflow run with its timeli
   expect(await ui.find({key:'sync'}),'Back returns to the Code detail').toBeDefined();
   await ui.unmount();
 });
+
+test('a native pane opens on what another session left and shares its own section change', async ($, on) => {
+  const backend = 'https://api.main-sequence.app', clock = mock.clock(on, {now:1000});
+  const store: Record<string, unknown> = {
+    settings: {backend, baseDir:'/shared/repos', commandCenterUrl:'https://cc.example'},
+    'mcp-environments': {[backend]:'prod'},
+    'pane-view': {tab:'Tools', context:`${backend}\nprod`, search:{project:'',agent:'',code:'',mcp:''}, codeFilter:'all', code:null, deploy:null,
+      project:{uid:'',list:false,offset:0}, tools:{view:'list',uid:''}, agent:{uid:'',offset:0}},
+    'activity:other-session': {at:1000, session:'other-project', operations:[{id:'other-1', title:'Install dependencies', context:'/work/other',
+      label:'devtools · install', status:'running', progress:'Installing…', startedAt:900}]},
+  };
+  // What another session left in the plugin store, and what this one writes.
+  const writes: string[] = [];
+  on('store.get', ($, e) => ({value:store[e.key]}));
+  on('store.keys', () => ({value:Object.keys(store)}));
+  on('store.set', ($, e) => { store[e.key] = e.value; writes.push(e.key); return {value:undefined}; });
+  on('store.delete', ($, e) => { delete store[e.key]; return {value:undefined}; });
+  mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'shared-native'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  on('tool.register', ($, e) => ({value:{tool:`mcp__mainsequence__${e.name}`}}));
+  on('process.spawn', async function* ($, e) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    const data = q.action === 'auth-status' ? {authenticated:true, username:'native@example.test'}
+      : q.action === 'mcp-environments' ? [{uid:'research',name:'Research'},{uid:'prod',name:'Production'}]
+      : q.action === 'mcp-catalog' ? {definitions:[], bindings:{}, unavailable:[], retained:0} : q.action === 'mcp-list' || q.action === 'mcp-discover' ? [] : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Ready',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  const ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await clock.settle(); await clock.advance(5000); await clock.settle();
+  expect((await ui.find({key:'tab-Tools'}))?.props.variant).toBe('primary');
+  expect((await ui.find({key:'mcp-environment'}))?.props.value).toBe('prod');
+  expect((await ui.find({key:'tab-Activity'}))?.props.label).toBe('1 running');
+  await ui.press({key:'tab-Activity'}); await clock.settle();
+  expect((await ui.find({key:'activity-row-other-1'}))?.text).toContain('Session other-project');
+  expect(await ui.find({key:'cancel-other-1'})).toBeUndefined();
+  await ui.press({key:'tab-Settings'}); await clock.settle();
+  expect((await ui.find({key:'field-baseDir'}))?.props.value).toBe('/shared/repos');
+  expect((await ui.find({key:'field-commandCenterUrl'}))?.props.value).toBe('https://cc.example');
+  await clock.advance(300); await clock.settle();
+  expect(writes).toContain('pane-view');
+  expect(writes).not.toContain('settings');
+  await ui.unmount();
+});
