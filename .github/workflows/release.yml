@@ -28,6 +28,13 @@ jobs:
       - name: Check release tag
         if: github.ref_type == 'tag'
         run: node -e 'if(process.env.GITHUB_REF_NAME !== `v${require("./package.json").version}`) process.exit(1)'
+      # actions/checkout re-points the pushed tag at its commit (fetch +<sha>:refs/tags/<tag>), which
+      # drops an annotated tag's message. Fetch the tag object again: its message is the release notes.
+      - name: Restore the annotated release tag
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --force --no-tags origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          echo "${GITHUB_REF_NAME} is $(git cat-file -t "refs/tags/${GITHUB_REF_NAME}") object $(git rev-parse --short "refs/tags/${GITHUB_REF_NAME}^{commit}")"
       - run: npm run release:check
       - uses: actions/upload-artifact@v4
         with:
