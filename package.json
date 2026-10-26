@@ -1,6 +1,6 @@
 {
   "name": "@dev-mainsequence/claude-desktop",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "private": true,
   "description": "MainSequence integration for Claude Desktop Code",
   "license": "MIT",
@@ -24,7 +24,7 @@
     "verify:published": "node scripts/verify-public-release.cjs"
   },
   "dependencies": {
-    "@dev-mainsequence/devtools": "0.3.12"
+    "@dev-mainsequence/devtools": "0.3.14"
   },
   "devDependencies": {
     "@types/node": "18.19.130",
