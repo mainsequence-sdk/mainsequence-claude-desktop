@@ -199,7 +199,7 @@ test('Desktop footer launcher survives pane closure and preserves native control
   }
   assert.deepEqual(await f.emit('ui.render', { surface: 'terminal', component: 'SessionMode', props: { modes: ['focus'] } }), { type: 'engine', ref: 1 });
   // A desktop footer draw may start the session's own startup reads; it never writes settings or opens anything else.
-  assert.equal(f.calls.slice(callsBefore).every(c => c.pane || ['workspace-preferences', 'auth-status', 'mcp-environments', 'mcp-list', 'mcp-catalog', 'mcp-discover', 'read-project-workspace'].includes(c.request?.request.action)), true);
+  assert.equal(f.calls.slice(callsBefore).every(c => c.pane || ['plugin-version', 'workspace-preferences', 'auth-status', 'mcp-environments', 'mcp-list', 'mcp-catalog', 'mcp-discover', 'read-project-workspace'].includes(c.request?.request.action)), true);
   assert.equal(f.calls.some(c => c.store), false);
   assert.equal(JSON.stringify(saved), settingsBefore);
   f.$.ui.open = async () => { throw new Error('private-host-error'); };
@@ -346,6 +346,62 @@ test('SDK update is unavailable unless fresh status explicitly supports and offe
   assert.equal(f.find(await f.pane(), 'update-sdk'), undefined);
 });
 
+const failure = (action, summary) => ({ schemaVersion: 1, action, status: 'failure', summary, error: { code: 'PROCESS_FAILED', message: summary } });
+function pluginFixture(version, update = () => success('plugin-update', { running: '0.4.21', previous: '0.4.21', installed: '0.4.22', status: 'restart_required' })) {
+  return fixture({ respond: ({ request: q }) => q.action === 'plugin-version' ? success(q.action, { running: '0.4.21', installed: '0.4.21', updateSupported: true, ...version() })
+    : q.action === 'plugin-update' ? update() : success(q.action, {}) });
+}
+async function startPlugin(f) {
+  const { register } = await load(); register(f.on); await f.emit('session.start', { surface: 'desktop' });
+  for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await flush();
+}
+const pluginCalls = (f, action) => f.calls.filter(c => c.request?.request.action === action).length;
+
+test('the header names the running version and installs a published update only after confirmation', async () => {
+  const f = pluginFixture(() => ({ latest: '0.4.22', status: 'update_available' })); await startPlugin(f);
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /v0\.4\.21/);
+  assert.equal(f.find(tree, 'plugin-update').props.label, 'Update to 0.4.22');
+  await f.press('plugin-update');
+  assert.equal(pluginCalls(f, 'plugin-update'), 0);
+  assert.match(JSON.stringify(await f.pane()), /installs MainSequence 0\.4\.22\. This session keeps 0\.4\.21 until you start a new Code session/);
+  await f.press('confirm-action');
+  tree = await f.pane();
+  assert.equal(pluginCalls(f, 'plugin-update'), 1); assert.equal(f.find(tree, 'plugin-update'), undefined);
+  assert.match(JSON.stringify(tree), /0\.4\.22 installed · start a new Code session/);
+  await f.press('tab-Activity'); assert.match(JSON.stringify(await f.pane()), /Update MainSequence plugin/);
+});
+
+test("without Claude's updater, or when it fails, the header shows the manual update steps", async () => {
+  const unsupported = pluginFixture(() => ({ installed: null, latest: '0.4.22', status: 'update_available', updateSupported: false })); await startPlugin(unsupported);
+  await unsupported.press('plugin-update');
+  let tree = await unsupported.pane();
+  assert.equal(unsupported.find(tree, 'confirm-action'), undefined); assert.equal(pluginCalls(unsupported, 'plugin-update'), 0);
+  assert.match(JSON.stringify(tree), /refresh the mainsequence-desktop marketplace/);
+  await unsupported.press('plugin-help-dismiss');
+  assert.doesNotMatch(JSON.stringify(await unsupported.pane()), /refresh the mainsequence-desktop marketplace/);
+  const failed = pluginFixture(() => ({ latest: '0.4.22', status: 'update_available' }), () => failure('plugin-update', 'Claude could not update MainSequence.'));
+  await startPlugin(failed); await failed.press('plugin-update'); await failed.press('confirm-action');
+  tree = await failed.pane();
+  assert.match(JSON.stringify(tree), /Claude could not update MainSequence\..*refresh the mainsequence-desktop marketplace/);
+  assert.ok(failed.find(tree, 'plugin-update'), 'the published update is still offered');
+});
+
+test('an unreachable catalog keeps the version with a manual check, and a later pane open re-checks', async () => {
+  let reachable = false;
+  const f = pluginFixture(() => reachable ? { latest: '0.4.21', status: 'current' } : { latest: null, status: 'unknown' }); await startPlugin(f);
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /v0\.4\.21/); assert.ok(f.find(tree, 'plugin-check'));
+  reachable = true; await f.press('plugin-check');
+  tree = await f.pane();
+  assert.match(JSON.stringify(tree), /● Up to date/); assert.equal(f.find(tree, 'plugin-check'), undefined);
+  await f.emit('command.run', { command: 'ms' }); await flush();
+  assert.equal(pluginCalls(f, 'plugin-version'), 2, 'a pane open soon after the check does not repeat it');
+  f.$.clock.now = async () => 1000 + 7 * 3_600_000;
+  await f.emit('command.run', { command: 'ms' }); await flush();
+  assert.equal(pluginCalls(f, 'plugin-version'), 3);
+});
+
 
 test('MainSequence login, renewal and logout remain available without touching Claude credentials or provider config', async () => {
   const { register } = await load(); let signedIn = false;
@@ -388,7 +444,7 @@ test('startup reads existing MainSequence session without saving or rotating cre
   assert.equal(f.find(tree,'field-backend').props.value,'https://saved.example');
   assert.equal(f.find(tree,'field-baseDir').props.value,'/existing/repos');
   assert.equal(f.calls.some(c=>c.store),false);
-  assert.deepEqual(f.calls.filter(c=>c.request).map(c=>c.request.request.action),['workspace-preferences','auth-status']);
+  assert.deepEqual(f.calls.filter(c=>c.request).map(c=>c.request.request.action),['plugin-version','workspace-preferences','auth-status']);
   assert.equal(f.calls.find(c=>c.request?.request.action==='auth-status').request.request.check,false);
 });
 

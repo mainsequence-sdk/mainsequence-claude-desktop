@@ -363,6 +363,23 @@ This feature consumes existing human Project APIs; no backend endpoints or schem
 
 ## Upgrade, removal and troubleshooting
 
+The pane header always shows the running plugin version. When the pane starts, and
+when it is reopened more than six hours after the last check, the worker compares that
+version with the `mainsequence-desktop` catalog on this repository's default branch and
+with the copy Claude has installed (`plugin list --json` through the engine that runs the
+session). The header then shows **Up to date**, **Update to** the published version, or
+that a newer version is installed and needs a new Code session. **Check for updates**
+retries when the catalog could not be reached; the check is quiet and stays out of
+Activity.
+
+**Update to** asks for confirmation, then runs `plugin marketplace update
+mainsequence-desktop` and `plugin update mainsequence@mainsequence-desktop` in the
+installed scope through that engine, and appears in Activity. It never accepts an
+install command a catalog declares. The running session keeps its version until a new
+Code session starts; Claude keeps earlier versions in its plugin cache, so the open pane
+keeps working. When the engine cannot be found, the plugin was uploaded rather than
+installed from the marketplace, or the updater fails, the pane lists the manual steps.
+
 Update through the plugin manager or install the built archive. Fully close old
 Code sessions and start fresh sessions after upgrading. An already
 running old plugin process retains its old hooks until it exits. Disabling/uninstalling the plugin does not revoke MainSequence credentials or

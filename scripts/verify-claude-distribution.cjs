@@ -201,6 +201,8 @@ function main() {
     'third_party/claude-account-rotator/LICENSE', 'third_party/claude-account-rotator/NOTICE']) {
     assert.ok(entries.some(entry => entry.name === name && !entry.directory), `Missing distribution file: ${name}`);
   }
+  const release = entries.find(entry => entry.name === 'hooks/release.mjs')?.content.toString('utf8') || '';
+  assert.ok(release.includes(`PLUGIN_VERSION = ${JSON.stringify(pkg.version)};`), 'The pane header must name the released version.');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'MainSequence Claude distribution '));
   const extracted = path.join(temporary, 'plugin with spaces');
   try {

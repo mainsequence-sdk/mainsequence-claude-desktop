@@ -15,6 +15,29 @@ async function openPane($, state) {
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
   syncSharedPolling($, state); void syncShared($, state, true);
+  if (state.pluginCheckedAt && await $.clock.now() - state.pluginCheckedAt > PLUGIN_RECHECK_MS) void checkPlugin($, state).catch(() => {});
+}
+
+// The plugin's own release: checked when the session starts and again on a pane open hours later.
+const PLUGIN_RECHECK_MS = 6 * 3_600_000;
+function checkPlugin($, state) {
+  if (state.pluginCheck) return state.pluginCheck;
+  state.pluginCheck = (async () => {
+    const result = await execute($, state, request('projects', 'plugin-version'), true);
+    if (result.status === 'success') { state.plugin = record(result.data); state.pluginCheckedAt = await $.clock.now(); }
+    else if (state.plugin.status !== 'restart_required') state.plugin = { ...state.plugin, status: 'unknown' };
+  })().finally(() => { state.pluginCheck = null; update($); });
+  update($);
+  return state.pluginCheck;
+}
+async function updatePlugin($, state) {
+  if (state.pluginUpdating) return;
+  state.pluginUpdating = true; state.pluginHelp = ''; update($);
+  try {
+    const result = await execute($, state, request('projects', 'plugin-update'));
+    if (result.status === 'success') { state.plugin = { ...state.plugin, ...record(result.data) }; $.ui.toast(result.summary); }
+    else if (result.status === 'failure') state.pluginHelp = result.summary;
+  } finally { state.pluginUpdating = false; update($); }
 }
 
 function ensureBoot($, state, e) {
@@ -37,7 +60,7 @@ function operationTitle(action) {
     'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
     'organization-project-setup': 'Set up project locally', 'open-project-workspace': 'Open project in Claude',
     'local-repositories': 'Discover local repositories', 'deployment-history': 'Read deployment history', 'deployment-run': 'Read deployment run',
-    'deployment-logs': 'Read deployment logs' })[action] || action.replaceAll('-', ' ');
+    'deployment-logs': 'Read deployment logs', 'plugin-version': 'Check for MainSequence updates', 'plugin-update': 'Update MainSequence plugin' })[action] || action.replaceAll('-', ' ');
 }
 
 async function execute($, state, domain, quiet = false, observer = {}) {
@@ -77,7 +100,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   // Session results depend on the backend alone: an environment or folder change while
   // the sign-in check is in flight must not discard it.
   const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
-  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', 'mcp-catalog', 'mcp-tool-call', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', 'mcp-catalog', 'mcp-tool-call', 'plugin-version', 'plugin-update', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (!quiet) update($);
   return result;
 }
@@ -478,6 +501,15 @@ function actionsFor($, state) {
     dismiss: () => { state.confirmation = null; update($); },
     accept: () => { const confirmation = state.confirmation; state.confirmation = null; update($); if (confirmation) background(confirmation.callback()); },
     cancel: id => { const op = state.operations.find(value => value.id === id); if (op?.cancel) { op.progress = 'Cancelling…'; background(op.cancel()); update($); } },
+    checkPlugin: () => background(checkPlugin($, state)),
+    updatePlugin: () => {
+      const plugin = state.plugin;
+      if (!plugin.updateSupported) { state.pluginHelp = "This session can't run Claude's plugin updater, or MainSequence was not installed from the mainsequence-desktop marketplace."; update($); return; }
+      state.confirmation = { title: 'Update MainSequence', detail: `Claude refreshes the mainsequence-desktop marketplace and installs MainSequence ${plugin.latest}. This session keeps ${plugin.running} until you start a new Code session.`,
+        callback: () => updatePlugin($, state) };
+      update($);
+    },
+    closePluginHelp: () => { state.pluginHelp = ''; update($); },
     attachWorkspace: () => background(attachWorkspace($, state)),
   };
   return Object.fromEntries(Object.entries(actions).map(([name, action]) => [name, (...args) => { const answer = action(...args); shareView($, state); return answer; }]));
@@ -747,6 +779,7 @@ async function boot($, state, e) {
 async function initializeWorkspace($, state) {
   if (!state.ready || state.closed) { state.preferencesLoading = false; return; }
   state.initializing = true; update($);
+  void checkPlugin($, state).catch(() => {});
   try {
     const preferences = await execute($, state, request('projects', 'workspace-preferences'), true);
     if (state.closed) return;
