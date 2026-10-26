@@ -1,6 +1,6 @@
 {
   "name": "@dev-mainsequence/claude-desktop",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "private": true,
   "description": "MainSequence integration for Claude Desktop Code",
   "license": "MIT",
