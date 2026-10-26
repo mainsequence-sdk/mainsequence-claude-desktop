@@ -26,7 +26,8 @@ native pane; startup and plugin reloads do not automatically open it. The button
 the session footer remains available when the pane is closed. Click the
 button to reopen and focus the same pane without typing a command or submitting
 a message. `/ms` remains an optional fallback. The launcher preserves existing
-footer controls and does not read or save settings, accounts or credentials.
+footer controls and never saves settings, accounts or credentials; drawing it
+only reads what the other sessions changed.
 It appears in local Code sessions with the plugin loaded, not on Claude's home
 screen or unrelated chat surfaces. Claude controls its final position and native
 button styling: the tested Desktop build renders a compact text button in the
@@ -38,9 +39,12 @@ CSS injected into the Desktop application.
 
 The pane shows [platform agent icons](agent-icons.md) in the agent
 directory, details, composer activity band and attributed command/tool rows. Existing native
-transcript content and footer controls remain visible. An icon changed in Command Center reaches an open pane on its own: every listing of the Agents section re-checks the listed
-agents' icons, and while the pane stays on Agents they are re-checked once a minute with the
-backend's entity tags, so only a changed icon is redrawn.
+transcript content and footer controls remain visible. The Agents list and its icons are
+shared by every session for ten minutes: pressing Agents, here or in another session, draws
+them at once without asking the backend, an older list is drawn while it is read again, and
+**Refresh** reads the list and every icon at once. While the pane stays on Agents the icons
+are re-checked every ten minutes with the backend's entity tags, so an icon changed in
+Command Center is redrawn on its own.
 
 Git/SSH, uv for Python, npm for frontend repositories and Docker/buildx for builds are
 required only for the corresponding operations. They are not installed silently.
@@ -54,9 +58,46 @@ Home is the landing view. A **Next steps** card lists what is still missing (sig
 choose an environment, choose a repositories folder) with one button per step and
 disappears once everything is set. **This session** shows the Code session's folder;
 **Check status** reads its branch and SDK state through the existing `status` and
-`sdk-status` actions and offers **Update SDK** when one is supported. **Recent** shows
-the last three operations. Nothing is spawned on startup beyond the existing
+`sdk-status` actions and offers **Update SDK** when one is supported. **This session**
+is the one part of the pane that differs between Code sessions. **Recent** shows
+the last three operations of every session. Nothing is spawned on startup beyond the existing
 preference and session reads.
+
+## One MainSequence across sessions
+
+MainSequence is one pane across all of your local Code sessions. Switching to a session
+in another project shows what you left in the last one:
+
+- the settings (backend, repositories folder, Command Center URL, organization folder,
+  Node executable);
+- the organization environment, so every session registers the same environment's
+  MainSequence tools, and a tool of the previous environment is refused with
+  *no longer connected*;
+- the section and what it has open: a repository detail, the deployments list or a run,
+  a project, an MCP, an agent's details, and the searches;
+- the Agents list and its icons, read once for every session and kept for ten minutes
+  (**Refresh** reads them again at once);
+- a sign-in, a sign-out, an MCP connected or disconnected, and a repository set up or
+  removed, which the other sessions read again;
+- Activity, the header's running counter and Claude's status line. Each operation carries
+  the name of the session folder that runs it. Only that session can cancel it. A running
+  operation whose session stops reporting for three minutes is shown as **Interrupted**.
+  Reads that only draw a session's own screen (status checks, listings) stay in that
+  session's Activity.
+
+Only the **This session** card on Home belongs to the session: its folder, branch, SDK
+status and latest deployment. Agent conversations stay in the Claude chat they were
+started in, and an environment change ends the selected one there.
+
+The plugin keeps this in its own Claude Code store file, which every session reads from disk.
+A session reads it again when its pane opens or is drawn (Desktop draws a session when you
+switch to it), every two seconds while its pane is open, and before a MainSequence tool runs,
+so a session in the background follows an environment chosen elsewhere before its tools
+are used. Each session writes only what the person changed in it, one store key at a
+time under the store's file lock, so two sessions never overwrite each other's keys. A
+setting is written once typing pauses for a moment; while it is waiting, that session keeps
+its own value. A screen choice made in two sessions at once ends with the last one written.
+A session's Activity older than a week is removed.
 
 ## Settings: MainSequence login and workspace
 
@@ -76,9 +117,9 @@ plugin values take precedence. Otherwise, shared devtools resolves the backend f
 `https://api.main-sequence.app`. The repositories folder uses the existing absolute
 `mainsequence_path`, otherwise `<home>/mainsequence` displayed as a full path.
 Defaults are usable without saving and do not depend on successful authentication.
-Startup resolution never overwrites a user's in-progress edits. Edits apply for the
-current session; **Save settings** retains them for future sessions. Unknown/legacy
-fields remain intact. Startup never writes the shared configuration.
+Startup resolution never overwrites a user's in-progress edits. There is no Save step:
+an edit applies at once and reaches every other session shortly after typing stops.
+Unknown/legacy fields remain intact. Startup never writes the shared configuration.
 Runtime diagnostics and the Node executable override are collapsed under Advanced.
 Technical JSON is hidden until requested.
 
@@ -253,9 +294,10 @@ content, converted to Messages API blocks by the hook. devtools gives the projec
 120 s and honours a tool's advertised timeout up to 300 s, and its error messages name the
 endpoint, the request and the status.
 
-Activity shows actual operations from the session, their running/completed/failed/
-cancelled status, progress text, outcome and partial-effect warnings. Result details
-are collapsed. Cancellation stops the worker stream; it does not promise rollback.
+Activity shows actual operations, their running/completed/failed/cancelled status,
+progress text, outcome and partial-effect warnings. It lists this session's operations
+and the other sessions' (see [One MainSequence across sessions](#one-mainsequence-across-sessions)).
+Result details are collapsed. Cancellation stops the worker stream; it does not promise rollback.
 MCP discovery runs alongside connected-tool registration. Tools lists the connected
 MCPs of the selected environment as rows with their registered tool count; **Add MCP** opens a search over the environment's releases
 with a **Connect** button per result, and a connected MCP's detail lists its tools.

@@ -47,16 +47,21 @@ diagnostics → Executable overrides**.
    own MainSequence deployment, set its API URL as the backend in Settings before signing
    in. Set the **Command Center URL** there as well, so project and repository links open
    in Command Center, and the **repositories folder** where local checkouts go. Edits
-   apply at once; **Save settings** keeps them for future sessions.
+   apply at once, with no Save step.
 3. Choose an **organization environment** in the pane header. Nothing is selected for
    you, not even Production. Agents, MCPs, projects and deployments are shown for that
    environment, and the MainSequence tools Claude calls are bound to it.
+
+MainSequence is one pane across your Code sessions: settings, the environment, the open
+section and Activity are the same in every session, whichever project it is in. Only the
+**This session** card on Home belongs to the session. See
+[One MainSequence across sessions](docs/claude-desktop.md#one-mainsequence-across-sessions).
 
 ## What you can do
 
 - **Home.** A **Next steps** card until you have signed in, chosen an environment and a
   repositories folder; **This session** with the Code session's folder, **Check status**
-  and **Update SDK** when one is available; and the last three operations.
+  and **Update SDK** when one is available; and the last three operations of every session.
 - **Code.** The session folder, every repository of your account (marked **Local** when a
   canonical checkout exists) and other local copies under the repositories folder. **Set
   up** clones a repository into `<folder>/<organization>/projects/<name>-<uid>` with its

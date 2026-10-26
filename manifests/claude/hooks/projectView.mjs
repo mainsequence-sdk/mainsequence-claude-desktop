@@ -1,4 +1,4 @@
-import { clean } from './model.mjs';
+import { clean, allOperations } from './model.mjs';
 import { primitives } from './primitives.mjs';
 
 export function renderProjects(ui, state, actions) {
@@ -6,7 +6,7 @@ export function renderProjects(ui, state, actions) {
   const { Box, Input, text, muted, caption, heading, title, status, column, inline, buttons, button, row, badge, markdown, empty } = p;
   const page = state.projectPage, selected = state.projectDetail;
   const operation = state.results['devtools.organization-project-setup'];
-  const setupOp = state.operations.find(op => op.status === 'running' && op.label === 'devtools · organization-project-setup');
+  const setupOp = allOperations(state).find(op => op.status === 'running' && op.label === 'devtools · organization-project-setup');
   if (selected && !state.projectListView) {
     const groups = new Map();
     for (const branch of selected.branches || []) {

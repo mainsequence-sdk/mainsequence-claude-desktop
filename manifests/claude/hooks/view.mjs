@@ -1,4 +1,4 @@
-import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget, allOperations } from './model.mjs';
 import { primitives, OPERATION_STATUS, OPERATION_KIND } from './primitives.mjs';
 import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
@@ -32,9 +32,11 @@ export function renderPane(ui, state, actions, options = {}) {
   const project = (action, extra) => () => actions.project(action, extra);
   const mut = (label, callback, detail = label) => () => actions.confirm(label, detail, callback);
   const f = state.fields;
+  // Controls wait for this session's own operations; counts and progress cover every session's.
   const busy = (scope, action) => state.operations.some(op => op.status === 'running' && op.label === `${scope} · ${action}`);
-  const running = state.operations.filter(op => op.status === 'running').length;
-  const runningSetups = state.operations.filter(op => op.setupTarget && op.status === 'running');
+  const operations = allOperations(state);
+  const running = operations.filter(op => op.status === 'running').length;
+  const runningSetups = operations.filter(op => op.setupTarget && op.status === 'running');
   const { auth, session, signedIn, signedOut } = signedInState(state);
   const environments = rows(state.results['devtools.mcp-environments']?.data);
   const environment = environments.find(r => r.uid === f.mcpEnvironment);
@@ -92,7 +94,7 @@ export function renderPane(ui, state, actions, options = {}) {
     const sdk = record(state.results['devtools.sdk-status']?.data);
     const forSession = !f.root || f.root === state.cwd;
     const sdkLine = sdk.updateAvailable === true ? ['warning', `${sdk.installed || 'SDK'} → ${sdk.latest || 'newer'} available`] : sdk.installed ? ['success', `${sdk.installed} up to date`] : null;
-    const recent = state.operations.slice(-3).reverse();
+    const recent = operations.slice(-3).reverse();
     const steps = [
       !signedIn && !state.initializing && { key: 'login', label: 'Sign in with your browser', detail: 'Browse projects, agents and tools with your MainSequence account.' },
       signedIn && !f.mcpEnvironment && { key: 'environment', label: 'Choose an organization environment', detail: 'Projects, agents and tools are scoped to one environment.' },
@@ -131,13 +133,15 @@ export function renderPane(ui, state, actions, options = {}) {
   if (state.tab === 'Tools') body = gated ? null : renderTools(p, state, actions, { dev, mut, busy, environment });
 
   if (state.tab === 'Activity') body = column([
-    inline([heading('Activity'), state.operations.length ? caption(['running', 'success', 'failure', 'cancelled'].map(kind => {
-      const count = state.operations.filter(op => op.status === kind).length; return count ? `${count} ${OPERATION_STATUS[kind].toLowerCase()}` : '';
+    inline([heading('Activity'), operations.length ? caption(['running', 'success', 'failure', 'cancelled', 'stale'].map(kind => {
+      const count = operations.filter(op => op.status === kind).length; return count ? `${count} ${OPERATION_STATUS[kind].toLowerCase()}` : '';
     }).filter(Boolean).join(' · ')) : null], { justifyContent: 'space-between' }),
-    ...(state.operations.length ? state.operations.slice().reverse().map(op => column([
+    ...(operations.length ? operations.slice().reverse().map(op => column([
       row(`activity-row-${op.id}`, [inline([status(OPERATION_KIND[op.status], OPERATION_STATUS[op.status] || op.status), title(op.title || op.label)]),
-        op.context && caption(op.context), text(op.progress, { wrap: 'wrap', ...(op.status === 'failure' ? { color: 'error' } : {}) })], [
-        op.status === 'running' && button(`cancel-${op.id}`, op.cancelled ? 'Cancelling…' : 'Cancel operation', () => actions.cancel(op.id), { plain: true, available: !op.cancelled }),
+        (op.context || op.remote) && caption([op.context, op.remote && `Session ${op.session || 'elsewhere'}`].filter(Boolean).join(' · ')),
+        text(op.progress, { wrap: 'wrap', ...(op.status === 'failure' ? { color: 'error' } : {}) })], [
+        // Only the session that runs an operation can stop it.
+        op.status === 'running' && !op.remote && button(`cancel-${op.id}`, op.cancelled ? 'Cancelling…' : 'Cancel operation', () => actions.cancel(op.id), { plain: true, available: !op.cancelled }),
         op.result && toggle(`activity-${op.id}`, 'Details')]),
       op.result?.effects?.message && status('warning', op.result.effects.message),
       state.expanded[`activity-${op.id}`] && Code({ source: resultText(op.result), language: 'json', wrap: 'wrap' }),
@@ -147,7 +151,6 @@ export function renderPane(ui, state, actions, options = {}) {
 
   if (state.tab === 'Settings') {
     const diagnostics = record(state.results['projects.runtime-diagnostics']?.data);
-    const unsaved = ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl'].some(key => state.editedSettings.has(key) && (state.savedSettings[key] || '') !== f[key]);
     body = column([
       card('MainSequence account', [
         state.initializing ? muted('Checking your saved connection…') : signedIn ? status('success', `Signed in as ${session.username || 'MainSequence account'}`) : auth?.status === 'failure' ? status('error', auth.summary) : muted('Sign in with your browser to use projects, agents and tools.'),
@@ -163,10 +166,9 @@ export function renderPane(ui, state, actions, options = {}) {
         buttons([button('pick-base', 'Choose folder', project('pick-folder', { destination: 'baseDir' }), { plain: true })]),
         input('backend', 'Backend URL'),
         input('commandCenterUrl', 'Command Center URL (optional)'),
-        caption('Edits apply now. Save keeps them for future sessions.'),
+        caption('Changes apply to every MainSequence session.'),
         state.preferencesLoading && muted('Loading workspace settings…'),
         state.results['projects.workspace-preferences']?.status === 'failure' && status('warning', 'Saved workspace preferences could not be read. Check the displayed values before continuing.'),
-        inline([button('save-settings', 'Save settings', actions.saveSettings, { primary: true }), unsaved && caption('Unsaved changes')]),
       ]),
       card('Advanced', [
         toggle('runtime', 'Runtime & diagnostics'),
@@ -177,7 +179,7 @@ export function renderPane(ui, state, actions, options = {}) {
           button('diagnostics', 'Run diagnostics', project('runtime-diagnostics')),
           state.results['projects.runtime-diagnostics']?.status === 'failure' && status('error', state.results['projects.runtime-diagnostics'].summary),
           toggle('runtime-paths', 'Executable overrides'),
-          state.expanded['runtime-paths'] && column([input('nodePath', 'Node.js executable', 'node'), button('save-runtime-settings', 'Save overrides', actions.saveSettings)]),
+          state.expanded['runtime-paths'] && input('nodePath', 'Node.js executable', 'node'),
           state.results['projects.runtime-diagnostics'] && toggle('runtime-details', 'Details'),
           state.expanded['runtime-details'] && Code({ source: resultText(state.results['projects.runtime-diagnostics']), language: 'json', wrap: 'wrap' }),
         ]),
@@ -208,7 +210,7 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated, environ
       // Remote-only repository: choose a branch, then set it up under the repositories folder.
       const branches = rows(selected?.branches).map(r => ({ value: r.repository_branch, label: r.repository_branch }));
       const name = selected?.code_repository_name || selected?.name || detail.repositoryUid;
-      const setup = state.operations.findLast(op => op.setupTarget === setupKey(f));
+      const setup = allOperations(state).findLast(op => op.setupTarget === setupKey(f));
       const settingUp = setup?.status === 'running';
       return column([back, heading(name), caption(`${selected ? typeLabel(selected) : 'Repository'} · not on this computer`),
         card('Set up', [
@@ -222,7 +224,7 @@ function renderCode(p, state, actions, { dev, project, mut, busy, gated, environ
             status(settingUp ? 'warning' : setup.status === 'success' ? 'success' : setup.status === 'cancelled' ? 'info' : 'error',
               settingUp ? 'Setting up locally…' : setup.status === 'success' ? 'Local setup completed' : setup.status === 'cancelled' ? 'Setup cancelled' : 'Setup failed'),
             caption(setup.context), text(setup.progress, { wrap: 'wrap' }),
-            settingUp && button('cancel-setup', setup.cancelled ? 'Cancelling…' : 'Cancel setup', () => actions.cancel(setup.id), { plain: true, available: !setup.cancelled }),
+            settingUp && !setup.remote && button('cancel-setup', setup.cancelled ? 'Cancelling…' : 'Cancel setup', () => actions.cancel(setup.id), { plain: true, available: !setup.cancelled }),
             setup.result?.effects && status('warning', setup.result.effects.message),
             setup.status === 'failure' && caption('Review the error and any partial changes before starting setup again.'),
             setup.result?.data?.root && button('setup-open', 'Open local repository', () => actions.openCode({ root: setup.result.data.root, repositoryUid: detail.repositoryUid }), { primary: true }),

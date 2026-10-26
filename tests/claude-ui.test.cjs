@@ -38,9 +38,12 @@ function catalogData(rows, toolsFor, extra = {}) {
 }
 
 const projectId = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-function projectFixture() {
+function projectFixture(options = {}) {
+  return fixture({ ...options, respond: projectRespond });
+}
+function projectRespond({request:q}) {
   const project = { uid: projectId(1), name: 'Rates research', description: 'Price curves', organization_environment_uid: projectId(2), code_repository_branch_uids: [projectId(4),projectId(5)] };
-  return fixture({ respond: ({request:q}) => {
+  {
     let data = {};
     if (q.action === 'mcp-environments') data = [{uid:projectId(2),name:'Research'},{uid:projectId(9),name:'Production'}];
     if (q.action === 'mcp-list' || q.action === 'mcp-discover') data = [];
@@ -48,7 +51,7 @@ function projectFixture() {
     if (q.action === 'organization-project') data = { project,branches:['main','feature/risk'].map((branch,index)=>({uid:projectId(4+index),code_repository_uid:projectId(3),code_repository_name:'Pricing',repository_branch:branch,is_initialized:true})) };
     if (['organization-project-setup','read-project-workspace'].includes(q.action)) data = {root:'/repos/project-workspace',backend:'https://api.main-sequence.app',name:project.name,projectUid:project.uid,environmentUid:projectId(2),repositories:[{repositoryUid:projectId(3),branchUid:projectId(4),name:'Pricing',path:'/repos/repositories/Pricing',branch:'main'},{repositoryUid:projectId(7),branchUid:projectId(5),name:'Backend',path:'/repos/repositories/Backend',branch:'main'}]};
     return success(q.action,data);
-  }});
+  }
 }
 async function selectFixtureProject(f) {
   await f.press('tab-Projects');f.find(await f.pane(),'mcp-environment').props.onSelect(projectId(2));await flush();
@@ -97,7 +100,8 @@ function fixture(options = {}) {
     if (type === 'Select') assert.ok(props.options.length > 0 && props.options.length <= 64, 'Native Select supports 1–64 options');
     return { type, props };
   }]));
-  let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1';
+  let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1', now = 1000;
+  const json = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   const on = (event, matcher, hook) => {
     if (typeof matcher === 'function') { hook = matcher; matcher = {}; }
     const item = { event, matcher, hook }; hooks.push(item);
@@ -107,13 +111,16 @@ function fixture(options = {}) {
     plugin: { root: '/plugin', name: 'mainsequence' },
     session: { cwd: async () => options.cwd || '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }),
       ...(options.surfaces ? { surfaces: async () => options.surfaces } : {}) },
-    store: { get: async key => stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined, set: async (key, value) => { stores.set(key, value); calls.push({ store: key, value }); } },
+    // Values round-trip through JSON, as the engine's store file does; sessions given one `stores` share it.
+    store: { get: async key => json(stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined),
+      set: async (key, value) => { stores.set(key, json(value)); calls.push({ store: key, value }); },
+      delete: async key => { stores.delete(key); calls.push({ storeDelete: key }); }, keys: async () => [...stores.keys()] },
     prompt: { read: async () => ({ text: draft, cursor: draft.length }), fill: async value => { calls.push({ filled: value }); if (options.refuseFill) return { isFilled: false }; draft = value.text; return { isFilled: true, text: draft, cursor: draft.length }; }, submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
     command: { register: async spec => { calls.push({ command: spec }); }, run: async spec => { calls.push({runCommand:spec}); return options.commandResult ? options.commandResult(spec) : {text:`Added ${spec.args} as a working directory for this session`}; } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool', status: value => { calls.push({ status: value }); } },
     tool: { register: async spec => { registered.push(spec); if (spec.name !== 'ms_deployment_status') tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
-    clock: { now: async () => 1000, after: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() {} }; timers.push(timer); return timer; } },
+    clock: { now: async () => now, after: (ms, callback) => { const timer = { ms, callback, once: true, cancel() { timer.cancelled = true; } }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() { timer.cancelled = true; } }; timers.push(timer); return timer; } },
     env: { get: async key => env.get(key), set: async (key, value) => { value === undefined ? env.delete(key) : env.set(key, value); } },
     fs: { read: async () => JSON.stringify({ claudeAiOauth: { accessToken: 'secret-new-token', expiresAt: 1000000 } }) },
     process: {
@@ -149,7 +156,9 @@ function fixture(options = {}) {
     for (const child of tree.props?.children || []) { const found = find(child, key); if (found) return found; } };
   const press = async key => { const node = find(await pane(), key); assert.ok(node, `Missing ${key}`); node.props.onPress(); await flush(); };
   const field = async (key, value) => { const node = find(await pane(), `field-${key}`); assert.ok(node, `Missing field ${key}`); node.props.onInput(value); await flush(); };
-  return { hooks, $, on, emit, pane, press, field, calls, tools, registered, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; } };
+  /** Runs the pending one-shot timers of these delays (the shared-state writers), as their time passing would. */
+  const fire = async (...delays) => { for (const timer of timers.filter(t => t.once && !t.cancelled && !t.fired && delays.includes(t.ms))) { timer.fired = true; timer.callback(); } await flush(); };
+  return { hooks, $, on, emit, pane, press, field, fire, calls, tools, registered, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; }, get now() { return now; }, set now(value) { now = value; } };
 }
 
 test('one native pane has five sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
@@ -352,8 +361,9 @@ test('MainSequence login, renewal and logout remain available without touching C
   await f.press('login'); assert.match(JSON.stringify(await f.pane()), /fixture@example.test/);
   await f.press('tab-Settings'); await f.press('toggle-connection-actions'); await f.press('refresh-token');
   await f.press('logout'); await f.press('confirm-action'); assert.ok(f.find(await f.pane(), 'login')); assert.ok(f.find(await f.pane(), 'settings-login'));
-  await f.press('save-settings'); const stored = f.calls.find(c => c.store).value;
-  assert.deepEqual(stored.provider, saved.provider); assert.equal(stored.claudeExecutable, saved.claudeExecutable);
+  assert.equal(f.find(await f.pane(), 'save-settings'), undefined, 'settings are shared as they change, with no Save step');
+  await f.field('commandCenterUrl', 'https://cc.example'); await f.fire(800); const stored = f.calls.find(c => c.store === 'settings').value;
+  assert.deepEqual(stored.provider, saved.provider); assert.equal(stored.claudeExecutable, saved.claudeExecutable); assert.equal(stored.commandCenterUrl, 'https://cc.example');
   for (const event of ['turn.start','turn.step','turn.complete','session.measure','classic.StopFailure']) assert.equal(f.hooks.some(h => h.event === event), false, event);
   await f.emit('session.end'); assert.deepEqual(Object.fromEntries(f.env), {HOME:'/fixture/home',...original});
   assert.ok(f.calls.filter(c => c.request).every(c => c.request.scope !== 'accounts'));
@@ -413,7 +423,8 @@ test('saved and user-edited settings win over late defaults, with unknown saved 
  const f=fixture({saved,respond:d=>success(d.request.action,{backend:'https://discovered.example',baseDir:'/discovered'})});register(f.on);await f.emit('session.start',{surface:'desktop'});await f.press('tab-Settings');
  await f.field('baseDir','/edited');for(const timer of f.timers.filter(t=>t.ms===0))timer.callback();await flush();
  const tree=await f.pane();assert.equal(f.find(tree,'field-backend').props.value,saved.backend);assert.equal(f.find(tree,'field-baseDir').props.value,'/edited');
- assert.equal(f.calls.some(c=>c.store),false);await f.press('save-settings');assert.deepEqual(f.calls.find(c=>c.store==='settings').value.provider,saved.provider);
+ assert.equal(f.calls.some(c=>c.store),false,'an edit settles before it is shared');await f.fire(800);
+ const stored=f.calls.find(c=>c.store==='settings').value;assert.deepEqual(stored.provider,saved.provider);assert.equal(stored.baseDir,'/edited');assert.equal(stored.backend,saved.backend);
 });
 test('environment selection scopes tools and denies stale calls, including changes while awaiting confirmation',async()=>{
  const {register}=await load();let asks=0;let approve;
@@ -594,7 +605,7 @@ test('failed media revalidation retains a displayed icon', async () => {
  assert.ok(svgNodes(await f.pane()).some(node => node.props.source.includes('<text>idle</text>')));
 });
 
-test('agent icons are re-checked on their own while Agents is shown, with the held ETag, and only changed ones are redrawn', async () => {
+test('agent icons are re-checked every ten minutes while Agents is shown, with the held ETag, and only changed ones are redrawn', async () => {
  // The backend's icon for the agent: a tag and an image. The fixture answers a held tag with "unchanged".
  let tag = '"tag-one"', image = iconImage('one');
  const media = [];
@@ -607,27 +618,28 @@ test('agent icons are re-checked on their own while Agents is shown, with the he
  } });
  const shown = async () => svgNodes(await f.pane()).find(node => node.props.width === 20)?.props.source;
  assert.ok((await shown()).includes('<text>one</text>'));
- assert.equal(media.length, 1); assert.equal(media[0].known, undefined, 'the first read holds no tag');
- const poll = () => f.timers.filter(t => t.ms === 60000 && !t.cancelled);
+ assert.equal(media.length, 1); assert.equal(media[0].known, undefined, 'the first read holds no tag'); assert.equal(media[0].refresh, undefined);
+ const poll = () => f.timers.filter(t => t.ms === 600000 && !t.cancelled);
+ const tick = async () => { f.now += 600000; poll()[0].callback(); await flush(); };
  const track = timer => { const cancel = timer.cancel; timer.cancel = () => { timer.cancelled = true; cancel(); }; return timer; };
  assert.equal(poll().length, 1, 'one re-check timer while the Agents list is shown'); track(poll()[0]);
  // Unchanged: the held tag goes out, the drawn icon stays, nothing is redrawn from an empty record.
- poll()[0].callback(); await flush();
+ await tick();
  assert.equal(media.length, 2); assert.deepEqual(media[1].known, { [agentUid]: '"tag-one"' }); assert.equal(media[1].includePoses, false);
  assert.ok((await shown()).includes('<text>one</text>'));
  // Changed in Command Center: the next re-check gets the new image and tag, and the pane redraws it.
  tag = '"tag-two"'; image = iconImage('two');
- poll()[0].callback(); await flush();
+ await tick();
  assert.deepEqual(media[2].known, { [agentUid]: '"tag-one"' });
  assert.ok((await shown()).includes('<text>two</text>'));
- poll()[0].callback(); await flush();
+ await tick();
  assert.deepEqual(media[3].known, { [agentUid]: '"tag-two"' }, 'the new tag is held from then on');
  assert.ok((await shown()).includes('<text>two</text>'));
  // A failed re-check keeps the drawn icon and its tag.
  const unavailable = f.$.process.spawn; f.$.process.spawn = input => { const envelope = JSON.parse(input.input); if (envelope.request.request.action !== 'agent-icons') return unavailable(input);
    const line = JSON.stringify({ type: 'result', id: envelope.id, result: { schemaVersion: 1, action: 'agent-icons', status: 'failure', summary: 'Optional media unavailable' } }) + '\n';
    const stream = (async function* () { yield { stream: 'stdout', text: line }; return { code: 0, signal: null }; })(); stream.result = Promise.resolve({ code: 0, signal: null }); return stream; };
- poll()[0].callback(); await flush(); assert.ok((await shown()).includes('<text>two</text>')); f.$.process.spawn = unavailable;
+ await tick(); assert.ok((await shown()).includes('<text>two</text>')); f.$.process.spawn = unavailable;
  // The timer follows the section and the pane: another section or a closed pane stops it; Agents brings it back.
  await f.press('tab-Tools'); assert.equal(poll().length, 0, 'no re-check off the Agents section');
  await f.press('tab-Agents'); assert.equal(poll().length, 1); track(poll()[0]);
@@ -635,7 +647,7 @@ test('agent icons are re-checked on their own while Agents is shown, with the he
  await f.pane(); assert.equal(poll().length, 1, 'reopening the pane on Agents resumes it'); track(poll()[0]);
  // Refresh re-lists and re-checks at once, regardless of age; Details loads poses without a tag.
  const before = media.length; await f.press('agents-refresh');
- assert.ok(media.length > before); assert.deepEqual(media.at(-1).known, { [agentUid]: '"tag-two"' });
+ assert.ok(media.length > before); assert.deepEqual(media.at(-1).known, { [agentUid]: '"tag-two"' }); assert.equal(media.at(-1).refresh, true, 'Refresh reads past the shared cache');
  await f.press(`agent-details-${agentUid}`); assert.equal(media.at(-1).includePoses, true); assert.equal(media.at(-1).known, undefined);
  assert.ok(svgNodes(await f.pane()).some(node => node.props.width === 32 && node.props.source.includes('<text>two</text>')));
  // No tag or image is persisted, and an environment change ends the re-check.
@@ -1536,4 +1548,226 @@ test('ms_deployment_status reads the branch’s latest run and the failed step�
   assert.equal(none.registered.some(t => t.name === 'ms_deployment_status'), false, 'no registration without an environment');
   assert.match((await none.emit('tool.call', { tool: 'mcp__mainsequence__ms_deployment_status', tool_use_id: 'deploy-6' })).deny, /Choose a MainSequence organization environment/);
   assert.equal(none.calls.some(c => c.request?.request.action.startsWith('deployment-')), false);
+});
+
+// One MainSequence across Claude sessions: sessions in different folders over one plugin store.
+const settle = async () => { for (let i = 0; i < 6; i++) await flush(); };
+async function sessions(respond) {
+  const { register } = await load(); const stores = new Map();
+  return Promise.all(['a', 'b'].map(async name => {
+    const s = fixture({ stores, respond, hostSessionId: `session-${name}`, cwd: `/work/${name}` });
+    register(s.on); await s.emit('session.start', { surface: 'desktop' });
+    for (const timer of s.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+    return s;
+  }));
+}
+/** Switching to a session in Desktop draws it again, after what the other session did. */
+const switchTo = async s => { s.now += 5000; await s.pane(); await settle(); return s.pane(); };
+function sharedRespond(d) {
+  const q = d.request;
+  if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'shared@example.test' });
+  if (q.action === 'mcp-environments') return success(q.action, [{ uid: 'research', name: 'Research' }, { uid: 'production', name: 'Production' }]);
+  const rows = [{ backend: 'https://api.main-sequence.app', resource_release_uid: `release-${q.environmentUid}`, name: 'CRM',
+    mcp_connection: { organization_environment_uid: q.environmentUid, organization_environment_name: q.environmentUid === 'production' ? 'Production' : 'Research' } }];
+  if (q.action === 'mcp-list') return success(q.action, rows);
+  if (q.action === 'mcp-catalog') return success(q.action, catalogData(rows, () => [{ name: 'lookup', inputSchema: { type: 'object' } }]));
+  return success(q.action, { count: 0, results: [] });
+}
+
+test('an environment and section chosen in one session are what every other session shows, and back', async () => {
+  const [a, b] = await sessions(sharedRespond);
+  await a.press('tab-Tools'); a.find(await a.pane(), 'mcp-environment').props.onSelect('production'); await settle(); await a.fire(300);
+  assert.equal(a.stores.get('mcp-environments')['https://api.main-sequence.app'], 'production');
+  assert.equal(b.tools.length, 0);
+  let tree = await switchTo(b);
+  assert.equal(b.find(tree, 'tab-Tools').props.variant, 'primary');
+  assert.equal(b.find(tree, 'mcp-environment').props.value, 'production');
+  assert.match(b.tools.at(-1).description, /Production/, 'the other session registers the chosen environment\'s tools');
+  b.find(tree, 'mcp-environment').props.onSelect('research'); await settle();
+  tree = await switchTo(a);
+  assert.equal(a.find(tree, 'mcp-environment').props.value, 'research');
+  assert.match(a.tools.at(-1).description, /Research/);
+  const stale = `mcp__mainsequence__${a.tools.find(tool => /Production/.test(tool.description)).name}`;
+  assert.match((await a.emit('tool.call', { tool: stale })).deny, /no longer connected/, 'the previous environment\'s tools are refused');
+});
+
+test('a backend in the background session follows before its MainSequence tools run', async () => {
+  const [a, b] = await sessions(sharedRespond);
+  await a.press('tab-Tools'); a.find(await a.pane(), 'mcp-environment').props.onSelect('production'); await settle();
+  await b.press('tab-Tools'); b.find(await b.pane(), 'mcp-environment').props.onSelect('production'); await settle();
+  const production = `mcp__mainsequence__${b.tools.at(-1).name}`;
+  a.find(await a.pane(), 'mcp-environment').props.onSelect('research'); await settle();
+  // No draw of b: the person never looked at it. Its model calls the tool it had.
+  b.now += 5000;
+  assert.match((await b.emit('tool.call', { tool: production })).deny, /no longer connected/);
+  assert.equal(b.calls.some(c => c.request?.request.action === 'mcp-tool-call'), false);
+  assert.match(b.tools.at(-1).description, /Research/);
+});
+
+test('settings changed in one session reach the others with no Save step, and each keeps its own This session card', async () => {
+  const [a, b] = await sessions(sharedRespond);
+  await a.press('tab-Settings'); await a.field('commandCenterUrl', 'https://cc.example'); await a.field('baseDir', '/shared/repos');
+  assert.equal(a.stores.has('settings'), false, 'typing settles before it is shared');
+  await a.fire(800, 300);
+  let tree = await switchTo(b);
+  assert.equal(b.find(tree, 'field-baseDir').props.value, '/shared/repos');
+  assert.equal(b.find(tree, 'field-commandCenterUrl').props.value, 'https://cc.example');
+  assert.match(JSON.stringify(tree), /Changes apply to every MainSequence session/);
+  await b.press('tab-Home'); await b.fire(300);
+  tree = await switchTo(a);
+  assert.equal(a.find(tree, 'tab-Home').props.variant, 'primary');
+  assert.match(JSON.stringify(a.find(tree, 'home-session')), /\/work\/a/);
+  assert.doesNotMatch(JSON.stringify(a.find(tree, 'home-session')), /\/work\/b/);
+  assert.match(JSON.stringify(b.find(await b.pane(), 'home-session')), /\/work\/b/);
+});
+
+test('a session editing a setting keeps its own value until it is shared', async () => {
+  const [a, b] = await sessions(sharedRespond);
+  await a.press('tab-Settings'); await a.field('commandCenterUrl', 'https://first.example'); await a.fire(800, 300);
+  await switchTo(b); await b.field('commandCenterUrl', 'https://typing.example');
+  await a.field('commandCenterUrl', 'https://second.example'); await a.fire(800);
+  assert.equal(b.find(await switchTo(b), 'field-commandCenterUrl').props.value, 'https://typing.example');
+  await b.fire(800);
+  assert.equal(b.stores.get('settings').commandCenterUrl, 'https://typing.example');
+  assert.equal(a.find(await switchTo(a), 'field-commandCenterUrl').props.value, 'https://typing.example');
+});
+
+test('Activity lists every session\'s operations, only the running session can cancel, and a sign-in reaches the others', async () => {
+  let signedIn = false;
+  const respond = d => { const q = d.request; if (q.action === 'login') signedIn = true;
+    return success(q.action, q.action === 'auth-status' ? { authenticated: signedIn, username: 'shared@example.test' } : {}); };
+  const [a, b] = await sessions(respond);
+  assert.ok(b.find(await b.pane(), 'login'), 'b starts signed out');
+  const finish = delayRequest(a, 'login'); await a.press('login'); await a.fire(500);
+  const login = a.calls.find(c => c.request?.request.action === 'login');
+  await b.press('tab-Activity');
+  let tree = await switchTo(b);
+  assert.equal(b.find(tree, 'tab-Activity').props.label, '1 running');
+  assert.match(JSON.stringify(b.find(tree, `activity-row-${login.id}`)), /Sign in to MainSequence.*Session a/);
+  assert.equal(b.find(tree, `cancel-${login.id}`), undefined, 'another session\'s operation has no Cancel');
+  await a.press('tab-Activity'); assert.ok(a.find(await a.pane(), `cancel-${login.id}`));
+  finish(); await settle(); await a.fire(500);
+  tree = await switchTo(b);
+  assert.match(JSON.stringify(tree), /shared@example.test/, 'the other session re-reads the machine login');
+  assert.match(JSON.stringify(b.find(tree, `activity-row-${login.id}`)), /Completed/);
+  assert.doesNotMatch(JSON.stringify([...a.stores]), /private-error-token|accessToken/);
+  // Reads draw a session's own screen and stay out of the others' Activity.
+  assert.equal(JSON.stringify(a.stores.get('activity:session-a')).includes('Check MainSequence connection'), false);
+});
+
+test('a running operation whose session stopped reporting is shown as interrupted', async () => {
+  const [a, b] = await sessions(sharedRespond);
+  const op = { id: 'session-a-99', title: 'Install dependencies', context: '/work/a', label: 'devtools · install', status: 'running', progress: 'Installing…', startedAt: 1000 };
+  a.stores.set('activity:session-a', { at: 1000, session: 'a', operations: [op] });
+  await b.press('tab-Activity');
+  b.now = 1000 + 120000; let shown = await switchTo(b);
+  assert.match(JSON.stringify(b.find(shown, 'activity-row-session-a-99')), /Running/);
+  b.now += 120000; shown = await switchTo(b);
+  assert.match(JSON.stringify(b.find(shown, 'activity-row-session-a-99')), /Interrupted.*Stopped reporting/);
+  assert.equal(b.find(shown, 'tab-Activity').props.label, 'Activity', 'an interrupted operation is not counted as running');
+  b.now += 8 * 86400000; await switchTo(b);
+  assert.equal(b.stores.has('activity:session-a'), false, 'a week-old session\'s Activity is removed');
+});
+
+test('a session ends with nothing left running in the others\' Activity', async () => {
+  const [a, b] = await sessions(d => success(d.request.action, d.request.action === 'auth-status' ? { authenticated: false } : {}));
+  delayRequest(a, 'login'); await a.press('login');
+  await a.emit('session.end');
+  const published = a.stores.get('activity:session-a').operations;
+  assert.deepEqual(published.map(op => [op.title, op.status]), [['Sign in to MainSequence', 'cancelled']]);
+  await b.press('tab-Activity'); assert.doesNotMatch(JSON.stringify(await switchTo(b)), /1 running/);
+});
+
+test('a project opened in one session opens in the others, which follow it back to the list', async () => {
+  const [a, b] = await sessions(projectRespond);
+  await selectFixtureProject(a); await settle(); await a.fire(300);
+  let tree = await switchTo(b);
+  assert.equal(b.find(tree, 'tab-Projects').props.variant, 'primary');
+  assert.ok(b.find(tree, `project-repository-${projectId(3)}`), 'the same project detail');
+  await a.press('projects-back'); await a.fire(300);
+  tree = await switchTo(b);
+  assert.equal(b.find(tree, `project-repository-${projectId(3)}`), undefined);
+  assert.ok(b.find(tree, `project-${projectId(1)}`), 'the project list');
+});
+
+test('a session reading the store never writes it, and does not re-apply what it shared itself', async () => {
+  const [a, b] = await sessions(sharedRespond);
+  const writes = () => a.calls.filter(c => c.store).length;
+  const before = writes();
+  for (let i = 0; i < 3; i++) await switchTo(a);
+  assert.equal(writes(), before, 'draws only read');
+  await a.press('tab-Agents'); await a.fire(300);
+  const view = a.calls.filter(c => c.store === 'pane-view').length;
+  for (let i = 0; i < 3; i++) await switchTo(a);
+  assert.equal(a.calls.filter(c => c.store === 'pane-view').length, view);
+  assert.equal(a.calls.filter(c => c.request?.request.action === 'mcp-environments').length, 1, 'its own section is not reloaded from its own write');
+  assert.ok(b);
+});
+
+function agentsRespond(count) {
+  const account = 'agent-user@example.test';
+  const agents = Array.from({ length: count }, (_, i) => ({ uid: agentId(20 + i), name: `Agent ${i}`, description: '', environmentUid: agentEnvironment, environmentName: 'Research',
+    runtimeState: 'current', runtimeReleaseUid: agentId(5), responseKinds: ['message'], skills: [] }));
+  return d => {
+    const r = d.request;
+    if (r.action === 'auth-status') return success(r.action, { authenticated: true, username: account });
+    if (r.action === 'mcp-environments') return success(r.action, [{ uid: agentEnvironment, name: 'Research' }]);
+    if (r.action === 'mcp-list' || r.action === 'mcp-discover') return success(r.action, []);
+    if (r.action === 'agents-list') return success(r.action, { account, results: agents, count: agents.length });
+    return iconResponse(r) || success(r.action, {});
+  };
+}
+const listings = s => s.calls.filter(c => c.request?.request.action === 'agents-list').length;
+
+test('Agents are drawn from a listing any session read in the last ten minutes; an older one is drawn while it is read again; Refresh reads at once', async () => {
+  const [a, b] = await sessions(agentsRespond(2));
+  await a.press('tab-Agents'); a.find(await a.pane(), 'mcp-environment').props.onSelect(agentEnvironment); await settle(); await a.fire(300);
+  assert.equal(listings(a), 1);
+  await a.press('tab-Home'); await a.press('tab-Agents'); assert.equal(listings(a), 1, 'pressing Agents again reads nothing');
+  await a.fire(300);
+  let tree = await switchTo(b);
+  assert.ok(b.find(tree, `agent-talk-${agentId(20)}`)); assert.equal(listings(b), 0, 'the other session draws the listing session a read');
+  assert.ok(svgNodes(tree).some(node => node.props.width === 20), 'with its icons');
+  await b.press('agents-refresh'); await settle(); assert.equal(listings(b), 1, 'Refresh reads the backend');
+  assert.equal(b.calls.filter(c => c.request?.request.action === 'agent-icons').at(-1).request.request.refresh, true);
+  // A third session ten minutes later: the listing is drawn at once and read again behind it.
+  const { register } = await load();
+  const c = fixture({ stores: a.stores, respond: agentsRespond(2), hostSessionId: 'session-c', cwd: '/work/c' }); register(c.on);
+  await c.emit('session.start', { surface: 'desktop' }); c.now = b.now + 11 * 60000;
+  const finish = delayRequest(c, 'agents-list');
+  for (const timer of c.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  tree = await switchTo(c);
+  assert.ok(c.find(tree, `agent-talk-${agentId(21)}`)); assert.doesNotMatch(JSON.stringify(tree), /Loading agents from this environment/);
+  assert.equal(listings(c), 1); finish(); await settle();
+});
+
+test('icons of up to eight agents load in one worker, and the batches run at the same time', async () => {
+  const { register } = await load(); const f = fixture({ respond: agentsRespond(12) }); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  const original = f.$.process.spawn, batches = []; let release; const gate = new Promise(resolve => { release = resolve; });
+  f.$.process.spawn = input => {
+    const r = JSON.parse(input.input).request.request; if (r.action !== 'agent-icons') return original(input);
+    batches.push(r.agentUids.length); const child = original(input);
+    const stream = (async function* () { await gate; for await (const chunk of child) yield chunk; })(); stream.result = child.result; return stream;
+  };
+  await f.press('tab-Agents'); f.find(await f.pane(), 'mcp-environment').props.onSelect(agentEnvironment); await settle();
+  assert.deepEqual(batches, [8, 4], 'both batches are asked for before either answers');
+  release(); await settle();
+  assert.equal(svgNodes(await f.pane()).filter(node => node.props.width === 20).length, 12);
+});
+
+test('an icon the backend failed to deliver is tried again a minute later, not at the next ten-minute check', async () => {
+  let unavailable = true;
+  const respond = agentsRespond(2), f = fixture({ respond: d => {
+    const answer = respond(d); if (d.request.action === 'agent-icons' && unavailable) Object.assign(answer.data.icons[agentId(21)], { images: { idle: null }, failed: true }); return answer;
+  } });
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  await f.press('tab-Agents'); f.find(await f.pane(), 'mcp-environment').props.onSelect(agentEnvironment); await settle();
+  assert.equal(svgNodes(await f.pane()).filter(node => node.props.width === 20).length, 1);
+  const reads = () => f.calls.filter(c => c.request?.request.action === 'agent-icons').length, before = reads();
+  unavailable = false; f.now += 60000; await f.fire(60000); await settle();
+  assert.equal(reads(), before + 1); assert.deepEqual(f.calls.filter(c => c.request?.request.action === 'agent-icons').at(-1).request.request.agentUids, [agentId(21)]);
+  assert.equal(svgNodes(await f.pane()).filter(node => node.props.width === 20).length, 2);
+  assert.equal(f.timers.filter(t => t.ms === 60000 && !t.fired && !t.cancelled).length, 0, 'nothing failed, nothing is retried');
 });

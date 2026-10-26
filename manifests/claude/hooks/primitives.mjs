@@ -5,8 +5,8 @@ export const STATUS = {
   success: { glyph: '●', color: 'success' }, warning: { glyph: '◌', color: 'warning' },
   error: { glyph: '!', color: 'error' }, info: { glyph: '○', color: 'subtle' },
 };
-export const OPERATION_STATUS = { running: 'Running', success: 'Completed', failure: 'Failed', cancelled: 'Cancelled' };
-export const OPERATION_KIND = { running: 'warning', success: 'success', failure: 'error', cancelled: 'info' };
+export const OPERATION_STATUS = { running: 'Running', success: 'Completed', failure: 'Failed', cancelled: 'Cancelled', stale: 'Interrupted' };
+export const OPERATION_KIND = { running: 'warning', success: 'success', failure: 'error', cancelled: 'info', stale: 'info' };
 
 export function primitives(ui, state, actions) {
   const { Box, Text, Button, Input, Select, Code, Markdown, Svg } = ui;

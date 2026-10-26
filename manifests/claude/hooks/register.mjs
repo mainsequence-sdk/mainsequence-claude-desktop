@@ -1,4 +1,5 @@
-import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget } from './model.mjs';
+import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget,
+  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS } from './model.mjs';
 import { renderPane, renderRecovery } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
@@ -13,6 +14,7 @@ async function openPane($, state) {
   state.paneOpen = true; syncDeploymentPolling($, state); syncAgentIconPolling($, state);
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
+  syncSharedPolling($, state); void syncShared($, state, true);
 }
 
 function ensureBoot($, state, e) {
@@ -43,7 +45,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   const contextRevision = state.contextRevision, backend = state.fields.backend;
   if (!state.ready || state.closed) return fail(action, state.problem || 'This session is not ready.', 'UNSUPPORTED_ACTION');
   const setupTarget = action === 'setup' ? setupKey(domain.request) : null;
-  if (setupTarget && [...state.running.values()].some(op => op.setupTarget === setupTarget)) {
+  if (setupTarget && [...state.running.values(), ...state.remoteOperations.filter(op => op.status === 'running')].some(op => op.setupTarget === setupTarget)) {
     $.ui.toast('This repository is already being set up. Its progress is shown in Code.');
     return fail(action, 'This repository is already being set up.', 'PROJECT_BUSY');
   }
@@ -57,16 +59,20 @@ async function execute($, state, domain, quiet = false, observer = {}) {
     op.progress = 'Checking repository access and preparing the local folder…';
   }
   state.running.set(id, op); observer.started?.(op);
-  if (!quiet) { state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); statusLine($, state); update($); }
+  if (!quiet) {
+    state.operations.push(op); state.operations = state.operations.filter((value, index, all) => value.status === 'running' || index >= all.length - 30); statusLine($, state); update($);
+    // Activity is ordered across sessions by start time.
+    void $.clock.now().then(now => { op.startedAt = now; shareActivity($, state); }, () => {});
+  }
   const envelope = { protocolVersion: 1, id, request: domain };
-  let result = await runWorker($, state, envelope, op, message => { op.progress = message; observer.progress?.(message); if (!quiet) update($); });
+  let result = await runWorker($, state, envelope, op, message => { op.progress = message; observer.progress?.(message); if (!quiet) { update($); shareActivity($, state); } });
   rememberMcpNames(state, result);
   const publicResult = publicValue(result);
   // Catalog paging needs every tool; the generic activity preview caps arrays.
   if (action === 'mcp-tools' && Array.isArray(result.data?.tools)) publicResult.data.tools = result.data.tools.map(tool => publicValue(tool));
   op.status = publicResult.status; op.progress = publicResult.summary; op.result = publicResult;
   state.running.delete(id);
-  if (!quiet) statusLine($, state);
+  if (!quiet) { statusLine($, state); shareActivity($, state); }
   const currentMcp = !['mcp-tools', 'mcp-call'].includes(action) || domain.request.releaseUid === state.selectedMcp;
   // Session results depend on the backend alone: an environment or folder change while
   // the sign-in check is in flight must not discard it.
@@ -88,9 +94,9 @@ function rememberMcpNames(state, result) {
   }
 }
 
-/** Mirror the pane's running operations in Claude's status line. */
+/** Mirror the running operations of every session in Claude's status line. */
 function statusLine($, state) {
-  const running = state.operations.filter(op => op.status === 'running').length;
+  const running = allOperations(state).filter(op => op.status === 'running').length;
   $.ui.status(running ? `MainSequence: ${running} running` : undefined);
 }
 
@@ -128,16 +134,16 @@ async function runDev($, state, action, extra = {}) {
   if (action === 'mcp-discover') state.mcpOffset = domain.request.offset;
   const result = await execute($, state, domain);
   if (state.closed || revision !== state.contextRevision) return result;
+  // The other sessions re-read what this changed: the machine login, the environment's connections, the local checkouts.
+  const changed = result.status === 'success' && !extra.dryRun && (['login', 'logout'].includes(action) ? 'auth' : ['mcp-add', 'mcp-remove'].includes(action) ? 'mcp' : action === 'setup' ? 'repositories' : '');
+  if (changed) void signal($, state, changed).catch(() => {});
   if (result.status === 'success' && ['mcp-add', 'mcp-remove'].includes(action)) await refreshTools($, state);
   if (result.status === 'success' && ['login', 'logout', 'refresh-token'].includes(action)) await execute($, state, devRequest(state, 'auth-status', { check: true }), true);
   if (result.status === 'success' && !extra.dryRun && ['sync', 'install', 'update-sdk', 'update-agents', 'install-skills', 'skills-sync', 'env-cleanup'].includes(action)) {
     await execute($, state, devRequest(state, 'status'), true);
     if (action === 'update-sdk' || action === 'install') await execute($, state, devRequest(state, 'sdk-status'), true);
   }
-  if (result.status === 'success' && action === 'logout') {
-    clearMcp($, state); state.fields.mcpEnvironment = ''; delete state.results['devtools.mcp-environments']; state.selectedLocal = ''; state.fields.repositoryUid = ''; state.fields.branch = '';
-    for (const key of ['devtools.repositories', 'projects.local-repositories', 'devtools.mcp-list', 'devtools.mcp-discover', 'devtools.mcp-tools']) delete state.results[key];
-  }
+  if (result.status === 'success' && action === 'logout') clearSignedOut($, state);
   if (result.status === 'success' && action === 'mcp-remove') state.toolsView = 'list';
   if (result.status === 'success' && action === 'setup') {
     await runProject($, state, 'local-repositories');
@@ -147,6 +153,12 @@ async function runDev($, state, action, extra = {}) {
   }
   update($);
   return result;
+}
+
+/** What a sign-out leaves: no environment, MCP connections or repositories of the account. */
+function clearSignedOut($, state) {
+  clearMcp($, state); state.fields.mcpEnvironment = ''; delete state.results['devtools.mcp-environments']; state.selectedLocal = ''; state.fields.repositoryUid = ''; state.fields.branch = '';
+  for (const key of ['devtools.repositories', 'projects.local-repositories', 'devtools.mcp-list', 'devtools.mcp-discover', 'devtools.mcp-tools']) delete state.results[key];
 }
 
 async function runProject($, state, action, extra = {}) {
@@ -162,10 +174,10 @@ async function runProject($, state, action, extra = {}) {
   const data = record(result.data);
   if (action === 'workspace-profile' && typeof data.organization === 'string') state.fields.organization = data.organization;
   if (action === 'pick-folder' && typeof data.path === 'string' && ['root', 'baseDir'].includes(destination)) {
-    state.editedSettings.add(destination); state.fields[destination] = data.path;
-    if (destination === 'baseDir') { clearOrganizationProjects($, state); state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
-    if (destination === 'root') { state.contextRevision++; state.confirmation = null; delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
+    state.editedSettings.add(destination); applyField($, state, destination, data.path);
+    if (destination === 'baseDir') shareSettings($, state);
   }
+  if (action === 'delete-local') void signal($, state, 'repositories').catch(() => {});
   if (action === 'delete-local-preview') state.confirmation = { title: 'Permanently delete local repository', detail: `${data.root}\n${data.warning || ''}`,
     callback: () => runProject($, state, 'delete-local', { ...values, confirmation: data.confirmation }) };
   if (action === 'docker-preview') state.confirmation = { title: 'Build Docker image', detail: `${data.root}\n${(data.args || []).join(' ')}`,
@@ -218,11 +230,13 @@ function ensureInitialized($, state) {
   return state.initPromise;
 }
 
-/** A desktop render or a tool call proves the session is live even when session.start named no surface (SDK-hosted Desktop, reloads). */
+/** A desktop render or a tool call proves the session is live even when session.start named no surface (SDK-hosted Desktop, reloads).
+ * Desktop draws a session again when the person switches to it: the draw reads what the other sessions changed. */
 function wakeOnDesktop($, state, e) {
   if (e.surface !== 'desktop' || state.paneFault) return;
   if (!state.booted && !state.booting) { void ensureBoot($, state, e); return; }
   if (state.booted && !state.initPromise) void ensureInitialized($, state);
+  else void syncShared($, state);
 }
 
 async function toolsReady($, state) {
@@ -313,7 +327,11 @@ async function selectEnvironment($, state, uid, persist = true) {
   state.environmentSelections[backend] = uid;
   if (persist) {
     const previous = record(await $.store.get('mcp-environments'));
-    if (revision === state.contextRevision && !state.closed) await $.store.set('mcp-environments', { ...previous, [backend]: uid });
+    if (revision === state.contextRevision && !state.closed) {
+      const selections = { ...previous, [backend]: uid };
+      await $.store.set('mcp-environments', selections);
+      state.environmentSelections = selections; state.shared.environments = JSON.stringify(selections);
+    }
   }
   if (!uid || revision !== state.contextRevision || state.closed) return;
   // A slow connected server must not hold the directory behind tool registration.
@@ -329,16 +347,58 @@ async function loadEnvironments($, state) {
     const result = await execute($, state, request('devtools', 'mcp-environments', { backend: state.fields.backend }), true);
     if (revision !== state.contextRevision || state.closed) return;
     if (result.status !== 'success') { clearMcp($, state); state.fields.mcpEnvironment = ''; return; }
-    const selected = state.fields.mcpEnvironment || state.environmentSelections[state.fields.backend];
+    // The shared selection wins: another session may have chosen a different environment since this one did.
+    const selected = state.environmentSelections[state.fields.backend] || state.fields.mcpEnvironment;
     const uid = rows(result.data).some(row => row.uid === selected) ? selected : '';
     state.environmentsLoading = false; update($);
     await selectEnvironment($, state, uid, false);
   } finally { state.environmentsLoading = false; update($); }
 }
 
-function actionsFor($, state) {
+function selectTab($, state, tab) {
+  if (!VIEWS.includes(tab)) return;
+  state.tab = tab; state.confirmation = null;
+  // Remote-run polling and the agent icon re-check follow the section: timers for what is no longer shown are cancelled here.
+  syncDeploymentPolling($, state); syncAgentIconPolling($, state); update($);
+  loadTab($, state);
+}
+/** What the open section draws and has not loaded yet. */
+function loadTab($, state) {
+  const tab = state.tab;
   const background = work => { void Promise.resolve(work).catch(() => $.ui.toast('The action could not complete. Check Activity and diagnostics.')); };
-  return {
+  // While startup is still resolving the session, initializeWorkspace loads the
+  // environments for whichever section is open; a second load here would clear
+  // and refetch agents, tools and icons.
+  if (['Projects', 'Tools', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) { if (!state.initializing) background(loadEnvironments($, state)); }
+  else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
+  if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
+  if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
+  if (tab === 'Home' || tab === 'Code') background(ensureLatestDeployments($, state));
+}
+
+/** A field edit: the shared settings and the session's own operation target clear what depended on them. */
+function applyField($, state, key, value) {
+  if (!Object.hasOwn(state.fields, key)) return;
+  state.fields[key] = String(value);
+  if (key === 'repositoryUid') state.fields.branch = '';
+  if (['branch', 'baseDir'].includes(key)) state.confirmation = null;
+  if (key === 'backend') {
+    state.selectPages = {};
+    clearMcp($, state); state.fields.mcpEnvironment = '';
+    state.contextRevision++; state.codeDetail = null;
+    state.fields.repositoryUid = ''; state.fields.branch = ''; state.fields.organization = ''; state.selectedLocal = '';
+    for (const resultKey of Object.keys(state.results)) delete state.results[resultKey];
+    state.selectedMcp = ''; state.mcpTools = {}; state.confirmation = null;
+  }
+  if (key === 'baseDir') { clearOrganizationProjects($, state); state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
+  if (key === 'root' || key === 'projectType') { state.contextRevision++; state.confirmation = null; }
+  if (key === 'root' || key === 'projectType' || key === 'backend') { delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
+}
+
+function actionsFor($, state) {
+  // Every action is the person's: what it changes on screen is published for the other sessions, also once its work settles.
+  const background = work => { void Promise.resolve(work).catch(() => $.ui.toast('The action could not complete. Check Activity and diagnostics.')).finally(() => shareView($, state)); };
+  const actions = {
     open: () => background(openPane($, state)),
     retryPane: () => { state.paneFault = null; update($); if (!state.booted) background(ensureBoot($, state, { surface: 'desktop' })); },
     selectPage: (key, page) => { state.selectPages[key] = page; update($); },
@@ -351,20 +411,7 @@ function actionsFor($, state) {
         callback: () => runDev($, state, 'setup', input) };
       update($);
     },
-    tab: tab => {
-      if (!VIEWS.includes(tab)) return;
-      state.tab = tab; state.confirmation = null;
-      // Remote-run polling and the agent icon re-check follow the section: timers for what is no longer shown are cancelled here.
-      syncDeploymentPolling($, state); syncAgentIconPolling($, state); update($);
-      // While startup is still resolving the session, initializeWorkspace loads the
-      // environments for whichever section is open; a second load here would clear
-      // and refetch agents, tools and icons.
-      if (['Projects', 'Tools', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) { if (!state.initializing) background(loadEnvironments($, state)); }
-      else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
-      if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
-      if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
-      if (tab === 'Home' || tab === 'Code') background(ensureLatestDeployments($, state));
-    },
+    tab: tab => selectTab($, state, tab),
     openCode: target => background(openCode($, state, target)),
     closeCode: () => { state.codeDetail = null; state.confirmation = null; syncDeploymentPolling($, state); update($); },
     openDeployment: (uid, kind, origin) => background(openDeployment($, state, uid, kind, origin)),
@@ -381,7 +428,7 @@ function actionsFor($, state) {
     showProjectList: () => { state.projectListView = true; update($); },
     openAddMcp: () => { state.toolsView = 'add'; state.confirmation = null; update($); if (!state.results['devtools.mcp-discover']) background(runDev($, state, 'mcp-discover', { offset: 0 })); },
     closeTool: () => { state.toolsView = 'list'; state.confirmation = null; update($); },
-    openTool: uid => { state.selectedMcp = uid; state.toolsView = 'detail'; state.confirmation = null; state.fields.mcpTool = ''; delete state.selectPages['mcp-tool']; delete state.results['devtools.mcp-tools']; delete state.results['devtools.mcp-call']; update($); background(runDev($, state, 'mcp-tools')); },
+    openTool: uid => background(openTool($, state, uid)),
     connectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Connect MCP', detail: `Connect ${name} in ${environmentLabel(state)} and register its tools for Claude.`, callback: () => runDev($, state, 'mcp-add') }; update($); },
     disconnectMcp: (uid, name) => { state.selectedMcp = uid; state.confirmation = { title: 'Disconnect MCP', detail: `Disconnect ${name} from ${environmentLabel(state)}. Its tools stop being available to Claude.`, callback: () => runDev($, state, 'mcp-remove') }; update($); },
     askAgent: (uid, message) => background(talkToAgent($, state, uid, false, message)),
@@ -394,7 +441,8 @@ function actionsFor($, state) {
       await saveBinding($, state, binding); refresh($);
     })()),
     refreshEnvironments: () => background(loadEnvironments($, state)),
-    refreshAgents: () => { state.agentIconTimes = {}; state.agentIconPolls = 0; background(loadAgents($, state)); },
+    refreshAgents: () => { state.agentIconTimes = {}; state.agentIconPolls = 0; background(loadAgents($, state, 0, true)); },
+    searchAgents: () => background(loadAgents($, state)),
     nextAgents: () => background(loadAgents($, state, state.agentOffset + 25)),
     previousAgents: () => background(loadAgents($, state, Math.max(0, state.agentOffset - 25))),
     agentDetails: uid => background(getAgent($, state, uid).then(result => { if (result) { state.agentDetail = result.agent; state.tab = 'Agents'; update($); } })),
@@ -417,22 +465,9 @@ function actionsFor($, state) {
     openOrganizationWorkspace: () => background(openOrganizationWorkspace($, state)),
     refreshRepositories: () => background(loadRepositories($, state)),
     field: (key, value) => {
-      if (Object.hasOwn(state.fields, key)) {
-        state.editedSettings.add(key);
-        state.fields[key] = String(value);
-        if (key === 'repositoryUid') state.fields.branch = '';
-        if (['branch', 'baseDir'].includes(key)) state.confirmation = null;
-        if (key === 'backend') {
-          state.selectPages = {};
-          clearMcp($, state); state.fields.mcpEnvironment = '';
-          state.contextRevision++; state.codeDetail = null;
-          state.fields.repositoryUid = ''; state.fields.branch = ''; state.fields.organization = ''; state.selectedLocal = '';
-          for (const resultKey of Object.keys(state.results)) delete state.results[resultKey];
-          state.selectedMcp = ''; state.mcpTools = {}; state.confirmation = null;
-        }
-        if (key === 'baseDir') { clearOrganizationProjects($, state); state.contextRevision++; state.selectedLocal = ''; delete state.results['projects.local-repositories']; }
-        if (key === 'root' || key === 'projectType') { state.contextRevision++; state.confirmation = null; }
-        if (key === 'root' || key === 'projectType' || key === 'backend') { delete state.results['devtools.status']; delete state.results['devtools.sdk-status']; }
+      if (Object.hasOwn(state.fields, key) && state.fields[key] !== String(value)) {
+        state.editedSettings.add(key); applyField($, state, key, value);
+        if (SHARED_SETTINGS.includes(key)) shareSettings($, state);
       }
       update($);
     },
@@ -443,9 +478,15 @@ function actionsFor($, state) {
     dismiss: () => { state.confirmation = null; update($); },
     accept: () => { const confirmation = state.confirmation; state.confirmation = null; update($); if (confirmation) background(confirmation.callback()); },
     cancel: id => { const op = state.operations.find(value => value.id === id); if (op?.cancel) { op.progress = 'Cancelling…'; background(op.cancel()); update($); } },
-    saveSettings: () => background(saveSettings($, state)),
     attachWorkspace: () => background(attachWorkspace($, state)),
   };
+  return Object.fromEntries(Object.entries(actions).map(([name, action]) => [name, (...args) => { const answer = action(...args); shareView($, state); return answer; }]));
+}
+
+async function openTool($, state, uid) {
+  state.selectedMcp = uid; state.toolsView = 'detail'; state.confirmation = null; state.fields.mcpTool = '';
+  delete state.selectPages['mcp-tool']; delete state.results['devtools.mcp-tools']; delete state.results['devtools.mcp-call']; update($);
+  await runDev($, state, 'mcp-tools');
 }
 
 /** Open a repository detail. A local folder becomes the operation target; a remote one offers setup. */
@@ -471,11 +512,202 @@ async function openCode($, state, target, show = true) {
   } else await ensureLatestDeployments($, state);
 }
 
-async function saveSettings($, state) {
+// One MainSequence across sessions. Settings, the environment, the screen and Activity live in the plugin
+// store, which every session reads from disk and writes one key at a time under the store's file lock
+// (verified in 2.1.308). A session reads them again when the pane opens or draws, while it is open, and
+// before a MainSequence tool runs; there is no change event. Only the This session card is the session's own.
+const SYNC_INTERVAL_MS = 2000, SYNC_MIN_MS = 1000, SETTINGS_WRITE_MS = 800, VIEW_WRITE_MS = 300, ACTIVITY_WRITE_MS = 500, ACTIVITY_HEARTBEAT_MS = 60000;
+const SIGNALS = ['auth', 'mcp', 'repositories'];
+
+/** Typing settles before the settings reach the other sessions. */
+function shareSettings($, state) {
+  state.settingsTimer?.cancel();
+  state.settingsTimer = $.clock.after(SETTINGS_WRITE_MS, () => { state.settingsTimer = null; void writeSettings($, state).catch(() => {}); });
+}
+async function writeSettings($, state) {
+  // Unknown fields of older plugin versions are kept.
   const saved = record(await $.store.get('settings'));
-  await $.store.set('settings', { ...saved, backend: state.fields.backend, baseDir: state.fields.baseDir,
-    organization: state.fields.organization, nodePath: state.fields.nodePath, commandCenterUrl: state.fields.commandCenterUrl });
-  $.ui.toast('MainSequence settings saved.');
+  const value = { ...saved, ...Object.fromEntries(SHARED_SETTINGS.map(key => [key, state.fields[key]])) };
+  await $.store.set('settings', value);
+  state.savedSettings = value; state.shared.settings = JSON.stringify(value);
+}
+
+function shareView($, state) {
+  if (!state.booted || state.closed || state.viewTimer) return;
+  state.viewTimer = $.clock.after(VIEW_WRITE_MS, () => { state.viewTimer = null; void writeView($, state).catch(() => {}); });
+}
+async function writeView($, state) {
+  const view = viewSnapshot(state), json = JSON.stringify(view);
+  if (json === state.shared.view) return;
+  state.shared.view = json;
+  await $.store.set('pane-view', view);
+}
+
+function shareActivity($, state) {
+  if (!state.booted || state.closed || state.activityTimer || !state.sessionId) return;
+  state.activityTimer = $.clock.after(ACTIVITY_WRITE_MS, () => { state.activityTimer = null; void writeActivity($, state).catch(() => {}); });
+}
+/** This session's own operations under its own key, rewritten every minute while one runs so the others can tell it is alive. */
+async function writeActivity($, state, ended = false) {
+  const operations = state.operations.filter(publishedOperation).slice(-30);
+  if (!operations.length && !state.activityPublished) return;
+  const running = operations.some(op => op.status === 'running');
+  if (running && !ended && !state.activityHeartbeat) state.activityHeartbeat = $.clock.every(ACTIVITY_HEARTBEAT_MS, () => { void writeActivity($, state).catch(() => {}); });
+  if ((!running || ended) && state.activityHeartbeat) { state.activityHeartbeat.cancel(); state.activityHeartbeat = null; }
+  const entries = operations.map(op => ended && op.status === 'running' ? { ...activityEntry(op), status: 'cancelled', progress: 'The Claude session ended.' } : activityEntry(op));
+  state.activityPublished = true;
+  await $.store.set(`activity:${state.sessionId}`, { at: await $.clock.now(), session: basename(state.cwd), operations: entries });
+}
+
+/** Tells the other sessions to re-read what this one changed; a session ignores its own. */
+async function signal($, state, name) {
+  await $.store.set(`changed:${name}`, { at: await $.clock.now(), by: state.sessionId, backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment });
+}
+
+/** Polls only while the pane is open; a draw of the pane or the footer also reads the store. */
+function syncSharedPolling($, state) {
+  const wanted = !state.closed && state.paneOpen && state.booted;
+  if (!wanted && state.syncTimer) { const timer = state.syncTimer; state.syncTimer = null; timer.cancel(); state.timers = state.timers.filter(item => item !== timer); }
+  if (wanted && !state.syncTimer) {
+    const timer = $.clock.every(SYNC_INTERVAL_MS, () => { void syncShared($, state); });
+    state.timers.push(timer); state.syncTimer = timer;
+  }
+}
+
+function syncShared($, state, force = false) {
+  if (state.syncing) return state.syncing;
+  if (!state.booted || state.closed || !state.ready || state.initializing || state.preferencesLoading) return Promise.resolve();
+  state.syncing = (async () => {
+    const now = await $.clock.now();
+    if (!force && now - state.syncedAt < SYNC_MIN_MS) return;
+    state.syncedAt = now;
+    await applyShared($, state, now);
+  })().catch(() => {}).finally(() => { state.syncing = null; });
+  return state.syncing;
+}
+
+async function applyShared($, state, now) {
+  let redraw = false;
+  // Settings first: a backend change clears everything that depended on the previous one.
+  const settings = record(await $.store.get('settings')), settingsJson = JSON.stringify(settings);
+  let backendChanged = false;
+  if (settingsJson !== state.shared.settings && !state.settingsTimer) {
+    state.shared.settings = settingsJson; state.savedSettings = settings;
+    for (const key of SHARED_SETTINGS) {
+      if (typeof settings[key] !== 'string' || !settings[key].trim() || settings[key] === state.fields[key]) continue;
+      applyField($, state, key, settings[key]); redraw = true;
+      if (key === 'backend') backendChanged = true;
+    }
+  }
+  if (state.closed) return;
+  if (backendChanged) { await execute($, state, devRequest(state, 'auth-status', { check: false }), true); loadTab($, state); }
+  // The environment of the backend. A load in flight picks the new selection up when it answers.
+  const selections = record(await $.store.get('mcp-environments')), selectionsJson = JSON.stringify(selections);
+  if ((selectionsJson !== state.shared.environments || backendChanged) && !state.closed) {
+    state.environmentSelections = selections;
+    const wanted = typeof selections[state.fields.backend] === 'string' ? selections[state.fields.backend] : '';
+    const listed = state.results['devtools.mcp-environments']?.status === 'success';
+    if (!state.environmentsLoading) {
+      state.shared.environments = selectionsJson;
+      if (wanted !== state.fields.mcpEnvironment) {
+        redraw = true;
+        if (listed && (!wanted || rows(state.results['devtools.mcp-environments'].data).some(row => row.uid === wanted))) await selectEnvironment($, state, wanted, false);
+        else if (wanted) await loadEnvironments($, state);
+      }
+    }
+  }
+  if (state.closed) return;
+  // What another session changed and this one shows: the login, the environment's connections, local checkouts.
+  const signals = {};
+  for (const name of SIGNALS) signals[name] = await $.store.get(`changed:${name}`);
+  const seen = state.shared.signals;
+  state.shared.signals = Object.fromEntries(SIGNALS.map(name => [name, JSON.stringify(signals[name] ?? null)]));
+  // The first read only learns what happened before this session looked.
+  for (const name of seen ? SIGNALS : []) {
+    const value = record(signals[name]);
+    if (seen[name] === state.shared.signals[name] || !value.by || value.by === state.sessionId || value.backend !== state.fields.backend || state.closed) continue;
+    redraw = true;
+    if (name === 'auth') {
+      const result = await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
+      if (record(result.data).authenticated === false || result.error?.code === 'NOT_AUTHENTICATED') clearSignedOut($, state);
+      else if (state.results['devtools.mcp-environments']?.status !== 'success' && (state.environmentSelections[state.fields.backend] || ['Projects', 'Tools', 'Agents'].includes(state.tab))) await loadEnvironments($, state);
+    }
+    if (name === 'mcp' && value.environmentUid === state.fields.mcpEnvironment && state.fields.mcpEnvironment) await refreshTools($, state);
+    if (name === 'repositories' && state.results['projects.local-repositories'] && state.fields.baseDir && state.fields.organization) {
+      await execute($, state, request('projects', 'local-repositories', { root: state.fields.root || state.cwd, baseDir: state.fields.baseDir, organization: state.fields.organization,
+        repositories: rows(state.results['devtools.repositories']?.data).map(row => ({ uid: row.uid, name: row.code_repository_name || row.name })) }), true);
+    }
+  }
+  if (state.closed) return;
+  // The screen, unless this session is about to publish its own.
+  const view = await $.store.get('pane-view'), viewJson = JSON.stringify(view ?? null);
+  if (view && typeof view === 'object' && viewJson !== state.shared.view && !state.viewTimer) {
+    state.shared.view = viewJson; redraw = true;
+    await applyView($, state, view, viewJson);
+  }
+  // Activity: every other session's own key.
+  const published = [];
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith('activity:') || key === `activity:${state.sessionId}`) continue;
+    const entry = record(await $.store.get(key));
+    if (typeof entry.at !== 'number' || now - entry.at > ACTIVITY_KEEP_MS) { await $.store.delete(key); continue; }
+    published.push(entry);
+  }
+  const remote = remoteOperations(published, now);
+  if (JSON.stringify(remote) !== JSON.stringify(state.remoteOperations)) { state.remoteOperations = remote; statusLine($, state); redraw = true; }
+  if (redraw && !state.closed) update($);
+}
+
+const sharedCode = value => value && typeof value === 'object' ? { root: typeof value.root === 'string' ? value.root : '', repositoryUid: String(value.repositoryUid || '') } : null;
+/** Draw what another session shows. Its open details name projects, connections, agents and runs of one backend and
+ * environment, so they apply only while this session has the same selection; the section and searches always do. */
+async function applyView($, state, value, json) {
+  const view = record(value), search = record(view.search), work = [];
+  const searched = new Set(SEARCH_FIELDS.filter(([key, field]) => typeof search[key] === 'string' && search[key] !== state.fields[field]).map(([key, field]) => {
+    state.fields[field] = clean(search[key]).slice(0, 200); return key;
+  }));
+  if (view.codeFilter === 'all' || view.codeFilter === 'local') state.codeFilter = view.codeFilter;
+  const scoped = view.context === context(state), shown = () => state.shared.view === json && view.context === context(state) && !state.closed;
+  const hadProjects = !!state.projectPage, hadAgents = !!state.results['devtools.agents-list'];
+  // The section first: what it loads by itself is not loaded twice below.
+  if (VIEWS.includes(view.tab) && view.tab !== state.tab) selectTab($, state, view.tab);
+  if (scoped) {
+    const code = sharedCode(view.code);
+    if (JSON.stringify(code) !== JSON.stringify(sharedCode(state.codeDetail))) {
+      state.codeDetail = code; state.confirmation = null;
+      if (code) work.push(openCode($, state, code, false)); else syncDeploymentPolling($, state);
+    }
+    const deploy = record(view.deploy), origin = ['home', 'list', 'code'].includes(deploy.origin) ? deploy.origin : 'code';
+    if (deploy.view === 'list' && state.deployView !== 'list') work.push(openDeploymentList($, state, origin));
+    else if (deploy.view === 'detail' && (state.deployView !== 'detail' || state.deployDetail?.uid !== deploy.uid)) work.push(openDeployment($, state, deploy.uid, deploy.kind, origin));
+    else if (!view.deploy && state.deployView) {
+      state.deployView = ''; state.deployHistory = []; state.deployDetail = null; state.deployLogs = null; state.deployStep = ''; syncDeploymentPolling($, state);
+    }
+    const project = record(view.project), projectUid = typeof project.uid === 'string' ? project.uid : '';
+    state.projectListView = !!project.list;
+    if (hadProjects && (searched.has('project') || (Number(state.projectPage?.offset) || 0) !== (Number(project.offset) || 0))) work.push(loadOrganizationProjects($, state, Number(project.offset) || 0));
+    if (projectUid !== state.selectedProject) {
+      if (uuid(projectUid)) work.push(chooseOrganizationProject($, state, projectUid, true));
+      else if (!projectUid) {
+        state.projectDetailRevision++; state.selectedProject = ''; state.projectDetail = null; state.projectWorkspace = null; state.projectOpenMessage = ''; state.projectError = '';
+      }
+    }
+    const tools = record(view.tools);
+    if (tools.view === 'detail' && typeof tools.uid === 'string' && tools.uid && (state.toolsView !== 'detail' || state.selectedMcp !== tools.uid)) work.push(openTool($, state, tools.uid));
+    else if (tools.view === 'add' && state.toolsView !== 'add') { state.toolsView = 'add'; if (!state.results['devtools.mcp-discover'] || searched.has('mcp')) work.push(runDev($, state, 'mcp-discover', { offset: 0 })); }
+    else if (tools.view === 'list' && state.toolsView !== 'list') state.toolsView = 'list';
+    else if (tools.view === 'add' && searched.has('mcp')) work.push(runDev($, state, 'mcp-discover', { offset: 0 }));
+    const agent = record(view.agent), agentUid = typeof agent.uid === 'string' ? agent.uid : '';
+    if (hadAgents && (searched.has('agent') || state.agentOffset !== (Number(agent.offset) || 0))) work.push(loadAgents($, state, Number(agent.offset) || 0));
+    if (!agentUid) state.agentDetail = null;
+    else if (state.agentDetail?.uid !== agentUid && uuid(agentUid)) work.push((async () => {
+      if (!state.agentAccount) await loadAgents($, state, Number(agent.offset) || 0);
+      const result = shown() ? await getAgent($, state, agentUid) : null;
+      if (result && shown()) state.agentDetail = result.agent;
+    })());
+  }
+  update($);
+  await Promise.all(work.map(item => Promise.resolve(item).catch(() => {})));
 }
 
 async function boot($, state, e) {
@@ -493,9 +725,12 @@ async function boot($, state, e) {
   const home = await $.env.get('HOME') || await $.env.get('USERPROFILE');
   if (typeof home === 'string' && home.trim()) state.fields.baseDir = `${home.replace(/[\\/]+$/, '')}${home.includes('\\') ? '\\' : '/'}mainsequence`;
   const saved = record(await $.store.get('settings'));
-  state.savedSettings = saved;
-  state.environmentSelections = record(await $.store.get('mcp-environments'));
-  for (const key of ['backend', 'baseDir', 'organization', 'nodePath', 'commandCenterUrl']) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
+  state.savedSettings = saved; state.shared.settings = JSON.stringify(saved);
+  state.environmentSelections = record(await $.store.get('mcp-environments')); state.shared.environments = JSON.stringify(state.environmentSelections);
+  for (const key of SHARED_SETTINGS) if (typeof saved[key] === 'string' && saved[key].trim()) state.fields[key] = saved[key];
+  // The section the other sessions show; its details follow once startup has the environment.
+  const view = record(await $.store.get('pane-view'));
+  if (VIEWS.includes(view.tab)) state.tab = view.tab;
   await $.command.register({ name: 'ms', description: 'Open MainSequence or message an agent by handle', argumentHint: '[@agent <message> | agent <uid> <message>]', immediate: true });
   // Desktop hosts the engine through the SDK: session.start (and a plugin reload) can name no
   // surface although the session draws on the desktop. Ask the session which surfaces it has.
@@ -524,6 +759,8 @@ async function initializeWorkspace($, state) {
     await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
     if ((['Projects', 'Tools', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) && !state.results['devtools.mcp-environments']) await loadEnvironments($, state);
   } finally { state.initializing = false; state.preferencesLoading = false; update($); }
+  await syncShared($, state, true);
+  loadTab($, state);
 }
 
 async function loadRepositories($, state) {
@@ -560,8 +797,9 @@ async function loadOrganizationProjects($, state, offset = 0) {
     else { state.projectPage = null; state.projectError = result.summary; }
   } finally { if (revision === state.projectListRevision) { state.projectsLoading = false; update($); } }
 }
-async function chooseOrganizationProject($, state, uid) {
-  if (!state.projectPage?.results.some(row => row.uid === uid)) return;
+/** `shared`: the project another session opened, which need not be on this session's page. */
+async function chooseOrganizationProject($, state, uid, shared = false) {
+  if (!shared && !state.projectPage?.results.some(row => row.uid === uid)) return;
   const revision = ++state.projectDetailRevision, selection = context(state);
   state.selectedProject = uid; state.projectSetupRunning = false; state.projectDetail = null; state.projectWorkspace = null; state.projectOpenMessage = ''; state.projectError = ''; state.confirmation = null;
   delete state.results['devtools.organization-project-setup'];
@@ -591,7 +829,7 @@ function confirmOrganizationSetup($, state) {
         const result = await execute($, state, request('devtools', 'organization-project-setup', input));
         if (state.closed || selection !== context(state) || revision !== state.projectDetailRevision) return;
         state.results['devtools.organization-project-setup'] = publicValue(result);
-        if (result.status === 'success') { state.projectWorkspace = result.data; await openOrganizationWorkspace($, state); }
+        if (result.status === 'success') { void signal($, state, 'repositories').catch(() => {}); state.projectWorkspace = result.data; await openOrganizationWorkspace($, state); }
       } finally { if (revision === state.projectDetailRevision) { state.projectSetupRunning = false; update($); } }
     } };
   update($);
@@ -692,7 +930,7 @@ export function register(on, options = {}) {
       ui.Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [renderAgentActivity(ui, state, state.activeAgent),
         ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
           ui.Button({ key: 'agent-switch', label: 'Switch agent', plain: true, dimColor: true, onPress: () => {
-            state.tab = 'Agents'; state.agentDetail = null; update($);
+            state.tab = 'Agents'; state.agentDetail = null; update($); shareView($, state);
             void openPane($, state).catch(() => {});
           } }),
           ui.Button({ key: 'agent-end', label: 'End', plain: true, dimColor: true, onPress: () => { void endAgentConversation($, state).catch(() => {}); } }),
@@ -705,14 +943,14 @@ export function register(on, options = {}) {
     const ui = $.ui.resolve(e), actions = actionsFor($, state);
     wakeOnDesktop($, state, e);
     // A pane draw proves the pane is open: remote-run polling resumes for the section shown.
-    if (!state.paneOpen) { state.paneOpen = true; try { syncDeploymentPolling($, state); syncAgentIconPolling($, state); } catch { /* polling is optional */ } }
+    if (!state.paneOpen) { state.paneOpen = true; try { syncDeploymentPolling($, state); syncAgentIconPolling($, state); syncSharedPolling($, state); } catch { /* polling is optional */ } }
     if (state.paneFault) return renderRecovery(ui, state, actions);
     try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
     catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
   });
   on('ui.close', { id: 'mainsequence' }, ($, e, next) => {
     // Nothing polls a remote run while the pane is closed; reopening it resumes.
-    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list'); syncAgentIconPolling($, state);
+    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list'); syncAgentIconPolling($, state); syncSharedPolling($, state);
     return next(e);
   });
   on('ui.fault', { component: 'Pane', requestId: 'mainsequence' }, ($, e, next) => {
@@ -747,6 +985,8 @@ export function register(on, options = {}) {
   on('tool.call', { tool: /^mcp__mainsequence__/ }, async ($, e) => {
     if (e.tool.startsWith('mcp__mainsequence__ms_agent_')) return handleAgentTool($, state, e);
     if (e.tool === `mcp__mainsequence__${DEPLOY_TOOL}`) return deploymentStatusTool($, state, e);
+    // A session in the background follows an environment chosen in another one before its tools run.
+    await syncShared($, state);
     let entry = state.mcpTools[e.tool];
     // After a reload or right at startup the catalog still names tools this instance has not
     // registered yet: finish startup and the in-flight registration before refusing.
@@ -762,6 +1002,13 @@ export function register(on, options = {}) {
     return toolResult(result);
   }).catch(() => ({ deny: 'MainSequence could not confirm or run this tool call.' }));
   on('session.end', async ($, e, next) => {
+    // Edits still waiting to be shared, and this session's Activity with nothing left running.
+    const settings = !!state.settingsTimer, view = !!state.viewTimer;
+    for (const timer of [state.settingsTimer, state.viewTimer, state.activityTimer, state.activityHeartbeat]) timer?.cancel();
+    state.settingsTimer = state.viewTimer = state.activityTimer = null;
+    if (settings) await writeSettings($, state).catch(() => {});
+    if (view) await writeView($, state).catch(() => {});
+    if (state.booted && state.sessionId) await writeActivity($, state, true).catch(() => {});
     state.closed = true;
     for (const op of state.running.values()) if (op.status === 'running' && op.cancel) void op.cancel().catch(() => {});
     for (const timer of state.timers) timer.cancel();
@@ -1093,34 +1340,46 @@ async function ensureAgentHost($, state) {
   return true;
 }
 
-/** Idle icons for the listed agents, or the poses of one selected agent. A listing and the Agents
- * poll pass `revalidate`: idle icons are re-checked regardless of age, each with the ETag the hook
- * holds, so an unchanged icon costs the backend a 304 and keeps its image; otherwise a loaded icon
- * is kept for five minutes. */
-async function loadAgentIcons($, state, uids, includePoses = false, revalidate = false) {
+// Agents and their icons are shared by every session for ten minutes: a listing read by any session for
+// the account is drawn at once, and the worker answers icons from one cache on disk. An older listing is
+// drawn too while it is read again. Refresh reads both from the backend at once.
+const AGENT_CACHE_MS = 600000, AGENT_CACHE_ENTRIES = 6, AGENT_ICON_BATCH = 8, AGENT_ICON_BACKOFF_MS = 60000;
+function signedInAccount(state) {
+  const data = record(state.results['devtools.auth-status']?.data);
+  return data.authenticated === true && typeof data.username === 'string' ? data.username : '';
+}
+
+/** Idle icons for the listed agents, or the poses of one selected agent, each batch in its own worker at
+ * once. A loaded icon is kept for `maxAge`; `reread` (Refresh) asks again regardless of age and past the
+ * worker's cache. Each held ETag goes along, so an unchanged icon comes back without its bytes. */
+async function loadAgentIcons($, state, uids, includePoses = false, { reread = false, maxAge = AGENT_CACHE_MS } = {}) {
   if (!state.agentAccount || state.closed) return;
   const revision = state.agentRevision, selection = context(state), account = state.agentAccount;
-  const now = await $.clock.now();
+  const now = await $.clock.now(), backoff = now - maxAge + AGENT_ICON_BACKOFF_MS;
+  const stale = () => state.closed || revision !== state.agentRevision || selection !== context(state) || account !== state.agentAccount;
   const selected = [...new Set(uids.filter(uuid))].filter(uid => {
     const key = `${uid}:${includePoses ? 'poses' : 'idle'}`;
-    return !state.agentIconLoads.has(key) && (revalidate && !includePoses || now - (state.agentIconTimes[key] ?? -Infinity) >= 300000);
+    return !state.agentIconLoads.has(key) && (reread && !includePoses || now - (state.agentIconTimes[key] ?? -Infinity) >= maxAge);
   });
-  for (let offset = 0; offset < selected.length; offset += includePoses ? 1 : 4) {
-    if (state.closed || revision !== state.agentRevision || selection !== context(state) || account !== state.agentAccount) return;
-    const batch = selected.slice(offset, offset + (includePoses ? 1 : 4));
+  const size = includePoses ? 1 : AGENT_ICON_BATCH, batches = [];
+  let failed = false;
+  for (let offset = 0; offset < selected.length; offset += size) batches.push(selected.slice(offset, offset + size));
+  await Promise.all(batches.map(async batch => {
+    if (stale()) return;
     const keys = batch.map(uid => `${uid}:${includePoses ? 'poses' : 'idle'}`);
     const ticket = {};
     for (const key of keys) state.agentIconLoads.set(key, ticket);
     try {
       const known = includePoses ? {} : Object.fromEntries(batch.flatMap(uid => { const held = state.agentIcons[uid]; return typeof held?.etag === 'string' && held.images?.idle ? [[uid, held.etag]] : []; }));
       const result = await execute($, state, request('projects', 'agent-icons', { backend: state.fields.backend,
-        environmentUid: state.fields.mcpEnvironment, expectedAccount: account, agentUids: batch, includePoses, ...(Object.keys(known).length ? { known } : {}) }), true);
-      if (state.closed || revision !== state.agentRevision || selection !== context(state) || account !== state.agentAccount) return;
+        environmentUid: state.fields.mcpEnvironment, expectedAccount: account, agentUids: batch, includePoses,
+        ...(Object.keys(known).length ? { known } : {}), ...(reread && !includePoses ? { refresh: true } : {}) }), true);
+      if (stale()) return;
       const data = result.data;
       if (result.status !== 'success' || data?.environmentUid !== state.fields.mcpEnvironment || data?.account !== account) {
         // A failed first load gets a one-minute backoff. Keep an existing icon.
-        for (const key of keys) state.agentIconTimes[key] = now - 240000;
-        continue;
+        for (const key of keys) state.agentIconTimes[key] = backoff;
+        failed = true; return;
       }
       for (const uid of batch) {
         // One agent's malformed or empty record must never cost the others in its batch their icons.
@@ -1132,50 +1391,76 @@ async function loadAgentIcons($, state, uids, includePoses = false, revalidate =
             const images = Object.fromEntries(Object.entries(icon.images).map(([pose, image]) => [pose, image || old?.images?.[pose] || null]));
             // An agent without an idle asset has nothing to keep: only reuse poses of the same, present idle image.
             const keepPoses = !includePoses && !!old?.images && typeof images.idle?.source === 'string' && old.images.idle?.source === images.idle.source;
-            const { unchanged, ...delivered } = icon;
+            const { unchanged, failed: unread, ...delivered } = icon;
             state.agentIcons[uid] = { ...delivered, images: { ...(keepPoses ? old.images : {}), ...images },
               // The tag belongs to the idle image kept: the delivered one's, or the retained one's.
               etag: icon.images.idle ? (typeof icon.etag === 'string' ? icon.etag : null) : old?.etag ?? null,
               posesLoaded: includePoses || (keepPoses && !!old.posesLoaded) };
             if (!keepPoses && !includePoses) delete state.agentIconTimes[`${uid}:poses`];
           } else delete state.agentIcons[uid];
-          state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = icon?.images && !icon.images.idle ? now - 240000 : now;
-        } catch { delete state.agentIcons[uid]; state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = now - 240000; }
+          if (icon?.failed === true) failed = true;
+          state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = icon?.images && !icon.images.idle ? backoff : now;
+        } catch { failed = true; delete state.agentIcons[uid]; state.agentIconTimes[`${uid}:${includePoses ? 'poses' : 'idle'}`] = backoff; }
       }
       refresh($);
     } catch { /* Presentation failure keeps existing media and never blocks agents. */ }
     finally { for (const key of keys) if (state.agentIconLoads.get(key) === ticket) state.agentIconLoads.delete(key); }
+  }));
+  // A slow backend can fail an icon: the shown Agents try again once after the backoff, not ten minutes later.
+  if (failed && !includePoses && !stale() && !state.agentIconRetry) {
+    const timer = $.clock.after(AGENT_ICON_BACKOFF_MS, () => {
+      state.agentIconRetry = null; state.timers = state.timers.filter(item => item !== timer);
+      if (agentIconPollWanted(state)) void loadAgentIcons($, state, rows(state.results['devtools.agents-list']?.data).map(agent => agent.uid)).catch(() => {});
+    });
+    state.timers.push(timer); state.agentIconRetry = timer;
   }
 }
 
-async function loadAgents($, state, offset = 0) {
+function showAgents($, state, result, offset, reread) {
+  if (result.status === 'success') {
+    if (state.agentAccount && state.agentAccount !== result.data?.account) clearAgents($, state);
+    state.agentAccount = result.data?.account || ''; state.agentOffset = offset;
+  }
+  state.results['devtools.agents-list'] = publicValue(result);
+  if (result.status === 'success') void loadAgentIcons($, state, rows(result.data).map(agent => agent.uid), false, { reread });
+}
+async function loadAgents($, state, offset = 0, reread = false) {
   if (!await ensureAgentHost($, state) || !state.fields.mcpEnvironment || state.preferencesLoading || state.closed) return;
-  const revision = ++state.agentListRevision, selection = context(state);
-  state.agentsLoading = true; refresh($);
+  const revision = ++state.agentListRevision, selection = context(state), account = signedInAccount(state);
+  const key = JSON.stringify([state.fields.backend, state.fields.mcpEnvironment, account, state.fields.agentSearch, offset]);
+  const current = () => revision === state.agentListRevision && selection === context(state) && !state.closed;
+  const cached = reread || !account ? null : rows(record(await $.store.get('agents-cache')).entries)
+    .find(entry => entry?.key === key && typeof entry.at === 'number' && entry.result?.status === 'success' && entry.result.data?.account === account);
+  const now = await $.clock.now();
+  if (!current()) return;
+  if (cached) {
+    showAgents($, state, cached.result, offset, false);
+    if (now - cached.at < AGENT_CACHE_MS) { state.agentsLoading = false; syncAgentIconPolling($, state); refresh($); return; }
+  }
+  state.agentsLoading = !cached; refresh($);
   try {
     const result = await execute($, state, request('devtools', 'agents-list', { backend: state.fields.backend,
       environmentUid: state.fields.mcpEnvironment, search: state.fields.agentSearch, limit: 25, offset }), true);
-    if (revision !== state.agentListRevision || selection !== context(state) || state.closed) return;
-    if (result.status === 'success') {
-      if (state.agentAccount && state.agentAccount !== result.data?.account) clearAgents($, state);
-      state.agentAccount = result.data?.account || ''; state.agentOffset = offset;
+    if (!current()) return;
+    showAgents($, state, result, offset, reread);
+    if (result.status === 'success' && result.data?.account === account) {
+      const entries = rows(record(await $.store.get('agents-cache')).entries).filter(entry => entry?.key !== key);
+      await $.store.set('agents-cache', { entries: [{ key, at: now, result: publicValue(result) }, ...entries].slice(0, AGENT_CACHE_ENTRIES) });
     }
-    state.results['devtools.agents-list'] = publicValue(result);
-    if (result.status === 'success') void loadAgentIcons($, state, rows(result.data).map(agent => agent.uid), false, true);
   } finally { if (revision === state.agentListRevision && selection === context(state)) { state.agentsLoading = false; syncAgentIconPolling($, state); refresh($); } }
 }
 
 // Agent icons change in Command Center without any event reaching the pane. While the pane shows
-// the Agents section, the listed agents' idle icons are re-checked once a minute with the ETags
-// the hook holds; an unchanged icon costs a 304, a changed one is redrawn. Nothing polls while the
+// the Agents section, the listed agents' idle icons are re-checked every ten minutes with the ETags
+// the hook holds, through the worker's shared cache; a changed one is redrawn. Nothing polls while the
 // pane is closed or another section is shown, and a long-open section pauses after four hours
 // until Refresh. Poses still load with Details and Talk only.
-const AGENT_ICON_POLL_MS = 60000, AGENT_ICON_POLL_LIMIT = 240;
+const AGENT_ICON_POLL_MS = AGENT_CACHE_MS, AGENT_ICON_POLL_LIMIT = 24;
 function agentIconPollWanted(state) {
   return !state.closed && state.paneOpen && state.tab === 'Agents' && !!state.fields.mcpEnvironment && !!state.agentAccount
     && rows(state.results['devtools.agents-list']?.data).length > 0 && state.agentIconPolls < AGENT_ICON_POLL_LIMIT;
 }
-/** Start or stop the one-minute icon timer so it matches what is shown. */
+/** Start or stop the icon timer so it matches what is shown. */
 function syncAgentIconPolling($, state) {
   const wanted = agentIconPollWanted(state);
   if (!wanted && state.agentIconTimer) {
@@ -1193,7 +1478,8 @@ async function pollAgentIcons($, state) {
   state.agentIconPolls++;
   const uids = rows(state.results['devtools.agents-list']?.data).map(agent => agent.uid);
   if (uuid(state.agentDetail?.uid) && !uids.includes(state.agentDetail.uid)) uids.push(state.agentDetail.uid);
-  await loadAgentIcons($, state, uids, false, true);
+  // Due at the tick: an icon loaded since the timer started is half an interval old at least.
+  await loadAgentIcons($, state, uids, false, { maxAge: AGENT_ICON_POLL_MS / 2 });
   if (!agentIconPollWanted(state)) syncAgentIconPolling($, state);
 }
 
