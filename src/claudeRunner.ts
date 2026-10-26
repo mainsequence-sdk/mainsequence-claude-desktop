@@ -9,6 +9,7 @@ import { CLAUDE_INPUT_LIMIT, claudeFailure, executeClaudeEnvelope, parseClaudeEn
 import { createClaudeProjectActions } from './hosts/claudeProjectActions';
 import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
 import { CLAUDE_DEPLOYMENT_ACTIONS, createClaudeDeployments } from './hosts/claudeDeployments';
+import { CLAUDE_PLUGIN_UPDATE_ACTIONS, createClaudePluginUpdate } from './hosts/claudePluginUpdate';
 
 export async function main(): Promise<void> {
   const controller = new AbortController();
@@ -50,7 +51,9 @@ export async function main(): Promise<void> {
         // Every Claude session's worker reads and refreshes one icon cache beside the other MainSequence state.
         ? createClaudeAgentIcons({ host, signal: controller.signal, cacheDirectory: path.join(mainSequenceStateDirectory(), 'claude-desktop', 'agent-icons') }).dispatch(request)
         : CLAUDE_DEPLOYMENT_ACTIONS.has(request.action)
-          ? createClaudeDeployments({ host, signal: controller.signal }).dispatch(request) : projects.dispatch(request) });
+          ? createClaudeDeployments({ host, signal: controller.signal }).dispatch(request)
+          : CLAUDE_PLUGIN_UPDATE_ACTIONS.has(request.action)
+            ? createClaudePluginUpdate({ host, signal: controller.signal, version: build.version }).dispatch(request) : projects.dispatch(request) });
     process.stdout.write(JSON.stringify({ type: 'result', id, result }) + '\n');
   } catch (error) {
     process.stdout.write(JSON.stringify({ type: 'result', id, result: claudeFailure(action, error, controller.signal.aborted) }) + '\n');

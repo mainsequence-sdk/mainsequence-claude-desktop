@@ -90,6 +90,8 @@ export function initialState(options = {}) {
     deployView: '', deployOrigin: 'code', deployHistory: [], deployList: null, deployListLoading: false, deployListError: '',
     deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,
     deployTimers: { run: null, list: null }, deployPolls: 0, deployPaused: false, paneOpen: false,
+    // The plugin's own release: the worker's answer to plugin-version, merged with plugin-update's.
+    plugin: {}, pluginCheck: null, pluginCheckedAt: 0, pluginUpdating: false, pluginHelp: '',
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };
 }
 /** The MainSequence repository branch a local folder stands for, from the repositories list and the checked status. */

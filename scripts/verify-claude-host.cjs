@@ -16,6 +16,7 @@ for (const file of ['hooks/hooks.json', 'hooks/register.mjs', 'hooks/view.mjs', 
   'docs/claude-desktop.md', 'third_party/claude-account-rotator/LICENSE']) {
   assert.ok(fs.statSync(path.join(artifact, file)).isFile(), `Missing packaged file: ${file}`);
 }
+assert.ok(fs.readFileSync(path.join(artifact, 'hooks/release.mjs'), 'utf8').includes(`PLUGIN_VERSION = ${JSON.stringify(manifest.version)};`), 'The pane header must name the packaged version.');
 const worker = spawnSync(process.execPath, [path.join(artifact, 'dist/claudeRunner.js')], {
   cwd: artifact, encoding: 'utf8', timeout: 20_000,
   input: JSON.stringify({ protocolVersion: 1, id: 'packaged-smoke', request: { scope: 'projects', request: { action: 'runtime-diagnostics' } } }),

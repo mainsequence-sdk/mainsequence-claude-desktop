@@ -397,6 +397,35 @@ test('Deployments: the Code detail opens a recorded workflow run with its timeli
   await ui.unmount();
 });
 
+test('the header offers a published plugin update and runs Claude’s updater only after confirmation', async ($, on) => {
+  const clock = mock.clock(on, {now:1000}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'plugin-update'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  const actions: string[] = [];
+  on('process.spawn', async function* ($, e) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    actions.push(q.action);
+    const data = q.action === 'plugin-version' ? {running:'0.0.1',installed:'0.0.1',latest:'9.9.9',status:'update_available',updateSupported:true}
+      : q.action === 'plugin-update' ? {running:'0.0.1',previous:'0.0.1',installed:'9.9.9',status:'restart_required'} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  const ui = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await clock.settle();
+  expect(await ui.find({type:'Button',text:'Update to 9.9.9'})).toBeDefined();
+  await ui.press({key:'plugin-update'}); await clock.settle();
+  expect(actions.includes('plugin-update'), 'updating waits for confirmation').toBe(false);
+  await ui.press({key:'confirm-action'}); await clock.settle();
+  expect(actions.filter(action => action === 'plugin-update').length).toBe(1);
+  expect(await ui.find({type:'Text',text:'9.9.9 installed · start a new Code session'})).toBeDefined();
+  expect(await ui.find({key:'plugin-update'})).toBeUndefined();
+  await ui.unmount();
+});
+
 test('a native pane opens on what another session left and shares its own section change', async ($, on) => {
   const backend = 'https://api.main-sequence.app', clock = mock.clock(on, {now:1000});
   const store: Record<string, unknown> = {

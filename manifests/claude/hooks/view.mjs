@@ -4,6 +4,7 @@ import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
 import { renderDeployCard, renderDeployments, renderHomeDeployLine } from './deploymentView.mjs';
 import { EMBLEM } from './branding.mjs';
+import { PLUGIN_VERSION } from './release.mjs';
 
 const VIEW_NOUN = { Code: 'your repositories', Projects: 'its projects', Agents: 'its agents', Tools: 'its MCP tools' };
 
@@ -53,7 +54,20 @@ export function renderPane(ui, state, actions, options = {}) {
     button('tab-Activity', running ? `${running} running` : 'Activity', () => actions.tab('Activity'), { plain: true, dim: !running && state.tab !== 'Activity' }),
     button('tab-Settings', 'Settings', () => actions.tab('Settings'), { plain: true, dim: state.tab !== 'Settings' }),
   ], { flexWrap: 'wrap', justifyContent: 'flex-end' });
-  const brand = inline([Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 24, height: 24 }), heading('MainSequence')]);
+  // The running version, always, and where it stands against the published catalog.
+  const plugin = record(state.plugin), version = PLUGIN_VERSION || plugin.running;
+  const release = state.pluginUpdating ? badge(`Updating to ${plugin.latest}…`, 'warning')
+    : plugin.status === 'update_available' ? button('plugin-update', `Update to ${plugin.latest}`, actions.updatePlugin, { primary: true })
+    : plugin.status === 'restart_required' ? badge(`${plugin.installed} installed · start a new Code session`, 'warning')
+    : plugin.status === 'current' ? badge('● Up to date', 'success')
+    : state.pluginCheck ? badge('Checking for updates…')
+    : state.ready && state.booted ? button('plugin-check', 'Check for updates', actions.checkPlugin, { plain: true, dim: true }) : null;
+  const brand = inline([Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 24, height: 24 }), heading('MainSequence'),
+    version && version !== 'unknown' && badge(`v${version}`), release], { flexWrap: 'wrap' });
+  const pluginHelp = state.pluginHelp && card('Update MainSequence', [status('warning', state.pluginHelp),
+    text('1. Open Customize → Plugins and refresh the mainsequence-desktop marketplace.', { wrap: 'wrap' }),
+    text('2. Update MainSequence.'), text('3. Start a new Code session.'),
+    buttons([button('plugin-help-dismiss', 'Dismiss', actions.closePluginHelp, { plain: true })])]);
   const navigation = Box({ key: 'section-navigation', flexDirection: 'row', flexWrap: 'wrap', gap: 1, children: TABS.map(tab =>
     button(`tab-${tab}`, tab, () => actions.tab(tab), tab === state.tab ? { primary: true } : { plain: true, dim: true })) });
   const blocker = (() => {
@@ -69,7 +83,7 @@ export function renderPane(ui, state, actions, options = {}) {
   })();
   const header = column([
     options.placement === 'dock' ? inline([brand, Box({ flexGrow: 1 }), chips], { justifyContent: 'space-between', flexWrap: 'wrap' }) : column([brand, chips]),
-    navigation, blocker,
+    pluginHelp, navigation, blocker,
     state.tab !== 'Activity' && runningSetups.some(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f)))
       ? column(runningSetups.filter(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f))).map(op =>
       inline([status('warning', `Setting up ${op.context}: ${op.progress}`), button(`show-setup-activity-${op.id}`, 'View progress', () => actions.tab('Activity'), { plain: true, dim: true })], { flexWrap: 'wrap' })), { gap: 0 }) : null,

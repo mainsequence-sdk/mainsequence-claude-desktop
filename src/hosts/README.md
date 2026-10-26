@@ -25,6 +25,10 @@ through the pinned devtools package's public API.
   error text. Billing and cost fields are never copied. A run that answers 404 is
   described with Command Center's "You can't see this deployment" wording, which
   does not assert whether the record exists.
+- `claudePluginUpdate.ts` compares the running plugin version with the published
+  marketplace catalog and the copy Claude has installed, and updates it through Claude's
+  own engine (`plugin marketplace update`, then `plugin update`). It runs only an
+  executable named `claude`: the worker's parent process or `CLAUDE_CODE_EXECPATH`.
 
 Hook-side rendering and transient caching live in `manifests/claude/hooks/`.
 See [agent icon behavior and current transport limits](../../docs/agent-icons.md).

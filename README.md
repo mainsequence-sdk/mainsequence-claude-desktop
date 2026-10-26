@@ -29,8 +29,11 @@ sign-in cannot be kept between sessions, so the plugin is not supported there ye
    footer to open the pane. Opening it submits no prompt and saves nothing. `/ms` opens
    it too.
 
-To update, refresh the marketplace, update the plugin and start a fresh Code session.
-`/reload-plugins` only reloads the installed copy. To install a specific build, download
+The pane header always shows the plugin's version and whether a newer one is published.
+**Update to …** asks first, then runs Claude's own plugin updater; start a new Code
+session to use the new version. If the updater cannot run from the session, the pane
+lists the manual steps: refresh the marketplace, update the plugin and start a fresh Code
+session. `/reload-plugins` only reloads the installed copy. To install a specific build, download
 a release ZIP and use **Add plugin → Upload plugin**. If Claude cannot find Node, set its
 path in the plugin's Node executable setting or under **Settings → Advanced → Runtime &
 diagnostics → Executable overrides**.

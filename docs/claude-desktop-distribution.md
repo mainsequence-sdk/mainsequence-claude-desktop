@@ -22,7 +22,8 @@ only reloads the installed copy; it does not download an update. Desktop builds 
 show only Remove on the local marketplace card need Claude's built-in updater
 (`plugin marketplace update mainsequence-desktop`, then
 `plugin update mainsequence@mainsequence-desktop --scope user`) through the bundled
-engine. Updating is separate from manual ZIP installation. For manual installation or
+engine; the pane's **Update to** button runs exactly that once the marketplace catalog
+on the default branch names a newer version. Updating is separate from manual ZIP installation. For manual installation or
 rollback, download a release ZIP and checksum and use **Add plugin → Upload plugin**.
 Uploading uses Claude's plugin service. Release assets are immutable.
 
