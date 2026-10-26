@@ -1827,3 +1827,17 @@ test('an icon the backend failed to deliver is tried again a minute later, not a
   assert.equal(svgNodes(await f.pane()).filter(node => node.props.width === 20).length, 2);
   assert.equal(f.timers.filter(t => t.ms === 60000 && !t.fired && !t.cancelled).length, 0, 'nothing failed, nothing is retried');
 });
+
+test('an icon record heavier than Desktop draws, as an older worker cached, is drawn as its still frame everywhere', async () => {
+  const heavy = `<svg xmlns="http://www.w3.org/2000/svg"><text>moving</text><!--${'x'.repeat(44000)}--></svg>`, still = '<svg xmlns="http://www.w3.org/2000/svg"><text>still</text></svg>';
+  const f = await agentFixture({ respond: r => {
+    const result = iconResponse(r); if (result) for (const icon of Object.values(result.data.icons)) icon.images.idle = { source: heavy, stillSource: still, animated: true };
+    return result;
+  } });
+  const drawn = svgNodes(await f.pane()).filter(node => node.props.width === 20);
+  assert.equal(drawn.length, 1); assert.equal(drawn[0].props.source, still);
+  await f.startTalk();
+  const band = await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} });
+  assert.ok(svgNodes(band).every(node => node.props.source.length <= 32768) && svgNodes(band).some(node => node.props.source === still));
+  assert.equal(svgNodes(await f.pane()).some(node => node.props.source.length > 32768), false, 'no Svg in the pane is heavier than Desktop draws');
+});

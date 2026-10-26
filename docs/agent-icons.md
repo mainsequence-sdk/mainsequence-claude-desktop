@@ -58,13 +58,16 @@ reduced-motion preference kept all six samples on frame zero. Page-only motion
 emulation did not propagate into nested SVG images; live operating-system motion
 and manually overridden theme preferences have not been independently verified.
 
-The platform permits icons up to 512 KiB and 512 px; Claude’s Svg markup limit is 128 KiB,
-and Claude draws icons at 20–32 px. A static PNG that would not fit, or that is heavier than
-32 KiB, is decoded and shrunk in the worker to at most 128 px (nearest pixel for
-`pixelated` icons, an alpha-weighted average otherwise) and re-encoded, so a 512 px
-Command Center icon of about 105 KB is embedded as roughly 12 KB. Animated icons keep
-their frames while they fit; when they do not, their frame-zero still is used and shrunk
-the same way. The backend limit is tracked in
+The platform permits icons up to 512 KiB and 512 px, and Claude draws icons at 20–32 px.
+The engine accepts Svg markup up to 128 KiB, but Desktop does not draw everything it
+accepts: in the live app, animated Agent icons of 43–45 KB never appeared while every one
+up to 40 KB did. Every icon the pane draws is therefore at most 32 KiB of markup. An
+animated icon keeps its frames only within that; a heavier one is drawn as its frame-zero
+still, a few KB. A PNG still heavier than that is decoded and shrunk in the worker (to at
+most 128 px, smaller when needed; nearest pixel for `pixelated` icons, an alpha-weighted
+average otherwise) and re-encoded, so a 512 px Command Center icon of about 105 KB is
+embedded as roughly 12 KB. The hook applies the same bound to records an older worker
+cached. The backend limit is tracked in
 [tdag-django#1136](https://github.com/Main-Sequence-Server-Side/tdag-django/issues/1136).
 The adapter first tries the animated widget, then its frame-zero still, then a shrunk
 PNG still, and draws no image only when none of these fits (for example an oversized
