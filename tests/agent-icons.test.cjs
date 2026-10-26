@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createNodeHost } = require('@dev-mainsequence/devtools');
-const { createClaudeAgentIcons, nativeAgentIcon, agentIconStill } = require('../dist/hosts/claudeAgentIcons');
+const { createClaudeAgentIcons, nativeAgentIcon, agentIconStill, AGENT_ICON_DRAWN_MAX } = require('../dist/hosts/claudeAgentIcons');
 const { animatedIcon } = require('./agent-icon-fixture.cjs');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const account = 'icons@example.test', backend = 'https://platform.example', base = `/api/v1/command-center/agents/${id(1)}/icon/`;
@@ -46,7 +46,7 @@ test('a large static PNG, like a 512 px Command Center icon, is shrunk to fit in
   const big = encodePng({ width: 512, height: 512, pixels });
   assert.ok(Buffer.from(big).toString('base64').length > 131072, 'fixture exceeds the native limit');
   const image = nativeAgentIcon(big, 'image/png', { rendering: 'color', imageRendering: 'pixelated' });
-  assert.ok(image, 'the icon is kept'); assert.equal(image.animated, false); assert.ok(image.source.length <= 131072);
+  assert.ok(image, 'the icon is kept'); assert.equal(image.animated, false); assert.ok(image.source.length <= AGENT_ICON_DRAWN_MAX, 'within what Desktop draws');
   const embedded = Buffer.from(/base64,([^"]+)"/.exec(image.source)[1], 'base64'), decoded = decodePng(embedded);
   assert.ok(decoded.width <= 128 && decoded.height <= 128, `shrunk to ${decoded.width}x${decoded.height}`);
   // Nearest-pixel scaling keeps pixel-art colours exact.
@@ -70,6 +70,16 @@ test('a large static PNG, like a 512 px Command Center icon, is shrunk to fit in
   const corrupt = Buffer.from(big), idat = corrupt.indexOf('IDAT');
   corrupt.fill(1, idat + 4, idat + 4 + corrupt.readUInt32BE(idat - 4));
   assert.equal(nativeAgentIcon(corrupt, 'image/png', icon), null);
+});
+
+test('an animated icon too heavy for Desktop to draw, like Sentinel\'s, is sent as its still frame', () => {
+  // Frames that make the animated markup about 44 KB over a still of a few KB, as the live Sentinel icons are.
+  const heavy = nativeAgentIcon(animatedIcon(30000), 'image/png', icon);
+  assert.equal(heavy.animated, false); assert.equal(heavy.source, heavy.stillSource);
+  assert.ok(heavy.stillSource.length < 8192, `the still is small (${heavy.stillSource.length})`);
+  const light = nativeAgentIcon(animatedIcon(), 'image/png', icon);
+  assert.equal(light.animated, true); assert.ok(light.source.length <= AGENT_ICON_DRAWN_MAX, 'a light animation keeps its frames');
+  assert.equal(AGENT_ICON_DRAWN_MAX, 32768);
 });
 
 test('native size limits gracefully retain a still and oversized static icons fall back', () => {

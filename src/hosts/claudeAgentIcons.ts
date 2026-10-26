@@ -23,6 +23,9 @@ type IconCache = { agents: Record<string, { at: number; record: IconRecord | nul
 
 /** Idle icons every Claude session reads for ten minutes before the backend is asked again. */
 export const AGENT_ICON_CACHE_MS = 600_000;
+/** The largest Svg markup Desktop is trusted to draw. The engine accepts 128 KiB, but in the live app
+ * animated icons of 43-45 KB never appeared while every one up to 40 KB did; 32 KiB keeps a margin. */
+export const AGENT_ICON_DRAWN_MAX = 32768;
 const MAX_AGENTS = 8, CONCURRENCY = 4, CACHE_AGENTS = 200;
 const unchangedRecord = (record: IconRecord, etag: string): IconRecord => ({ rendering: record.rendering, imageRendering: record.imageRendering,
   toolPoses: record.toolPoses, images: {}, etag, unchanged: true, posesLoaded: false });
@@ -103,22 +106,21 @@ export function nativeAgentIcon(bytes: Buffer, mime: string, icon: Pick<Icon, 'r
   const stillSource = paint(still);
   const oversized = stillSource.length > 131072;
   // Claude draws icons at 20-32 px; a large PNG (Command Center allows 512 KiB and 512 px) is
-  // shrunk to at most 128 px instead of being dropped, and a heavy static one is shrunk anyway
-  // because its markup crosses into Claude on every redraw. Animated icons keep their frames
-  // while they fit; shrinking would cost the animation.
-  if (mime === 'image/png' && (oversized || (!animated && still.length > 32768))) {
-    for (const size of [128, 96, 64, 48]) {
+  // shrunk to at most 128 px instead of being dropped, and so is any still heavier than what
+  // Desktop draws (AGENT_ICON_DRAWN_MAX). Animated icons keep their frames only while they fit.
+  if (mime === 'image/png' && stillSource.length > AGENT_ICON_DRAWN_MAX) {
+    for (const size of [128, 96, 64, 48, 32]) {
       const small = shrinkPng(still, size, icon.imageRendering === 'pixelated');
       if (!small) break;
       const fitted = paint(small);
-      if (fitted.length <= 131072) return { source: fitted, stillSource: fitted, animated: false };
+      if (fitted.length <= AGENT_ICON_DRAWN_MAX) return { source: fitted, stillSource: fitted, animated: false };
     }
   }
   if (oversized) return null;
-  const source = animated ? wrap(image(bytes, 'moving') + image(still, 'still'),
-    `${icon.imageRendering === 'pixelated' ? 'image{image-rendering:pixelated}' : ''}.still{display:none}@media(prefers-reduced-motion:reduce){.moving{display:none}.still{display:inline}}`) : stillSource;
-  return { source: source.length <= 131072 ? source : stillSource, stillSource,
-    animated: animated && source.length <= 131072 };
+  const moving = animated ? wrap(image(bytes, 'moving') + image(still, 'still'),
+    `${icon.imageRendering === 'pixelated' ? 'image{image-rendering:pixelated}' : ''}.still{display:none}@media(prefers-reduced-motion:reduce){.moving{display:none}.still{display:inline}}`) : '';
+  const keep = animated && moving.length <= AGENT_ICON_DRAWN_MAX;
+  return { source: keep ? moving : stillSource, stillSource, animated: keep };
 }
 
 /** A desktop media bridge over the public session service; credentials never leave it.

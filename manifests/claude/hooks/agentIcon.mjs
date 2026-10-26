@@ -12,14 +12,19 @@ export function agentIconActivity(binding) {
     failed: !binding?.busy && (binding?.status === 'failed' || ['failed', 'rejected'].includes(binding?.task?.status)), tool: null };
 }
 
+/** The largest Svg markup Desktop is trusted to draw. The engine accepts 128 KiB, but in the live app
+ * animated icons of 43-45 KB never appeared while every one up to 40 KB did; 32 KiB keeps a margin.
+ * The worker sends icons within it; records an older worker cached may not be. */
+export const AGENT_ICON_DRAWN_MAX = 32768;
+
 export function renderAgentIcon(ui, state, agentUid, { size = 20, animate = true, activity = null } = {}) {
   const icon = state.agentIcons?.[agentUid], pose = resolveAgentIconPose(icon, activity);
   const image = icon?.images?.[pose] || icon?.images?.idle;
-  if (!image || typeof image.source !== 'string' || typeof image.stillSource !== 'string'
-    || image.source.length > 131072 || image.stillSource.length > 131072) {
-    return null;
-  }
-  return ui.Box({ key: `agent-icon-${agentUid}-${size}`, flexShrink: 0, children: [ui.Svg({ source: animate ? image.source : image.stillSource, alt: 'Agent icon', width: size, height: size,
+  if (!image || typeof image.source !== 'string' || typeof image.stillSource !== 'string') return null;
+  // An animated source too heavy to draw falls back to its still frame, a few KB.
+  const source = animate && image.source.length <= AGENT_ICON_DRAWN_MAX ? image.source : image.stillSource;
+  if (source.length > AGENT_ICON_DRAWN_MAX) return null;
+  return ui.Box({ key: `agent-icon-${agentUid}-${size}`, flexShrink: 0, children: [ui.Svg({ source, alt: 'Agent icon', width: size, height: size,
     // Desktop renders this as a native image. The SVG carries its own media queries;
     // no script, remote URL or frame timer crosses the widget boundary.
     isInteractive: false })] });
