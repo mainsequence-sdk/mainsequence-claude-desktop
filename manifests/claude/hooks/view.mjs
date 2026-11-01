@@ -16,6 +16,20 @@ export function signedInState(state) {
     signedOut: auth?.data?.authenticated === false || ['NOT_AUTHENTICATED', 'AUTH_REJECTED'].includes(auth?.error?.code) };
 }
 
+/** The login's warning above every session's composer: it ends within a day, or it has ended. */
+export function renderLoginBand(ui, state, actions) {
+  const notice = state.loginNotice, { signedIn, signedOut } = signedInState(state);
+  if (!notice || state.loginBandHidden === notice.key || !(notice.kind === 'soon' && signedIn || notice.kind === 'ended' && signedOut)) return null;
+  const opening = state.operations.some(op => op.status === 'running' && op.label === 'devtools · login');
+  return ui.Box({ key: 'mainsequence-login-band', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
+    ui.Box({ flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: 1, children: [
+      ui.Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 18, height: 18 }),
+      ui.Text({ color: 'warning', wrap: 'wrap', children: [`MainSequence session ${notice.kind === 'soon' ? 'ends' : 'ended'} ${notice.when}`] })] }),
+    ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
+      ui.Button({ key: 'login-band-sign-in', label: opening ? 'Opening sign-in…' : 'Sign in again', variant: 'primary', disabled: opening, onPress: () => actions.dev('login') }),
+      ui.Button({ key: 'login-band-hide', label: 'Not now', plain: true, dimColor: true, onPress: actions.hideLoginBand })] })] });
+}
+
 /** Drawn when the host refused a tree or startup failed: nothing is replayed. */
 export function renderRecovery(ui, state, actions) {
   return ui.Box({ flexDirection: 'column', gap: 1, padding: 1, children: [
@@ -44,9 +58,11 @@ export function renderPane(ui, state, actions, options = {}) {
   const environment = environments.find(r => r.uid === f.mcpEnvironment);
   // Why the last environment load failed, shown rather than leaving an empty selector.
   const environmentsFailed = state.results['devtools.mcp-environments']?.status === 'failure' ? state.results['devtools.mcp-environments'] : null;
+  // When the saved login ends: warned a day before, and named once it has ended.
+  const notice = state.loginNotice, ending = signedIn && notice?.kind === 'soon', ended = signedOut && notice?.kind === 'ended';
 
   // Header: account, environment, running operations and settings on every view.
-  const signIn = key => button(key, busy('devtools', 'login') ? 'Opening sign-in…' : 'Sign in', dev('login'), { primary: true, available: !busy('devtools', 'login') });
+  const signIn = (key, label = 'Sign in') => button(key, busy('devtools', 'login') ? 'Opening sign-in…' : label, dev('login'), { primary: true, available: !busy('devtools', 'login') });
   const account = state.initializing ? muted('Checking…')
     : signedIn ? status('success', session.username || 'Signed in')
     : auth?.status === 'failure' && !signedOut ? status('error', 'Connection needs attention')
@@ -77,6 +93,7 @@ export function renderPane(ui, state, actions, options = {}) {
   const blocker = (() => {
     if (!state.ready) return null;
     if (auth?.status === 'failure') return inline([status('error', auth.summary), signedOut && signIn('blocker-login')], { flexWrap: 'wrap' });
+    if (ended && VIEW_NOUN[state.tab]) return inline([status('warning', `Your MainSequence session ended ${notice.when}. Sign in again to see ${VIEW_NOUN[state.tab]}.`), signIn('blocker-login', 'Sign in again')], { flexWrap: 'wrap' });
     if (signedOut && VIEW_NOUN[state.tab]) return status('warning', `Sign in to MainSequence to see ${VIEW_NOUN[state.tab]}.`);
     if (['Projects', 'Agents', 'Tools'].includes(state.tab) && !f.mcpEnvironment && !state.environmentsLoading) {
       return inline([status(environmentsFailed ? 'error' : 'warning', environmentsFailed ? environmentsFailed.summary : `Choose an organization environment to see ${VIEW_NOUN[state.tab]}.`),
@@ -87,7 +104,9 @@ export function renderPane(ui, state, actions, options = {}) {
   })();
   const header = column([
     options.placement === 'dock' ? inline([brand, Box({ flexGrow: 1 }), chips], { justifyContent: 'space-between', flexWrap: 'wrap' }) : column([brand, chips]),
-    pluginHelp, navigation, blocker,
+    pluginHelp, navigation,
+    ending && inline([status('warning', `Your MainSequence session ends ${notice.when}. Sign in again to keep working.`), signIn('renew-login', 'Sign in again')], { flexWrap: 'wrap' }),
+    blocker,
     state.tab !== 'Activity' && runningSetups.some(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f)))
       ? column(runningSetups.filter(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f))).map(op =>
       inline([status('warning', `Setting up ${op.context}: ${op.progress}`), button(`show-setup-activity-${op.id}`, 'View progress', () => actions.tab('Activity'), { plain: true, dim: true })], { flexWrap: 'wrap' })), { gap: 0 }) : null,
@@ -114,7 +133,8 @@ export function renderPane(ui, state, actions, options = {}) {
     const sdkLine = sdk.updateAvailable === true ? ['warning', `${sdk.installed || 'SDK'} → ${sdk.latest || 'newer'} available`] : sdk.installed ? ['success', `${sdk.installed} up to date`] : null;
     const recent = operations.slice(-3).reverse();
     const steps = [
-      !signedIn && !state.initializing && { key: 'login', label: 'Sign in with your browser', detail: signedOut && auth?.status === 'failure' ? auth.summary : 'Browse projects, agents and tools with your MainSequence account.' },
+      !signedIn && !state.initializing && { key: 'login', label: ended ? 'Sign in again' : 'Sign in with your browser',
+        detail: ended ? `Your MainSequence session ended ${notice.when}.` : signedOut && auth?.status === 'failure' ? auth.summary : 'Browse projects, agents and tools with your MainSequence account.' },
       signedIn && !f.mcpEnvironment && { key: 'environment', label: 'Choose an organization environment', detail: environmentsFailed ? environmentsFailed.summary : 'Projects, agents and tools are scoped to one environment.' },
       !f.baseDir && { key: 'folder', label: 'Choose a repositories folder', detail: 'Repositories and project workspaces are created there.' },
     ].filter(Boolean);
@@ -171,8 +191,9 @@ export function renderPane(ui, state, actions, options = {}) {
     const diagnostics = record(state.results['projects.runtime-diagnostics']?.data);
     body = column([
       card('MainSequence account', [
-        state.initializing ? muted('Checking your saved connection…') : signedIn ? status('success', `Signed in as ${session.username || 'MainSequence account'}`) : auth?.status === 'failure' ? status('error', auth.summary) : muted('Sign in with your browser to use projects, agents and tools.'),
-        signedIn && caption(session.checked ? 'Connection verified' : 'Using your saved MainSequence session'),
+        state.initializing ? muted('Checking your saved connection…') : signedIn ? status('success', `Signed in as ${session.username || 'MainSequence account'}`) : auth?.status === 'failure' ? status('error', auth.summary)
+          : ended ? status('warning', `Your session ended ${notice.when}. Sign in again to use projects, agents and tools.`) : muted('Sign in with your browser to use projects, agents and tools.'),
+        signedIn && caption([session.checked ? 'Connection verified' : 'Using your saved MainSequence session', notice && notice.kind !== 'ended' && `ends ${notice.when}`].filter(Boolean).join(' · ')),
         buttons([!signedIn && button('settings-login', busy('devtools', 'login') ? 'Opening sign-in…' : 'Sign in with browser', dev('login'), { primary: true, available: !busy('devtools', 'login') }),
           button('auth-status', 'Check connection', dev('auth-status', { check: true })),
           signedIn && toggle('connection-actions', 'Manage account')]),

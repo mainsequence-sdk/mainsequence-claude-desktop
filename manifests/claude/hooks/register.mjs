@@ -1,6 +1,6 @@
 import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget,
-  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS } from './model.mjs';
-import { renderPane, renderRecovery } from './view.mjs';
+  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS, loginNotice, LOGIN_WARN_MS } from './model.mjs';
+import { renderPane, renderRecovery, renderLoginBand } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
@@ -102,6 +102,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
   if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', 'mcp-catalog', 'mcp-tool-call', 'plugin-version', 'plugin-update', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
   if (LOGIN_FAILURES.has(result.error?.code) && action !== 'auth-status' && !state.closed) void recheckLogin($, state);
+  if (action === 'auth-status' && current && !state.closed) void watchLogin($, state).catch(() => {});
   if (!quiet) update($);
   return result;
 }
@@ -118,14 +119,56 @@ function rememberMcpNames(state, result) {
   }
 }
 
-// The startup check reads the saved login without asking the backend, so it cannot tell that the backend
-// has since refused it (an expired session). A request refused for its login asks the backend once,
-// and the pane then shows why and offers Sign in.
+// The startup check reads the saved login without asking the backend: it knows when the login ends,
+// but not that the backend revoked it sooner. A request refused for its login asks the backend once,
+// and the pane then shows why and offers Sign in. A login already shown signed out needs no check.
 const LOGIN_FAILURES = new Set(['AUTH_REJECTED', 'NOT_AUTHENTICATED']);
 function recheckLogin($, state) {
+  if (state.results['devtools.auth-status']?.data?.authenticated === false) return Promise.resolve();
   if (state.loginCheck) return state.loginCheck;
   state.loginCheck = execute($, state, devRequest(state, 'auth-status', { check: true }), true).finally(() => { state.loginCheck = null; update($); });
   return state.loginCheck;
+}
+
+// Every session follows when the saved login ends: the band above the composer and the pane warn a day
+// before, and at that moment a fresh offline check shows it signed out. One session raises the notice.
+const LOGIN_RECHECK_MS = 600_000, LOGIN_CLAIM_MS = 1500;
+async function watchLogin($, state) {
+  state.loginTimer?.cancel(); state.loginTimer = null;
+  const auth = state.results['devtools.auth-status'], now = await $.clock.now();
+  if (state.closed || auth !== state.results['devtools.auth-status']) return;
+  const notice = loginNotice(auth, now), changed = JSON.stringify(notice) !== JSON.stringify(state.loginNotice);
+  state.loginNotice = notice;
+  if (changed) update($);
+  if (notice && notice.kind !== 'active') void announceLogin($, state, notice).catch(() => {});
+  if (!notice || notice.kind === 'ended') return;
+  // Wake at the warning and at the end, and at least every ten minutes: a computer asleep through either catches up.
+  const wait = Math.min(notice.kind === 'soon' ? notice.at - now : notice.at - LOGIN_WARN_MS - now, LOGIN_RECHECK_MS);
+  state.loginTimer = $.clock.after(Math.max(wait, 0) + 50, () => {
+    state.loginTimer = null;
+    void (async () => {
+      // At the end devtools reports the login signed out, without asking the backend.
+      if (await $.clock.now() >= notice.at) { await execute($, state, devRequest(state, 'auth-status', { check: false }), true); update($); }
+      else await watchLogin($, state);
+    })().catch(() => {});
+  });
+}
+
+/** One notice per login and stage, from whichever session sees it first: each claims it in the shared
+ * store, and only the session whose claim is still there a moment later raises it. */
+async function announceLogin($, state, notice) {
+  if (state.loginAnnounced === notice.key) return;
+  state.loginAnnounced = notice.key;
+  if (record(await $.store.get('login-notice')).key === notice.key) return;
+  await $.store.set('login-notice', { key: notice.key, by: state.sessionId });
+  await new Promise(resolve => { $.clock.after(LOGIN_CLAIM_MS, resolve); });
+  if (state.closed || record(await $.store.get('login-notice')).by !== state.sessionId) return;
+  const text = notice.kind === 'soon' ? `Your MainSequence session ends ${notice.when}. Sign in again to keep working.`
+    : `Your MainSequence session ended ${notice.when}. Sign in again from MainSequence.`;
+  // Desktop has no terminal notification channel; there the notice is a toast.
+  let sent = { isSent: false };
+  try { sent = await $.ui.notify(text, { title: 'MainSequence' }); } catch { /* an engine without notifications */ }
+  if (!sent?.isSent) $.ui.toast(text, { timeoutMs: 15000 });
 }
 
 /** Mirror the running operations of every session in Claude's status line. */
@@ -512,6 +555,7 @@ function actionsFor($, state) {
     refreshTools: () => background(refreshTools($, state)),
     confirm: (title, detail, callback) => { state.confirmation = { title, detail, callback }; update($); },
     dismiss: () => { state.confirmation = null; update($); },
+    hideLoginBand: () => { state.loginBandHidden = state.loginNotice?.key || ''; update($); },
     accept: () => { const confirmation = state.confirmation; state.confirmation = null; update($); if (confirmation) background(confirmation.callback()); },
     cancel: id => { const op = state.operations.find(value => value.id === id); if (op?.cancel) { op.progress = 'Cancelling…'; background(op.cancel()); update($); } },
     checkPlugin: () => background(checkPlugin($, state)),
@@ -802,8 +846,8 @@ async function initializeWorkspace($, state) {
     }
     state.preferencesLoading = false; update($);
     await attachWorkspace($, state);
-    await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
-    if ((['Projects', 'Tools', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) && !state.results['devtools.mcp-environments']) await loadEnvironments($, state);
+    const auth = await execute($, state, devRequest(state, 'auth-status', { check: false }), true);
+    if (record(auth.data).authenticated !== false && (['Projects', 'Tools', 'Agents'].includes(state.tab) || state.environmentSelections[state.fields.backend]) && !state.results['devtools.mcp-environments']) await loadEnvironments($, state);
   } finally { state.initializing = false; state.preferencesLoading = false; update($); }
   await syncShared($, state, true);
   loadTab($, state);
@@ -970,9 +1014,14 @@ export function register(on, options = {}) {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     wakeOnDesktop($, state, e);
     const existing = await next(e);
-    if (e.surface !== 'desktop' || !current(state, state.activeAgent)) return existing;
+    if (e.surface !== 'desktop') return existing;
     const ui = $.ui.resolve(e);
-    return ui.Box({ flexDirection: 'column', children: [existing,
+    // A login that ends within a day, or has ended, shows above every session's composer. Drawing it
+    // re-reads what the other sessions changed, so a sign-in elsewhere clears it here too.
+    const login = renderLoginBand(ui, state, actionsFor($, state));
+    if (login) void syncShared($, state);
+    if (!current(state, state.activeAgent)) return login ? ui.Box({ flexDirection: 'column', children: [existing, login].filter(Boolean) }) : existing;
+    return ui.Box({ flexDirection: 'column', children: [existing, login,
       ui.Box({ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [renderAgentActivity(ui, state, state.activeAgent),
         ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
           ui.Button({ key: 'agent-switch', label: 'Switch agent', plain: true, dimColor: true, onPress: () => {
@@ -1050,8 +1099,8 @@ export function register(on, options = {}) {
   on('session.end', async ($, e, next) => {
     // Edits still waiting to be shared, and this session's Activity with nothing left running.
     const settings = !!state.settingsTimer, view = !!state.viewTimer;
-    for (const timer of [state.settingsTimer, state.viewTimer, state.activityTimer, state.activityHeartbeat]) timer?.cancel();
-    state.settingsTimer = state.viewTimer = state.activityTimer = null;
+    for (const timer of [state.settingsTimer, state.viewTimer, state.activityTimer, state.activityHeartbeat, state.loginTimer]) timer?.cancel();
+    state.settingsTimer = state.viewTimer = state.activityTimer = state.loginTimer = null;
     if (settings) await writeSettings($, state).catch(() => {});
     if (view) await writeView($, state).catch(() => {});
     if (state.booted && state.sessionId) await writeActivity($, state, true).catch(() => {});
