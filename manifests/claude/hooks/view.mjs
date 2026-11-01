@@ -11,8 +11,9 @@ const VIEW_NOUN = { Code: 'your repositories', Projects: 'its projects', Agents:
 export function signedInState(state) {
   const auth = state.results['devtools.auth-status'];
   const session = record(auth?.data);
+  // A login the backend refused (an expired session) needs a new sign-in like a missing one.
   return { auth, session, signedIn: auth?.status === 'success' && session.authenticated === true,
-    signedOut: auth?.data?.authenticated === false || auth?.error?.code === 'NOT_AUTHENTICATED' };
+    signedOut: auth?.data?.authenticated === false || ['NOT_AUTHENTICATED', 'AUTH_REJECTED'].includes(auth?.error?.code) };
 }
 
 /** Drawn when the host refused a tree or startup failed: nothing is replayed. */
@@ -41,12 +42,15 @@ export function renderPane(ui, state, actions, options = {}) {
   const { auth, session, signedIn, signedOut } = signedInState(state);
   const environments = rows(state.results['devtools.mcp-environments']?.data);
   const environment = environments.find(r => r.uid === f.mcpEnvironment);
+  // Why the last environment load failed, shown rather than leaving an empty selector.
+  const environmentsFailed = state.results['devtools.mcp-environments']?.status === 'failure' ? state.results['devtools.mcp-environments'] : null;
 
   // Header: account, environment, running operations and settings on every view.
+  const signIn = key => button(key, busy('devtools', 'login') ? 'Opening sign-in…' : 'Sign in', dev('login'), { primary: true, available: !busy('devtools', 'login') });
   const account = state.initializing ? muted('Checking…')
     : signedIn ? status('success', session.username || 'Signed in')
-    : auth?.status === 'failure' ? status('error', 'Connection needs attention')
-    : button('login', busy('devtools', 'login') ? 'Opening sign-in…' : 'Sign in', dev('login'), { primary: true, available: !busy('devtools', 'login') });
+    : auth?.status === 'failure' && !signedOut ? status('error', 'Connection needs attention')
+    : signIn('login');
   const environmentControl = state.environmentsLoading ? muted('Loading environments…')
     : environments.length ? select('mcp-environment', '', environments.map(r => ({ value: r.uid, label: clean(r.name) })), f.mcpEnvironment, actions.selectEnvironment, 'Choose environment')
     : signedIn || signedOut === false ? button('mcp-environments', 'Choose environment', actions.refreshEnvironments, { plain: true, dim: true }) : null;
@@ -72,11 +76,11 @@ export function renderPane(ui, state, actions, options = {}) {
     button(`tab-${tab}`, tab, () => actions.tab(tab), tab === state.tab ? { primary: true } : { plain: true, dim: true })) });
   const blocker = (() => {
     if (!state.ready) return null;
-    if (auth?.status === 'failure') return status('error', auth.summary);
+    if (auth?.status === 'failure') return inline([status('error', auth.summary), signedOut && signIn('blocker-login')], { flexWrap: 'wrap' });
     if (signedOut && VIEW_NOUN[state.tab]) return status('warning', `Sign in to MainSequence to see ${VIEW_NOUN[state.tab]}.`);
     if (['Projects', 'Agents', 'Tools'].includes(state.tab) && !f.mcpEnvironment && !state.environmentsLoading) {
-      return inline([status('warning', `Choose an organization environment to see ${VIEW_NOUN[state.tab]}.`),
-        !environments.length && !signedOut && button('blocker-environments', 'Load environments', actions.refreshEnvironments, { plain: true })]);
+      return inline([status(environmentsFailed ? 'error' : 'warning', environmentsFailed ? environmentsFailed.summary : `Choose an organization environment to see ${VIEW_NOUN[state.tab]}.`),
+        !environments.length && !signedOut && button('blocker-environments', environmentsFailed ? 'Try again' : 'Load environments', actions.refreshEnvironments, { plain: true })], { flexWrap: 'wrap' });
     }
     if (state.tab === 'Code' && !f.baseDir) return inline([status('warning', 'Choose a repositories folder before setting up repositories.'), button('blocker-folder', 'Choose folder', project('pick-folder', { destination: 'baseDir' }), { plain: true })]);
     return null;
@@ -110,14 +114,14 @@ export function renderPane(ui, state, actions, options = {}) {
     const sdkLine = sdk.updateAvailable === true ? ['warning', `${sdk.installed || 'SDK'} → ${sdk.latest || 'newer'} available`] : sdk.installed ? ['success', `${sdk.installed} up to date`] : null;
     const recent = operations.slice(-3).reverse();
     const steps = [
-      !signedIn && !state.initializing && { key: 'login', label: 'Sign in with your browser', detail: 'Browse projects, agents and tools with your MainSequence account.' },
-      signedIn && !f.mcpEnvironment && { key: 'environment', label: 'Choose an organization environment', detail: 'Projects, agents and tools are scoped to one environment.' },
+      !signedIn && !state.initializing && { key: 'login', label: 'Sign in with your browser', detail: signedOut && auth?.status === 'failure' ? auth.summary : 'Browse projects, agents and tools with your MainSequence account.' },
+      signedIn && !f.mcpEnvironment && { key: 'environment', label: 'Choose an organization environment', detail: environmentsFailed ? environmentsFailed.summary : 'Projects, agents and tools are scoped to one environment.' },
       !f.baseDir && { key: 'folder', label: 'Choose a repositories folder', detail: 'Repositories and project workspaces are created there.' },
     ].filter(Boolean);
     body = column([
       steps.length ? card('Next steps', steps.map(step => row(`step-row-${step.key}`, [title(step.label), caption(step.detail)], [
         step.key === 'login' && button('step-login', 'Sign in', dev('login'), { primary: true, available: !busy('devtools', 'login') }),
-        step.key === 'environment' && (environments.length ? null : button('step-environments', 'Load environments', actions.refreshEnvironments, { primary: true })),
+        step.key === 'environment' && (environments.length ? null : button('step-environments', environmentsFailed ? 'Try again' : 'Load environments', actions.refreshEnvironments, { primary: true })),
         step.key === 'folder' && button('step-folder', 'Choose folder', project('pick-folder', { destination: 'baseDir' }), { primary: true }),
       ]))) : null,
       card('This session', [

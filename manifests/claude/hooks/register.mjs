@@ -101,6 +101,7 @@ async function execute($, state, domain, quiet = false, observer = {}) {
   // the sign-in check is in flight must not discard it.
   const current = domain.scope === 'devtools' && sessionActions.has(action) ? backend === state.fields.backend : contextRevision === state.contextRevision;
   if (current && currentMcp && !state.closed && !action.startsWith('organization-project') && !['agents-list', 'agent-get', 'agent-icons', 'mcp-catalog', 'mcp-tool-call', 'plugin-version', 'plugin-update', ...DEPLOY_ACTIONS].includes(action)) state.results[`${domain.scope}.${action}`] = publicResult;
+  if (LOGIN_FAILURES.has(result.error?.code) && action !== 'auth-status' && !state.closed) void recheckLogin($, state);
   if (!quiet) update($);
   return result;
 }
@@ -115,6 +116,16 @@ function rememberMcpNames(state, result) {
     if (typeof row.display_name === 'string' && row.display_name.trim()) state.mcpNames[key] = row.display_name;
     else if (state.mcpNames[key]) row.display_name = state.mcpNames[key];
   }
+}
+
+// The startup check reads the saved login without asking the backend, so it cannot tell that the backend
+// has since refused it (an expired session). A request refused for its login asks the backend once,
+// and the pane then shows why and offers Sign in.
+const LOGIN_FAILURES = new Set(['AUTH_REJECTED', 'NOT_AUTHENTICATED']);
+function recheckLogin($, state) {
+  if (state.loginCheck) return state.loginCheck;
+  state.loginCheck = execute($, state, devRequest(state, 'auth-status', { check: true }), true).finally(() => { state.loginCheck = null; update($); });
+  return state.loginCheck;
 }
 
 /** Mirror the running operations of every session in Claude's status line. */
@@ -162,6 +173,8 @@ async function runDev($, state, action, extra = {}) {
   if (changed) void signal($, state, changed).catch(() => {});
   if (result.status === 'success' && ['mcp-add', 'mcp-remove'].includes(action)) await refreshTools($, state);
   if (result.status === 'success' && ['login', 'logout', 'refresh-token'].includes(action)) await execute($, state, devRequest(state, 'auth-status', { check: true }), true);
+  // Signing in again brings back the environment the sessions share.
+  if (result.status === 'success' && action === 'login' && !state.closed && revision === state.contextRevision) await loadEnvironments($, state);
   if (result.status === 'success' && !extra.dryRun && ['sync', 'install', 'update-sdk', 'update-agents', 'install-skills', 'skills-sync', 'env-cleanup'].includes(action)) {
     await execute($, state, devRequest(state, 'status'), true);
     if (action === 'update-sdk' || action === 'install') await execute($, state, devRequest(state, 'sdk-status'), true);

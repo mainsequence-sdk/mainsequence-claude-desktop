@@ -111,6 +111,13 @@ the account and connection state. **Check connection** verifies it; **Manage
 account** expands **Renew session** and the confirmed **Sign out** action. These use
 the existing shared machine-session service and concern MainSequence only.
 
+The startup read cannot tell that the backend has since refused the saved login (an
+expired session). The first request the backend refuses for its login (loading
+environments, agents or tools) asks the backend once. The pane then shows the backend's
+reason with **Sign in** in the header and beside the message, instead of leaving an empty
+environment selector. Signing in loads the environments again and selects the one the
+sessions share. Any other failed environment load shows its reason with **Try again**.
+
 Workspace settings show actual editable values, not example placeholders. Saved
 plugin values take precedence. Otherwise, shared devtools resolves the backend from
 `MAINSEQUENCE_ENDPOINT`, then the existing MainSequence configuration, then

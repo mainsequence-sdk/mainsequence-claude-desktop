@@ -911,7 +911,8 @@ test('Home shows next steps until sign-in, environment and folder are settled, t
   assert.ok(f.find(tree, 'login'), 'header offers sign-in'); assert.equal(f.find(tree, 'mcp-environment'), undefined);
   await f.press('step-login'); tree = await f.pane(); assert.equal(f.find(tree, 'step-login'), undefined); assert.ok(f.find(tree, 'step-row-environment'));
   assert.match(JSON.stringify(tree), /home@example.test/);
-  await f.press('step-environments'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+  // Signing in loads the environments: the step asks for a choice, with no Load button.
+  assert.equal(f.find(tree, 'step-environments'), undefined); f.find(tree, 'mcp-environment').props.onSelect('env-1'); await flush();
   await f.press('step-folder'); tree = await f.pane(); assert.equal(f.find(tree, 'step-row-environment'), undefined); assert.equal(f.find(tree, 'step-folder'), undefined);
   assert.equal(f.find(tree, 'step-login'), undefined);
   assert.equal(f.calls.some(c => c.request?.request.action === 'status'), false, 'status is not spawned until requested');
@@ -1840,4 +1841,45 @@ test('an icon record heavier than Desktop draws, as an older worker cached, is d
   const band = await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} });
   assert.ok(svgNodes(band).every(node => node.props.source.length <= 32768) && svgNodes(band).some(node => node.props.source === still));
   assert.equal(svgNodes(await f.pane()).some(node => node.props.source.length > 32768), false, 'no Svg in the pane is heavier than Desktop draws');
+});
+
+test('an expired login the startup check called usable is shown with Sign in, and signing in brings the shared environment back', async () => {
+  // The startup check reads the saved login without the backend; the backend refuses it at the first real request.
+  let expired = true, checks = 0;
+  const refused = action => ({ schemaVersion: 1, action, status: 'failure', summary: 'The backend refused the saved session for https://api.main-sequence.app: it expired on 2026-10-30 07:16 UTC. Sign in again.',
+    error: { code: 'AUTH_REJECTED', message: 'expired' } });
+  const f = fixture({ environments: { 'https://api.main-sequence.app': 'research' }, respond: ({ request: q }) => {
+    if (q.action === 'auth-status') { checks++; return q.check && expired ? refused(q.action) : success(q.action, { authenticated: true, username: 'jose@example.test' }); }
+    if (q.action === 'login') { expired = false; return success(q.action, {}); }
+    if (q.action === 'mcp-environments') return expired ? refused(q.action) : success(q.action, [{ uid: 'research', name: 'Research' }, { uid: 'production', name: 'Production' }]);
+    return success(q.action, []);
+  } });
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /expired on 2026-10-30 07:16 UTC\. Sign in again\./, 'the reason is shown, not an empty selector');
+  assert.ok(f.find(tree, 'login'), 'the header offers Sign in'); assert.ok(f.find(tree, 'blocker-login'));
+  assert.doesNotMatch(JSON.stringify(f.find(tree, 'login') ? tree.props.children[0] : {}), /jose@example\.test/);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'auth-status' && c.request.request.check === true).length, 1, 'the backend is asked once');
+  await f.press('login'); await settle();
+  tree = await f.pane();
+  assert.match(JSON.stringify(tree), /jose@example\.test/);
+  assert.equal(f.find(tree, 'mcp-environment').props.value, 'research', 'the shared environment is selected again');
+  assert.equal(f.calls.filter(c => c.store === 'changed:auth').length, 1, 'the other sessions are told to re-read the login');
+});
+
+test('an environment load that fails shows why, with Try again', async () => {
+  let down = true;
+  const f = fixture({ respond: ({ request: q }) => q.action === 'auth-status' ? success(q.action, { authenticated: true, username: 'jose@example.test' })
+    : q.action === 'mcp-environments' ? (down ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'MainSequence could not be reached: the request timed out after 30 s.', error: { code: 'API_ERROR', message: 'timeout' } }
+      : success(q.action, [{ uid: 'research', name: 'Research' }])) : success(q.action, []) });
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  await f.press('tab-Tools'); await settle();
+  let tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, 'blocker-environments') ? tree : {}), /could not be reached: the request timed out/);
+  assert.equal(f.find(tree, 'blocker-environments').props.label, 'Try again');
+  assert.ok(f.find(tree, 'login') === undefined, 'a reachable login is not asked for again');
+  down = false; await f.press('blocker-environments'); await settle();
+  assert.ok(f.find(await f.pane(), 'mcp-environment'));
 });
