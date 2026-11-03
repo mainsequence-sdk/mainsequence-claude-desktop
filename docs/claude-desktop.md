@@ -111,6 +111,31 @@ the account and connection state. **Check connection** verifies it; **Manage
 account** expands **Renew session** and the confirmed **Sign out** action. These use
 the existing shared machine-session service and concern MainSequence only.
 
+A MainSequence login ends a fixed time after sign-in (five days by default), however
+often it is used; devtools reads that moment from the saved login without contacting the
+backend. Every Code session follows it:
+
+- From a day before, the pane's header and a band above the composer say when the
+  session ends ("MainSequence session ends tomorrow at 12:30") with **Sign in again**.
+  Signing in starts a new login and clears the warning in every session. **Not now**
+  hides the band in that session until the login's next stage.
+- At that moment the session shows signed out without asking the backend: **Sign in**
+  in the header, the band and Home say when it ended, and the sections that need an
+  account say so with **Sign in again**. A session started after the end shows the same
+  and loads nothing for the old login.
+- One notice per stage (ending soon, ended) is raised by whichever session sees it
+  first; the sessions claim it in the plugin store. Claude Desktop has no notification
+  channel for plugins, so the notice is a toast in that session.
+- Settings names when a signed-in login ends.
+
+A login the backend revoked sooner is found by the first request it refuses (loading
+environments, agents or tools), which asks the backend once. The pane then shows the
+backend's reason with **Sign in** in the header and beside the message, instead of
+leaving an empty environment selector. Signing in loads the environments again and
+selects the one the sessions share. A permission the account lacks (HTTP 403) is an
+ordinary error and never asks for a sign-in. Any other failed environment load shows its
+reason with **Try again**.
+
 Workspace settings show actual editable values, not example placeholders. Saved
 plugin values take precedence. Otherwise, shared devtools resolves the backend from
 `MAINSEQUENCE_ENDPOINT`, then the existing MainSequence configuration, then

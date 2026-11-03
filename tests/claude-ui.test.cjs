@@ -118,7 +118,7 @@ function fixture(options = {}) {
     prompt: { read: async () => ({ text: draft, cursor: draft.length }), fill: async value => { calls.push({ filled: value }); if (options.refuseFill) return { isFilled: false }; draft = value.text; return { isFilled: true, text: draft, cursor: draft.length }; }, submit: async value => { calls.push({ submitted: value }); return {}; }, suggest: async value => { calls.push({ suggested: value }); } },
     command: { register: async spec => { calls.push({ command: spec }); }, run: async spec => { calls.push({runCommand:spec}); return options.commandResult ? options.commandResult(spec) : {text:`Added ${spec.args} as a working directory for this session`}; } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
-      toast: value => { calls.push({ toast: value }); }, ask: async () => options.ask || 'Run tool', status: value => { calls.push({ status: value }); } },
+      toast: value => { calls.push({ toast: value }); }, notify: async (text, spec) => { calls.push({ notify: text, title: spec?.title }); return { isSent: false, reason: 'no-surface' }; }, ask: async () => options.ask || 'Run tool', status: value => { calls.push({ status: value }); } },
     tool: { register: async spec => { registered.push(spec); if (spec.name !== 'ms_deployment_status') tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
     clock: { now: async () => now, after: (ms, callback) => { const timer = { ms, callback, once: true, cancel() { timer.cancelled = true; } }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() { timer.cancelled = true; } }; timers.push(timer); return timer; } },
     env: { get: async key => env.get(key), set: async (key, value) => { value === undefined ? env.delete(key) : env.set(key, value); } },
@@ -911,7 +911,8 @@ test('Home shows next steps until sign-in, environment and folder are settled, t
   assert.ok(f.find(tree, 'login'), 'header offers sign-in'); assert.equal(f.find(tree, 'mcp-environment'), undefined);
   await f.press('step-login'); tree = await f.pane(); assert.equal(f.find(tree, 'step-login'), undefined); assert.ok(f.find(tree, 'step-row-environment'));
   assert.match(JSON.stringify(tree), /home@example.test/);
-  await f.press('step-environments'); f.find(await f.pane(), 'mcp-environment').props.onSelect('env-1'); await flush();
+  // Signing in loads the environments: the step asks for a choice, with no Load button.
+  assert.equal(f.find(tree, 'step-environments'), undefined); f.find(tree, 'mcp-environment').props.onSelect('env-1'); await flush();
   await f.press('step-folder'); tree = await f.pane(); assert.equal(f.find(tree, 'step-row-environment'), undefined); assert.equal(f.find(tree, 'step-folder'), undefined);
   assert.equal(f.find(tree, 'step-login'), undefined);
   assert.equal(f.calls.some(c => c.request?.request.action === 'status'), false, 'status is not spawned until requested');
@@ -1840,4 +1841,125 @@ test('an icon record heavier than Desktop draws, as an older worker cached, is d
   const band = await f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} });
   assert.ok(svgNodes(band).every(node => node.props.source.length <= 32768) && svgNodes(band).some(node => node.props.source === still));
   assert.equal(svgNodes(await f.pane()).some(node => node.props.source.length > 32768), false, 'no Svg in the pane is heavier than Desktop draws');
+});
+
+test('a login the backend revoked after the startup check called it usable is shown with Sign in, and signing in brings the shared environment back', async () => {
+  // The startup check reads the saved login without the backend; the backend refuses a revoked one at the first real request.
+  let expired = true, checks = 0;
+  const refused = action => ({ schemaVersion: 1, action, status: 'failure', summary: 'The backend refused the saved session for https://api.main-sequence.app: it was revoked or belongs to another backend. Sign in again.',
+    error: { code: 'AUTH_REJECTED', message: 'revoked' } });
+  const f = fixture({ environments: { 'https://api.main-sequence.app': 'research' }, respond: ({ request: q }) => {
+    if (q.action === 'auth-status') { checks++; return q.check && expired ? refused(q.action) : success(q.action, { authenticated: true, username: 'jose@example.test' }); }
+    if (q.action === 'login') { expired = false; return success(q.action, {}); }
+    if (q.action === 'mcp-environments') return expired ? refused(q.action) : success(q.action, [{ uid: 'research', name: 'Research' }, { uid: 'production', name: 'Production' }]);
+    return success(q.action, []);
+  } });
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /it was revoked or belongs to another backend\. Sign in again\./, 'the reason is shown, not an empty selector');
+  assert.ok(f.find(tree, 'login'), 'the header offers Sign in'); assert.ok(f.find(tree, 'blocker-login'));
+  assert.doesNotMatch(JSON.stringify(f.find(tree, 'login') ? tree.props.children[0] : {}), /jose@example\.test/);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'auth-status' && c.request.request.check === true).length, 1, 'the backend is asked once');
+  await f.press('login'); await settle();
+  tree = await f.pane();
+  assert.match(JSON.stringify(tree), /jose@example\.test/);
+  assert.equal(f.find(tree, 'mcp-environment').props.value, 'research', 'the shared environment is selected again');
+  assert.equal(f.calls.filter(c => c.store === 'changed:auth').length, 1, 'the other sessions are told to re-read the login');
+});
+
+test('an environment load that fails shows why, with Try again', async () => {
+  let down = true;
+  const f = fixture({ respond: ({ request: q }) => q.action === 'auth-status' ? success(q.action, { authenticated: true, username: 'jose@example.test' })
+    : q.action === 'mcp-environments' ? (down ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'MainSequence could not be reached: the request timed out after 30 s.', error: { code: 'API_ERROR', message: 'timeout' } }
+      : success(q.action, [{ uid: 'research', name: 'Research' }])) : success(q.action, []) });
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  await f.press('tab-Tools'); await settle();
+  let tree = await f.pane();
+  assert.match(JSON.stringify(f.find(tree, 'blocker-environments') ? tree : {}), /could not be reached: the request timed out/);
+  assert.equal(f.find(tree, 'blocker-environments').props.label, 'Try again');
+  assert.ok(f.find(tree, 'login') === undefined, 'a reachable login is not asked for again');
+  down = false; await f.press('blocker-environments'); await settle();
+  assert.ok(f.find(await f.pane(), 'mcp-environment'));
+});
+
+// The saved login ends at a fixed moment devtools reads from the saved session (`sessionEndsAt`).
+const localTime = (...parts) => new Date(2026, 10, ...parts).getTime();
+function loginFixture(options = {}) {
+  const login = { endsAt: options.endsAt ?? localTime(6, 12, 30) };
+  const f = fixture({ stores: options.stores, hostSessionId: options.hostSessionId, environments: { 'https://api.main-sequence.app': 'research' }, respond: ({ request: q }) => {
+    const ended = login.endsAt <= f.now, data = { authenticated: !ended, username: 'jose@example.test', sessionEndsAt: new Date(login.endsAt).toISOString() };
+    if (q.action === 'auth-status') return q.check && ended ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The saved session ended. Sign in again.', error: { code: 'NOT_AUTHENTICATED', message: 'ended' } }
+      : { ...success(q.action, data), summary: ended ? 'The saved session ended. Sign in again.' : 'The selected session is usable.' };
+    if (q.action === 'login') { login.endsAt = f.now + 5 * 86_400_000; return success(q.action, {}); }
+    if (q.action === 'mcp-environments') return ended ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'ended', error: { code: 'AUTH_REJECTED', message: 'ended' } } : success(q.action, [{ uid: 'research', name: 'Research' }]);
+    return success(q.action, []);
+  } });
+  f.now = options.now ?? localTime(5, 15, 0);
+  return { f, login };
+}
+async function startLogin(f) {
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+}
+const band = f => f.emit('ui.render', { component: 'AbovePrompt', surface: 'desktop', props: {} });
+const shown = (f, kind) => f.calls.filter(c => c.toast && c.toast.includes(`MainSequence session ${kind}`));
+
+test('a login ending within a day is warned in the pane and above the composer, and is signed out at its end', async () => {
+  const { f } = loginFixture();
+  await startLogin(f);
+  let tree = await f.pane();
+  assert.match(JSON.stringify(tree), /Your MainSequence session ends tomorrow at 12:30\. Sign in again to keep working\./);
+  assert.equal(f.find(tree, 'renew-login').props.label, 'Sign in again');
+  assert.match(JSON.stringify(f.find(await band(f), 'mainsequence-login-band')), /MainSequence session ends tomorrow at 12:30/);
+  // One notice: claimed in the shared store, raised after the claim holds. Desktop has no notification channel, so a toast.
+  assert.deepEqual(f.stores.get('login-notice'), { key: `soon:${localTime(6, 12, 30)}`, by: 'session-1' });
+  await f.fire(1500);
+  assert.equal(f.calls.filter(c => c.notify).length, 1); assert.equal(f.calls.find(c => c.notify).title, 'MainSequence');
+  assert.equal(shown(f, 'ends tomorrow at 12:30').length, 1);
+  // The timer wakes at least every ten minutes; at the end a fresh offline check shows it signed out.
+  const wake = f.timers.find(t => t.once && !t.cancelled && !t.fired && t.ms === 600_050);
+  assert.ok(wake, 'the login timer waits at most ten minutes');
+  f.now = localTime(6, 12, 31); wake.fired = true; wake.callback(); await settle();
+  tree = await f.pane();
+  assert.ok(f.find(tree, 'login'), 'the header offers Sign in');
+  assert.match(JSON.stringify(f.find(tree, 'step-row-login')), /Your MainSequence session ended today at 12:30\./);
+  assert.match(JSON.stringify(f.find(await band(f), 'mainsequence-login-band')), /MainSequence session ended today at 12:30/);
+  await f.fire(1500);
+  assert.equal(shown(f, 'ended today at 12:30').length, 1);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'auth-status' && c.request.request.check === true).length, 0, 'the backend is not asked');
+  // Not now hides the band in this session; signing in from it starts a new login and clears it.
+  f.find(await band(f), 'login-band-hide').props.onPress(); await settle();
+  assert.equal(f.find(await band(f), 'mainsequence-login-band'), undefined);
+  await f.press('login'); await settle();
+  tree = await f.pane();
+  assert.match(JSON.stringify(tree), /jose@example\.test/); assert.equal(f.find(tree, 'renew-login'), undefined);
+  assert.equal(f.find(await band(f), 'mainsequence-login-band'), undefined);
+  await f.press('tab-Settings');
+  const account = JSON.stringify(await f.pane()).match(/"(?:Connection verified|Using your saved MainSequence session)[^"]*"/)?.[0];
+  assert.equal(account, '"Using your saved MainSequence session · ends on 11 Nov at 12:31"', 'Settings names when the new login ends');
+});
+
+test('one session raises the notice for a login; the others show the band without repeating it', async () => {
+  const stores = new Map();
+  const first = loginFixture({ stores }).f, second = loginFixture({ stores, hostSessionId: 'session-2' }).f;
+  await startLogin(first); await startLogin(second);
+  await first.fire(1500); await second.fire(1500);
+  assert.equal(shown(first, 'ends').length + shown(second, 'ends').length, 1);
+  assert.equal(stores.get('login-notice').by, 'session-1');
+  for (const f of [first, second]) assert.ok(f.find(await band(f), 'login-band-sign-in'), 'every session shows the band');
+});
+
+test('a login that ended before startup shows when it ended and asks nothing of the backend', async () => {
+  const { f } = loginFixture({ endsAt: localTime(2, 7, 16) });
+  await startLogin(f);
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'mcp-environments').length, 0, 'no environment load for a signed-out login');
+  await f.press('tab-Tools'); await settle();
+  const tree = await f.pane();
+  assert.match(JSON.stringify(tree), /Your MainSequence session ended on 2 Nov at 07:16\. Sign in again to see its MCP tools\./);
+  assert.equal(f.find(tree, 'blocker-login').props.label, 'Sign in again');
+  assert.equal(f.calls.filter(c => c.request?.request.action === 'auth-status' && c.request.request.check === true).length, 0);
+  await f.fire(1500);
+  assert.equal(shown(f, 'ended on 2 Nov at 07:16').length, 1);
 });

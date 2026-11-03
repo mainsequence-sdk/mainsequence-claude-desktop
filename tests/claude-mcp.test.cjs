@@ -56,7 +56,9 @@ test('packaged Claude worker discovers, connects and calls MCPs with nameless re
   backend = await listen(async (req, res) => {
     const message = await body(req);
     calls.push({ server: 'platform', path: req.url, authorization: req.headers.authorization });
-    if (req.headers.authorization !== 'Bearer ' + platformToken || state.denied) return res.writeHead(403).end();
+    // As the backend: 401 for a login it does not accept, 403 for a permission the account lacks.
+    if (req.headers.authorization !== 'Bearer ' + platformToken) return res.writeHead(401).end();
+    if (state.denied) return res.writeHead(403).end();
     if (req.url === '/mcp') {
       if (initialized(res, message)) return;
       assert.equal(message.params.name, 'resource_release.mcp_endpoints');
@@ -168,7 +170,7 @@ require(${JSON.stringify(path.join(packageRoot, 'dist/claudeRunner.js'))}).main(
 
   const exchanged = state.exchanged, executed = calls.filter(call => call.server === 'project').length, stored = await fs.readFile(store, 'utf8');
   state.denied = true;
-  assert.equal((await run('mcp-tools')).error.code, 'AUTH_REJECTED');
+  assert.equal((await run('mcp-tools')).error.code, 'FORBIDDEN');
   state.denied = false; state.endpoint = 'https://changed.example/mcp';
   assert.equal((await run('mcp-tools')).error.code, 'INVALID_REQUEST');
   state.endpoint = undefined; state.detailUid = otherUid;

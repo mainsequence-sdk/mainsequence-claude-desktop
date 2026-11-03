@@ -73,6 +73,24 @@ export function allOperations(state) {
   const order = op => op.startedAt || Number.MAX_SAFE_INTEGER;
   return [...state.remoteOperations, ...state.operations].sort((a, b) => order(a) - order(b));
 }
+/** A saved login ends at a fixed moment, its refresh token's expiry, which devtools reports as
+ * `sessionEndsAt`. Every session warns a day before and shows it signed out from then on. */
+export const LOGIN_WARN_MS = 86_400_000;
+const two = value => String(value).padStart(2, '0');
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "today at 12:30", "tomorrow at 09:05", "yesterday at 18:00" or "on 30 Oct at 07:16", in local time. */
+export function loginWhen(at, now) {
+  const date = new Date(at), day = value => new Date(value).toDateString();
+  const named = { [day(now)]: 'today', [day(now + 86_400_000)]: 'tomorrow', [day(now - 86_400_000)]: 'yesterday' }[day(at)];
+  return `${named || `on ${date.getDate()} ${MONTHS[date.getMonth()]}`} at ${two(date.getHours())}:${two(date.getMinutes())}`;
+}
+/** Where the saved login stands: `kind` is 'ended', 'soon' (within a day) or 'active'; null when the check named no end. */
+export function loginNotice(auth, now) {
+  const at = auth?.status === 'success' ? Date.parse(auth.data?.sessionEndsAt) : NaN;
+  if (!Number.isFinite(at)) return null;
+  const kind = at <= now ? 'ended' : at - now <= LOGIN_WARN_MS ? 'soon' : 'active';
+  return { kind, at, key: `${kind}:${at}`, when: loginWhen(at, now) };
+}
 export function initialState(options = {}) {
   return { tab: 'Home', expanded: {}, initPromise: null, toolRefresh: null, mcpNames: {}, booting: null, booted: false, paneFault: null, selectPages: {}, codeDetail: null, codeFilter: 'all', toolsView: 'list', projectListView: false, homeStatusRequested: false, contextRevision: 0, initializing: false, repositoriesLoading: false, cwd: '', sessionId: '', ready: false, problem: '', version: '', closed: false,
     // Shared with the other sessions through the plugin store: the JSON each key last held here, and the writers' timers.
@@ -92,6 +110,8 @@ export function initialState(options = {}) {
     deployTimers: { run: null, list: null }, deployPolls: 0, deployPaused: false, paneOpen: false,
     // The plugin's own release: the worker's answer to plugin-version, merged with plugin-update's.
     plugin: {}, pluginCheck: null, pluginCheckedAt: 0, pluginUpdating: false, pluginHelp: '',
+    // When the saved login ends (loginNotice), the timer that wakes at its warning and end, and what this session already raised or hid.
+    loginNotice: null, loginTimer: null, loginAnnounced: '', loginBandHidden: '',
     confirmation: null, sequence: 0, timers: [], mcpTools: {}, mcpOffset: 0, running: new Map() };
 }
 /** The MainSequence repository branch a local folder stands for, from the repositories list and the checked status. */

@@ -474,3 +474,48 @@ test('a native pane opens on what another session left and shares its own sectio
   expect(writes).not.toContain('settings');
   await ui.unmount();
 });
+
+test('a login ending within a day is warned above the composer and in the pane, and shown signed out at its end', async ($, on) => {
+  const endsAt = new Date(2026, 10, 6, 12, 30).getTime();
+  // Half an hour before the end: the pane's own polling stays within what the kit's clock resolves in one move.
+  const clock = mock.clock(on, {now:new Date(2026, 10, 6, 12, 0).getTime()}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'login-end'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  const notices: string[] = [];
+  on('ui.notify', ($, e) => { notices.push(e.text); return {value:{isSent:false,reason:'no-surface'}}; });
+  on('ui.toast', ($, e) => { notices.push(e.text); return {value:undefined}; });
+  // Stands for Claude's own band above the composer, which the plugin's band joins.
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => { const { Text } = $.ui.resolve(e); return Text({ children: ['Existing composer band'] }); });
+  const checks: boolean[] = [];
+  on('process.spawn', async function* ($, e) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    if (q.action === 'auth-status') checks.push(!!q.check);
+    const data = q.action === 'auth-status' ? {authenticated:clock.now() < endsAt, username:'fixture@example.test', sessionEndsAt:new Date(endsAt).toISOString()} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  await clock.settle();
+  let band = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});
+  expect(await band.find({type:'Text',text:'MainSequence session ends today at 12:30'})).toBeDefined();
+  expect(await band.find({type:'Button',text:'Sign in again'})).toBeDefined();
+  await band.unmount();
+  let pane = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  expect(await pane.find({type:'Text',text:'◌ Your MainSequence session ends today at 12:30. Sign in again to keep working.'})).toBeDefined();
+  await pane.unmount();
+  await clock.advance(1500);
+  expect(notices).toEqual(['Your MainSequence session ends today at 12:30. Sign in again to keep working.', 'Your MainSequence session ends today at 12:30. Sign in again to keep working.']);
+  await clock.set(endsAt + 60_000); await clock.advance(1500);
+  band = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});
+  expect(await band.find({type:'Text',text:'MainSequence session ended today at 12:30'})).toBeDefined();
+  await band.unmount();
+  pane = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  expect(await pane.find({type:'Text',text:'Your MainSequence session ended today at 12:30.'})).toBeDefined();
+  expect(await pane.find({key:'login'})).toBeDefined();
+  await pane.unmount();
+  expect(notices.at(-1)).toBe('Your MainSequence session ended today at 12:30. Sign in again from MainSequence.');
+  expect(checks.includes(true), 'the end is known without asking the backend').toBe(false);
+});
