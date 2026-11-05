@@ -96,6 +96,8 @@ export function initialState(options = {}) {
     // Shared with the other sessions through the plugin store: the JSON each key last held here, and the writers' timers.
     shared: { settings: '', environments: '', view: '', signals: null }, remoteOperations: [], syncing: null, syncedAt: 0, syncTimer: null,
     settingsTimer: null, viewTimer: null, activityTimer: null, activityHeartbeat: null, activityPublished: false,
+    // The repositories folder the mainsequence CLI and Codex keep, as last read or saved here, and the timer of a pending save.
+    sharedFolder: '', folderTimer: null, folderReadAt: 0,
     fields: { backend: 'https://api.main-sequence.app', commandCenterUrl: '', projectSearch: '', root: '', baseDir: '', organization: '', repositoryUid: '', branch: '', projectType: '',
       image: '', platform: '', mcpSearch: '', mcpEnvironment: '', mcpTool: '', mcpArguments: '{}', agentSearch: '', codeSearch: '',
       nodePath: typeof options.nodePath === 'string' && options.nodePath ? options.nodePath : 'node' },

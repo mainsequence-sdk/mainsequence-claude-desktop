@@ -139,11 +139,14 @@ reason with **Try again**.
 Workspace settings show actual editable values, not example placeholders. Saved
 plugin values take precedence. Otherwise, shared devtools resolves the backend from
 `MAINSEQUENCE_ENDPOINT`, then the existing MainSequence configuration, then
-`https://api.main-sequence.app`. The repositories folder uses the existing
-`mainsequence_path`, otherwise `<home>/mainsequence` displayed as a full path. The
-folder is read as the `mainsequence` CLI reads it: `~` is your home folder and a bare
-name such as `mainsequence-dev` is a folder in it, whichever folder the Code session has
-open. Repositories are set up in, and listed from, `<folder>/<organization>/projects/`,
+`https://api.main-sequence.app`. The repositories folder is the one the `mainsequence`
+CLI and the Codex plugin keep, `mainsequence_path` in the CLI's configuration, otherwise
+`<home>/mainsequence` displayed as a full path. Editing it in Settings saves it there once
+typing settles, so Codex and the CLI use the new folder too; a folder changed in Codex or
+the CLI appears when the pane is opened again. A folder only an older plugin version saved
+is written there once. The folder is read as the CLI reads it: `~` is your home folder and
+a bare name such as `mainsequence-dev` is a folder in it, whichever folder the Code session
+has open. Repositories are set up in, and listed from, `<folder>/<organization>/projects/`,
 the folder the CLI uses too.
 Defaults are usable without saving and do not depend on successful authentication.
 Startup resolution never overwrites a user's in-progress edits. There is no Save step:
