@@ -8,14 +8,14 @@
   "plugins": [
     {
       "name": "mainsequence",
-      "version": "0.4.25",
+      "version": "0.4.26",
       "description": "MainSequence login, repositories, projects, MCP, agents and activity inside Claude Desktop Code.",
       "homepage": "https://github.com/mainsequence-sdk/mainsequence-claude-desktop",
       "license": "MIT",
       "source": {
         "source": "archive",
-        "url": "https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/download/v0.4.25/mainsequence-claude-desktop-0.4.25.zip",
-        "sha256": "2178b31d33a5164e88f320033892697c1714ffa1cd9abdd845ba147bd14dee28"
+        "url": "https://github.com/mainsequence-sdk/mainsequence-claude-desktop/releases/download/v0.4.26/mainsequence-claude-desktop-0.4.26.zip",
+        "sha256": "75992944eb887b8925a651c49be53a078c592b4e30c4e2c304c1f33a683a7879"
       }
     }
   ]
