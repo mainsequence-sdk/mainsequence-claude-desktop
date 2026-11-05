@@ -1963,3 +1963,75 @@ test('a login that ended before startup shows when it ended and asks nothing of 
   await f.fire(1500);
   assert.equal(shown(f, 'ended on 2 Nov at 07:16').length, 1);
 });
+
+// The repositories folder is the one Codex and the mainsequence CLI keep (`mainsequence_path`); Claude's store copy follows it.
+function folderFixture({ shared, saved } = {}) {
+  const writes = [];
+  const f = fixture({ saved, respond: ({ request: q }) => {
+    if (q.action === 'workspace-preferences') return success(q.action, { backend: 'https://api.main-sequence.app', ...shared.value });
+    if (q.action === 'workspace-folder') {
+      writes.push(q.baseDir);
+      if (q.baseDir === 'refused') return failure(q.action, 'Repositories folder is required.');
+      shared.value = { baseDir: q.baseDir.startsWith('/') ? q.baseDir : `/fixture/home/${q.baseDir}`, baseDirSaved: true };
+      return success(q.action, { backend: 'https://api.main-sequence.app', ...shared.value });
+    }
+    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'jose@example.test' });
+    return success(q.action, []);
+  } });
+  return { f, writes };
+}
+async function startFolder(f) {
+  const { register } = await load(); register(f.on);
+  await f.emit('session.start', { surface: 'desktop' }); for (const timer of f.timers.filter(t => t.ms === 0)) timer.callback(); await settle();
+  await f.press('tab-Settings'); await settle();
+}
+const folderField = async f => f.find(await f.pane(), 'field-baseDir').props.value;
+
+test('the shared repositories folder wins at startup and Claude\'s own copy follows it', async () => {
+  const shared = { value: { baseDir: '/fixture/home/mainsequence-dev', baseDirSaved: true } };
+  const { f, writes } = folderFixture({ shared, saved: { baseDir: 'mainsequence-dev' } });
+  await startFolder(f);
+  assert.equal(await folderField(f), '/fixture/home/mainsequence-dev');
+  await f.fire(800);
+  assert.equal(f.stores.get('settings').baseDir, '/fixture/home/mainsequence-dev', 'the other Claude sessions get the shared folder');
+  assert.deepEqual(writes, [], 'nothing is written back');
+  assert.match(JSON.stringify(await f.pane()), /shared with Codex and the mainsequence CLI/);
+});
+
+test('a folder only Claude knew is saved into the shared settings once', async () => {
+  const shared = { value: { baseDir: '/fixture/home/mainsequence', baseDirSaved: false } };
+  const { f, writes } = folderFixture({ shared, saved: { baseDir: '/work/own' } });
+  await startFolder(f);
+  assert.deepEqual(writes, ['/work/own']);
+  assert.equal(await folderField(f), '/work/own');
+  assert.deepEqual(shared.value, { baseDir: '/work/own', baseDirSaved: true });
+});
+
+test('an edited folder is saved for Codex and the CLI once typing settles, and a refused save is shown', async () => {
+  const shared = { value: { baseDir: '/fixture/home/mainsequence', baseDirSaved: true } };
+  const { f, writes } = folderFixture({ shared });
+  await startFolder(f);
+  await f.field('baseDir', 'mainsequence-dev');
+  assert.deepEqual(writes, [], 'nothing is saved while typing');
+  await f.fire(800); await settle();
+  assert.deepEqual(writes, ['mainsequence-dev']);
+  assert.deepEqual(shared.value, { baseDir: '/fixture/home/mainsequence-dev', baseDirSaved: true });
+  await f.field('baseDir', 'refused'); await f.fire(800); await settle();
+  assert.match(JSON.stringify(await f.pane()), /The repositories folder could not be saved for Codex and the mainsequence CLI: Repositories folder is required\./);
+});
+
+test('a folder changed in Codex reaches an open Claude session when its pane opens again', async () => {
+  const shared = { value: { baseDir: '/fixture/home/mainsequence-dev', baseDirSaved: true } };
+  const { f, writes } = folderFixture({ shared });
+  await startFolder(f);
+  shared.value = { baseDir: '/fixture/home/codex-folder', baseDirSaved: true };
+  await f.emit('ui.close', { id: 'mainsequence' });
+  await f.pane(); await settle();
+  assert.equal(await folderField(f), '/fixture/home/mainsequence-dev', 'a pane reopened at once reads nothing new');
+  await f.emit('ui.close', { id: 'mainsequence' }); f.now += 10_000;
+  await f.pane(); await settle();
+  assert.equal(await folderField(f), '/fixture/home/codex-folder');
+  await f.fire(800);
+  assert.equal(f.stores.get('settings').baseDir, '/fixture/home/codex-folder');
+  assert.deepEqual(writes, []);
+});

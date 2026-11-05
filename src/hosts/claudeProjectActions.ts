@@ -1,18 +1,19 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { ActionResult, HostServices, ToolingError, createProjectOperations,
-  PROJECT_OPERATION_ACTIONS, ProjectOperationRequest, RepositoryClient, createSessionService, requireBackend, safeSlug, readWorkspacePreferences, readOrganizationProjectWorkspace } from '@dev-mainsequence/devtools';
+  PROJECT_OPERATION_ACTIONS, ProjectOperationRequest, RepositoryClient, createSessionService, requireBackend, safeSlug, readWorkspacePreferences, writeWorkspacePreferences, readOrganizationProjectWorkspace } from '@dev-mainsequence/devtools';
 import { claudeFailure } from './claudeProtocol';
 
 export type ClaudeProjectRequest = ProjectOperationRequest
   | { action: 'runtime-diagnostics' }
   | { action: 'workspace-preferences' }
+  | { action: 'workspace-folder'; baseDir: string }
   | { action: 'workspace-profile'; backend: string }
   | { action: 'pick-folder'; initialPath?: string }
   | { action: 'open-container'; root: string }
   | { action: 'open-project-workspace' | 'read-project-workspace'; root: string; backend: string; environmentUid: string; projectUid: string };
 export const CLAUDE_PROJECT_ACTIONS = new Set([
-  ...PROJECT_OPERATION_ACTIONS, 'runtime-diagnostics', 'workspace-preferences', 'workspace-profile', 'pick-folder', 'open-container', 'open-project-workspace', 'read-project-workspace',
+  ...PROJECT_OPERATION_ACTIONS, 'runtime-diagnostics', 'workspace-preferences', 'workspace-folder', 'workspace-profile', 'pick-folder', 'open-container', 'open-project-workspace', 'read-project-workspace',
 ]);
 export type ClaudeProjectOptions = {
   host: HostServices; signal?: AbortSignal; env?: NodeJS.ProcessEnv;
@@ -45,6 +46,10 @@ export function createClaudeProjectActions(options: ClaudeProjectOptions) {
       options.signal?.throwIfAborted();
       let data: unknown;
       if (request.action === 'workspace-preferences') {
+        data = await readWorkspacePreferences({ env: options.env, configPath: options.configPath });
+      } else if (request.action === 'workspace-folder') {
+        // The repositories folder lives where the mainsequence CLI and the Codex plugin keep it.
+        await writeWorkspacePreferences({ baseDir: request.baseDir }, { env: options.env, configPath: options.configPath });
         data = await readWorkspacePreferences({ env: options.env, configPath: options.configPath });
       } else if (request.action === 'workspace-profile') {
         const session = createSessionService(options.host, { env: options.env, signal: options.signal });

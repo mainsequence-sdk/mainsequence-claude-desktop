@@ -57,9 +57,14 @@ test('workspace preferences reuse only the existing folder and never rewrite con
   await fs.writeFile(configPath,original);
   const actions=createClaudeProjectActions({host:createNodeHost(),configPath,env:{}});
   const result=await actions.dispatch({action:'workspace-preferences'});
-  assert.deepEqual(result.data,{backend:'https://api.main-sequence.app',baseDir:root});
+  assert.deepEqual(result.data,{backend:'https://api.main-sequence.app',baseDir:root,baseDirSaved:true});
   assert.equal(await fs.readFile(configPath,'utf8'),original);
   assert.doesNotMatch(JSON.stringify(result),/fixture-only|fixture-session/);
+  // The folder is saved where the mainsequence CLI and Codex keep it, alone: every other setting is kept.
+  const saved=await actions.dispatch({action:'workspace-folder',baseDir:path.join(root,'shared')});
+  assert.equal(saved.status,'success');assert.deepEqual(saved.data,{backend:'https://api.main-sequence.app',baseDir:path.join(root,'shared'),baseDirSaved:true});
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath,'utf8')),{...JSON.parse(original),mainsequence_path:path.join(root,'shared')});
+  assert.doesNotMatch(JSON.stringify(saved),/fixture-only|fixture-session/);
   await fs.writeFile(configPath,JSON.stringify({mainsequence_path:'relative-path'}));
   assert.equal(path.isAbsolute((await actions.dispatch({action:'workspace-preferences'})).data.baseDir),true);
 });

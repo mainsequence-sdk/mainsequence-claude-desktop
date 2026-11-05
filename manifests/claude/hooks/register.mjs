@@ -15,6 +15,7 @@ async function openPane($, state) {
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
   syncSharedPolling($, state); void syncShared($, state, true);
+  if (state.booted && !state.initializing) void readSharedFolder($, state).catch(() => {});
   if (state.pluginCheckedAt && await $.clock.now() - state.pluginCheckedAt > PLUGIN_RECHECK_MS) void checkPlugin($, state).catch(() => {});
 }
 
@@ -50,7 +51,7 @@ function ensureBoot($, state, e) {
 }
 
 function operationTitle(action) {
-  return ({ 'auth-status': 'Check MainSequence connection', login: 'Sign in to MainSequence', logout: 'Sign out of MainSequence',
+  return ({ 'workspace-folder': 'Save repositories folder', 'auth-status': 'Check MainSequence connection', login: 'Sign in to MainSequence', logout: 'Sign out of MainSequence',
     'refresh-token': 'Renew MainSequence session', repositories: 'Refresh code repositories', setup: 'Set up repository',
     status: 'Check repository status', sync: 'Sync dependencies', install: 'Install dependencies', 'sdk-status': 'Check SDK',
     'mcp-discover': 'Find MCPs', 'mcp-list': 'Refresh MCP connections', 'mcp-add': 'Connect MCP',
@@ -254,7 +255,7 @@ async function runProject($, state, action, extra = {}) {
   if (action === 'workspace-profile' && typeof data.organization === 'string') state.fields.organization = data.organization;
   if (action === 'pick-folder' && typeof data.path === 'string' && ['root', 'baseDir'].includes(destination)) {
     state.editedSettings.add(destination); applyField($, state, destination, data.path);
-    if (destination === 'baseDir') shareSettings($, state);
+    if (destination === 'baseDir') { shareSettings($, state); shareFolder($, state); }
   }
   if (action === 'delete-local') void signal($, state, 'repositories').catch(() => {});
   if (action === 'delete-local-preview') state.confirmation = { title: 'Permanently delete local repository', detail: `${data.root}\n${data.warning || ''}`,
@@ -547,6 +548,7 @@ function actionsFor($, state) {
       if (Object.hasOwn(state.fields, key) && state.fields[key] !== String(value)) {
         state.editedSettings.add(key); applyField($, state, key, value);
         if (SHARED_SETTINGS.includes(key)) shareSettings($, state);
+        if (key === 'baseDir') shareFolder($, state);
       }
       update($);
     },
@@ -619,6 +621,36 @@ async function writeSettings($, state) {
   const value = { ...saved, ...Object.fromEntries(SHARED_SETTINGS.map(key => [key, state.fields[key]])) };
   await $.store.set('settings', value);
   state.savedSettings = value; state.shared.settings = JSON.stringify(value);
+}
+
+// The repositories folder is the one the mainsequence CLI and the Codex plugin keep (`mainsequence_path` in
+// the CLI's configuration), so every tool sets repositories up in one tree. Claude's copy in the plugin store
+// only carries an edit to the other Claude sessions at once: startup and a pane open read the shared folder,
+// and an edit is saved into it once typing settles.
+const FOLDER_WRITE_MS = 800, FOLDER_REREAD_MS = 10_000;
+function shareFolder($, state) {
+  state.folderTimer?.cancel();
+  state.folderTimer = $.clock.after(FOLDER_WRITE_MS, () => { state.folderTimer = null; void saveFolder($, state).catch(() => {}); });
+}
+async function saveFolder($, state) {
+  const baseDir = state.fields.baseDir.trim();
+  if (!baseDir || state.closed) return;
+  const result = await execute($, state, request('projects', 'workspace-folder', { baseDir }), true);
+  if (result.status === 'success' && typeof result.data?.baseDir === 'string') state.sharedFolder = result.data.baseDir;
+  update($);
+}
+/** A folder changed in Codex or the CLI reaches this session; the other Claude sessions follow through the store. */
+async function readSharedFolder($, state) {
+  if (state.folderTimer || state.closed) return;
+  // A pane drawn right after startup or another read has nothing newer to find.
+  const now = await $.clock.now();
+  if (now - state.folderReadAt < FOLDER_REREAD_MS) return;
+  state.folderReadAt = now;
+  const result = await execute($, state, request('projects', 'workspace-preferences'), true);
+  const shared = record(result.data);
+  if (result.status !== 'success' || !shared.baseDirSaved || typeof shared.baseDir !== 'string' || shared.baseDir === state.sharedFolder || state.folderTimer || state.closed) return;
+  state.sharedFolder = shared.baseDir;
+  if (shared.baseDir !== state.fields.baseDir) { applyField($, state, 'baseDir', shared.baseDir); shareSettings($, state); update($); }
 }
 
 function shareView($, state) {
@@ -840,9 +872,16 @@ async function initializeWorkspace($, state) {
   try {
     const preferences = await execute($, state, request('projects', 'workspace-preferences'), true);
     if (state.closed) return;
-    for (const key of ['backend', 'baseDir']) {
-      if (!state.editedSettings.has(key) && !String(state.savedSettings[key] || '').trim()
-        && typeof preferences.data?.[key] === 'string' && preferences.data[key].trim()) state.fields[key] = preferences.data[key];
+    state.folderReadAt = await $.clock.now();
+    const shared = record(preferences.data), own = String(state.savedSettings.baseDir || '').trim();
+    if (!state.editedSettings.has('backend') && !String(state.savedSettings.backend || '').trim()
+      && typeof shared.backend === 'string' && shared.backend.trim()) state.fields.backend = shared.backend;
+    // The shared folder wins; a folder only Claude knew is saved there once, so the other tools use it too.
+    if (!state.editedSettings.has('baseDir') && preferences.status === 'success' && typeof shared.baseDir === 'string' && shared.baseDir.trim()) {
+      if (shared.baseDirSaved || !own) {
+        state.sharedFolder = shared.baseDir;
+        if (state.fields.baseDir !== shared.baseDir) { state.fields.baseDir = shared.baseDir; if (own) shareSettings($, state); }
+      } else void saveFolder($, state).catch(() => {});
     }
     state.preferencesLoading = false; update($);
     await attachWorkspace($, state);
@@ -1038,7 +1077,11 @@ export function register(on, options = {}) {
     const ui = $.ui.resolve(e), actions = actionsFor($, state);
     wakeOnDesktop($, state, e);
     // A pane draw proves the pane is open: remote-run polling resumes for the section shown.
-    if (!state.paneOpen) { state.paneOpen = true; try { syncDeploymentPolling($, state); syncAgentIconPolling($, state); syncSharedPolling($, state); } catch { /* polling is optional */ } }
+    if (!state.paneOpen) {
+      state.paneOpen = true;
+      try { syncDeploymentPolling($, state); syncAgentIconPolling($, state); syncSharedPolling($, state); } catch { /* polling is optional */ }
+      if (state.booted && !state.initializing) void readSharedFolder($, state).catch(() => {});
+    }
     if (state.paneFault) return renderRecovery(ui, state, actions);
     try { return renderPane(ui, state, actions, { placement: e.props?.placement }); }
     catch { state.paneFault = { phase: 'render', element: '' }; return renderRecovery(ui, state, actions); }
@@ -1098,10 +1141,11 @@ export function register(on, options = {}) {
   }).catch(() => ({ deny: 'MainSequence could not confirm or run this tool call.' }));
   on('session.end', async ($, e, next) => {
     // Edits still waiting to be shared, and this session's Activity with nothing left running.
-    const settings = !!state.settingsTimer, view = !!state.viewTimer;
-    for (const timer of [state.settingsTimer, state.viewTimer, state.activityTimer, state.activityHeartbeat, state.loginTimer]) timer?.cancel();
-    state.settingsTimer = state.viewTimer = state.activityTimer = state.loginTimer = null;
+    const settings = !!state.settingsTimer, view = !!state.viewTimer, folder = !!state.folderTimer;
+    for (const timer of [state.settingsTimer, state.viewTimer, state.activityTimer, state.activityHeartbeat, state.loginTimer, state.folderTimer]) timer?.cancel();
+    state.settingsTimer = state.viewTimer = state.activityTimer = state.loginTimer = state.folderTimer = null;
     if (settings) await writeSettings($, state).catch(() => {});
+    if (folder) await saveFolder($, state).catch(() => {});
     if (view) await writeView($, state).catch(() => {});
     if (state.booted && state.sessionId) await writeActivity($, state, true).catch(() => {});
     state.closed = true;
