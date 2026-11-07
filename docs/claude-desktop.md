@@ -111,6 +111,16 @@ the account and connection state. **Check connection** verifies it; **Manage
 account** expands **Renew session** and the confirmed **Sign out** action. These use
 the existing shared machine-session service and concern MainSequence only.
 
+While a sign-in waits for the browser (up to five minutes), the pane, and the band above
+the composer when it shows, say so with **Copy sign-in link** and **Cancel**. The link is
+the page the browser was sent to, for pasting into another browser; where the surface has
+no clipboard the link is shown instead. It stays in that session and never reaches Activity
+or the other sessions. When the page's host resolves to a local-network address (a private
+or link-local range, not loopback), the pane says that macOS keeps a browser from it until
+the browser is allowed under System Settings → Privacy & Security → Local Network. A
+browser that is not allowed fails with `ERR_ADDRESS_UNREACHABLE` while terminal tools still
+reach the same address.
+
 A MainSequence login ends a fixed time after sign-in (five days by default), however
 often it is used; devtools reads that moment from the saved login without contacting the
 backend. Every Code session follows it:

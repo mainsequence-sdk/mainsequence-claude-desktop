@@ -48,6 +48,10 @@ export const ACTIVITY_STALE_MS = 180000, ACTIVITY_KEEP_MS = 7 * 86400000;
 const ACTIVITY_STATES = new Set(['running', 'success', 'failure', 'cancelled']);
 export const publishedOperation = op => !READ_ACTIONS.has(String(op.label).split(' · ').pop());
 /** What a session publishes of one operation: the row Activity draws, never result data. */
+/** This session's sign-in while it waits for the browser, once the worker named the page it opened. */
+export function signInWaiting(state) {
+  return state.operations.find(op => op.status === 'running' && op.label === 'devtools · login' && op.browser) || null;
+}
 export function activityEntry(op) {
   const result = op.result && { status: op.result.status, summary: clean(op.result.summary).slice(0, 500),
     ...(op.result.effects?.message ? { effects: { message: clean(op.result.effects.message).slice(0, 500) } } : {}) };

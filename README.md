@@ -45,7 +45,11 @@ diagnostics → Executable overrides**.
    session is saved in your operating system's credential store (the login Keychain on
    macOS, Secret Service on Linux), where the VS Code extension, the Codex plugin and the
    MainSequence command lines find it too. **Check connection**, and under **Manage
-   account** **Renew session** and **Sign out**, are in the same place.
+   account** **Renew session** and **Sign out**, are in the same place. While the
+   sign-in waits, **Copy sign-in link** gives you the page to paste into another
+   browser. On macOS, a backend on your local network (such as `192.168.x.x`) loads only
+   in a browser allowed under System Settings → Privacy & Security → Local Network; the
+   pane says so when that applies.
 2. The backend defaults to `https://api.main-sequence.app`. If your organization runs its
    own MainSequence deployment, set its API URL as the backend in Settings before signing
    in. Set the **Command Center URL** there as well, so project and repository links open
