@@ -1964,6 +1964,68 @@ test('a login that ended before startup shows when it ended and asks nothing of 
   assert.equal(shown(f, 'ended on 2 Nov at 07:16').length, 1);
 });
 
+// The worker names the page sign-in opened: the pane and the band offer its link, and say when macOS keeps a browser from it.
+const signInUrl = 'http://local-backend:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+function signInFixture({ localNetwork = true, copied = true } = {}) {
+  const { f } = loginFixture({ endsAt: localTime(2, 7, 16) });
+  const original = f.$.process.spawn, copies = [], login = { cancelled: false };
+  f.$.ui.copy = async args => { copies.push(args); return copied ? { isCopied: true } : { isCopied: false, reason: 'no clipboard' }; };
+  f.$.process.spawn = input => {
+    const envelope = JSON.parse(input.input);
+    if (envelope.request.request.action !== 'login') return original(input);
+    f.calls.push(envelope);
+    const lines = [{ type: 'browser', id: envelope.id, url: signInUrl, localNetwork }, { type: 'progress', id: envelope.id, message: 'Waiting for you to sign in in your browser…' }].map(m => JSON.stringify(m) + '\n');
+    let finish; const ended = new Promise(resolve => { finish = resolve; });
+    // Waits for the browser until cancelled, as the worker does.
+    return { [Symbol.asyncIterator]() { return this; },
+      async next() { if (lines.length) return { value: { stream: 'stdout', text: lines.shift() }, done: false }; await ended; return { value: undefined, done: true }; },
+      async return(value) { login.cancelled = true; finish(); return { value, done: true }; },
+      result: ended.then(() => ({ code: null, signal: 'SIGTERM' })) };
+  };
+  return { f, copies, login };
+}
+
+test('a sign-in waiting on a local-network page offers its link and says how macOS blocks the browser', async () => {
+  const { f, copies, login } = signInFixture();
+  await startLogin(f);
+  await f.press('login'); await settle();
+  let tree = await f.pane();
+  const card = f.find(tree, 'sign-in-waiting');
+  assert.ok(card, 'the pane shows the waiting sign-in');
+  assert.match(JSON.stringify(card), /local-backend is on your local network, and macOS blocks a browser from it until you allow it in System Settings → Privacy & Security → Local Network/);
+  assert.doesNotMatch(JSON.stringify(card), /fixture-state/, 'the link itself is not drawn');
+  let footer = await band(f);
+  assert.match(JSON.stringify(f.find(footer, 'mainsequence-login-band')), /Waiting for you to sign in in your browser/);
+  assert.ok(f.find(footer, 'login-band-copy')); assert.equal(f.find(footer, 'login-band-sign-in'), undefined);
+  f.find(tree, 'sign-in-copy').props.onPress({ surface: 'desktop' }); await settle();
+  assert.deepEqual(copies, [{ text: signInUrl, surface: 'desktop' }]);
+  assert.ok(f.calls.some(c => c.toast === "Sign-in link copied. Paste it into your browser's address bar."));
+  // Activity is shared with the other sessions; the link is not.
+  await f.fire(...new Set(f.timers.filter(t => t.once && !t.cancelled && !t.fired).map(t => t.ms).filter(ms => ms < 5_000)));
+  assert.doesNotMatch(JSON.stringify([...f.stores.values()]), /fixture-state/);
+  await f.press('sign-in-cancel'); await settle();
+  assert.equal(login.cancelled, true);
+  tree = await f.pane();
+  assert.equal(f.find(tree, 'sign-in-waiting'), undefined);
+  assert.equal(f.find(tree, 'login').props.disabled, undefined, 'Sign in is offered again');
+  assert.ok(f.find(await band(f), 'login-band-sign-in'));
+});
+
+test('without a clipboard the sign-in link is shown to copy by hand, and a public page has no Local Network hint', async () => {
+  const { f, copies } = signInFixture({ localNetwork: false, copied: false });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  let card = f.find(await f.pane(), 'sign-in-waiting');
+  assert.match(JSON.stringify(card), /Page didn't open\? Copy the link and paste it into your browser\./);
+  assert.doesNotMatch(JSON.stringify(card), /Local Network/);
+  f.find(await band(f), 'login-band-copy').props.onPress({ surface: 'desktop' }); await settle();
+  assert.equal(copies.length, 1);
+  card = f.find(await f.pane(), 'sign-in-waiting');
+  assert.ok(JSON.stringify(card).includes(JSON.stringify(signInUrl)), 'the link is shown');
+  assert.ok(JSON.stringify(await band(f)).includes(JSON.stringify(signInUrl)));
+  assert.equal(f.calls.some(c => typeof c.toast === 'string' && c.toast.startsWith('Sign-in link copied')), false);
+});
+
 // The repositories folder is the one Codex and the mainsequence CLI keep (`mainsequence_path`); Claude's store copy follows it.
 function folderFixture({ shared, saved } = {}) {
   const writes = [];

@@ -9,6 +9,7 @@ import { CLAUDE_INPUT_LIMIT, claudeFailure, executeClaudeEnvelope, parseClaudeEn
 import { createClaudeProjectActions } from './hosts/claudeProjectActions';
 import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
 import { CLAUDE_DEPLOYMENT_ACTIONS, createClaudeDeployments } from './hosts/claudeDeployments';
+import { announceSignInPage } from './hosts/claudeSignIn';
 import { CLAUDE_PLUGIN_UPDATE_ACTIONS, createClaudePluginUpdate } from './hosts/claudePluginUpdate';
 
 export async function main(): Promise<void> {
@@ -30,6 +31,8 @@ export async function main(): Promise<void> {
     try { parsed = JSON.parse(input); } catch { throw new ToolingError('INVALID_REQUEST', 'The action input is not valid JSON.'); }
     const envelope = parseClaudeEnvelope(parsed); id = envelope.id; action = envelope.request.request.action;
     const host = createNodeHost(progress);
+    // The pane offers the sign-in page's link and says when macOS may keep a browser from it.
+    if (action === 'login') announceSignInPage(host, ({ type, ...page }) => process.stdout.write(JSON.stringify({ type, id, ...page }) + '\n'), progress);
     // Reveal is a native OS operation. Changing the Code session's root is a separate host capability.
     host.openFolder = async root => {
       if (!path.isAbsolute(root) || !(await fs.stat(root)).isDirectory()) throw new ToolingError('INVALID_REQUEST', 'Select an existing repository folder.');

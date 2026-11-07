@@ -519,3 +519,50 @@ test('a login ending within a day is warned above the composer and in the pane, 
   expect(notices.at(-1)).toBe('Your MainSequence session ended today at 12:30. Sign in again from MainSequence.');
   expect(checks.includes(true), 'the end is known without asking the backend').toBe(false);
 });
+
+test('a sign-in waiting for the browser offers its link to copy and says when macOS keeps a browser from it', async ($, on) => {
+  const endsAt = new Date(2026, 10, 2, 7, 16).getTime();
+  const clock = mock.clock(on, {now:new Date(2026, 10, 6, 12, 0).getTime()}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'sign-in-link'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  on('ui.notify', () => ({value:{isSent:false,reason:'no-surface'}}));
+  const toasts: string[] = [], copies: Array<{ text: string; surface?: string }> = [];
+  on('ui.toast', ($, e) => { toasts.push(e.text); return {value:undefined}; });
+  on('ui.copy', ($, e) => { copies.push({ text: e.text, surface: e.surface }); return {value:{isCopied:true}}; });
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => { const { Text } = $.ui.resolve(e); return Text({ children: ['Existing composer band'] }); });
+  const url = 'http://local-backend:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+  let closed = false;
+  on('process.spawn', async function* ($, e, next) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    if (q.action === 'login') {
+      try {
+        yield {stream:'stdout',text:JSON.stringify({type:'browser',id:envelope.id,url,localNetwork:true})+'\n'};
+        yield {stream:'stdout',text:JSON.stringify({type:'progress',id:envelope.id,message:'Waiting for you to sign in in your browser…'})+'\n'};
+        await new Promise(resolve => next.signal.addEventListener('abort', resolve, { once: true }));
+        return {value:{code:null,signal:'SIGTERM'}};
+      } finally { closed = true; }
+    }
+    const data = q.action === 'auth-status' ? {authenticated:false, username:'fixture@example.test', sessionEndsAt:new Date(endsAt).toISOString()} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  await clock.settle();
+  const pane = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await pane.press({key:'login'}); await clock.settle();
+  expect(await pane.find({key:'sign-in-waiting'}), 'the pane shows the waiting sign-in').toBeDefined();
+  expect(await pane.find({type:'Text',text:'Waiting for you to sign in in your browser'})).toBeDefined();
+  const band = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});
+  expect(await band.find({type:'Button',text:'Copy sign-in link'}), 'the band offers the link').toBeDefined();
+  await band.unmount();
+  await pane.press({key:'sign-in-copy'}); await clock.settle();
+  expect(copies).toEqual([{ text: url, surface: 'desktop' }]);
+  expect(toasts).toContain("Sign-in link copied. Paste it into your browser's address bar.");
+  await pane.press({key:'sign-in-cancel'}); await clock.settle();
+  expect(closed, 'Cancel stops the waiting sign-in').toBe(true);
+  expect(await pane.find({key:'sign-in-waiting'})).toBeUndefined();
+  await pane.unmount();
+});

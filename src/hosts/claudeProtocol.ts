@@ -7,6 +7,7 @@ export type ClaudeEnvelope = {
   request: { scope: ClaudeScope; request: { action: string; [key: string]: unknown } };
 };
 export type ClaudeMessage = { type: 'progress'; id: string; message: string }
+  | { type: 'browser'; id: string; url: string; localNetwork: boolean }
   | { type: 'result'; id: string; result: ActionResult };
 export const CLAUDE_INPUT_LIMIT = 1_000_000;
 

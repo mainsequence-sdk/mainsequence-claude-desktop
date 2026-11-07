@@ -1,4 +1,4 @@
-import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget, allOperations } from './model.mjs';
+import { TABS, clean, record, rows, resultText, mcpDisplayName, basename, setupKey, deployTarget, allOperations, signInWaiting } from './model.mjs';
 import { primitives, OPERATION_STATUS, OPERATION_KIND } from './primitives.mjs';
 import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
@@ -16,18 +16,34 @@ export function signedInState(state) {
     signedOut: auth?.data?.authenticated === false || ['NOT_AUTHENTICATED', 'AUTH_REJECTED'].includes(auth?.error?.code) };
 }
 
+/** Why a sign-in page may not load. macOS keeps an app from the local network until it is allowed
+ * under Local Network, and a browser denied there fails with ERR_ADDRESS_UNREACHABLE. */
+export function signInHelp(browser) {
+  if (!browser.localNetwork) return 'Page didn\'t open? Copy the link and paste it into your browser.';
+  let host = 'The sign-in page';
+  try { host = new URL(browser.url).hostname; } catch { /* the generic name stays */ }
+  return `Page won't load (ERR_ADDRESS_UNREACHABLE)? ${host} is on your local network, and macOS blocks a browser from it until you allow it in System Settings → Privacy & Security → Local Network. Paste the link into a browser that is allowed, or allow yours, quit and reopen it, and sign in again.`;
+}
+
 /** The login's warning above every session's composer: it ends within a day, or it has ended. */
 export function renderLoginBand(ui, state, actions) {
   const notice = state.loginNotice, { signedIn, signedOut } = signedInState(state);
   if (!notice || state.loginBandHidden === notice.key || !(notice.kind === 'soon' && signedIn || notice.kind === 'ended' && signedOut)) return null;
   const opening = state.operations.some(op => op.status === 'running' && op.label === 'devtools · login');
-  return ui.Box({ key: 'mainsequence-login-band', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
+  const waiting = signInWaiting(state);
+  const row = ui.Box({ ...(waiting ? {} : { key: 'mainsequence-login-band' }), flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
     ui.Box({ flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: 1, children: [
       ui.Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 18, height: 18 }),
-      ui.Text({ color: 'warning', wrap: 'wrap', children: [`MainSequence session ${notice.kind === 'soon' ? 'ends' : 'ended'} ${notice.when}`] })] }),
-    ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: [
+      ui.Text({ color: 'warning', wrap: 'wrap', children: [waiting ? 'Waiting for you to sign in in your browser' : `MainSequence session ${notice.kind === 'soon' ? 'ends' : 'ended'} ${notice.when}`] })] }),
+    ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: waiting ? [
+      ui.Button({ key: 'login-band-copy', label: 'Copy sign-in link', variant: 'primary', onPress: actions.copySignInLink }),
+      ui.Button({ key: 'login-band-cancel', label: 'Cancel', plain: true, dimColor: true, onPress: () => actions.cancel(waiting.id) })] : [
       ui.Button({ key: 'login-band-sign-in', label: opening ? 'Opening sign-in…' : 'Sign in again', variant: 'primary', disabled: opening, onPress: () => actions.dev('login') }),
       ui.Button({ key: 'login-band-hide', label: 'Not now', plain: true, dimColor: true, onPress: actions.hideLoginBand })] })] });
+  if (!waiting) return row;
+  return ui.Box({ key: 'mainsequence-login-band', flexDirection: 'column', gap: 0, children: [row,
+    ui.Text({ dimColor: true, size: 'caption', wrap: 'wrap', children: [clean(signInHelp(waiting.browser))] }),
+    waiting.browser.shown && ui.Code({ source: clean(waiting.browser.url), language: 'text', wrap: 'wrap' })].filter(Boolean) });
 }
 
 /** Drawn when the host refused a tree or startup failed: nothing is replayed. */
@@ -102,9 +118,18 @@ export function renderPane(ui, state, actions, options = {}) {
     if (state.tab === 'Code' && !f.baseDir) return inline([status('warning', 'Choose a repositories folder before setting up repositories.'), button('blocker-folder', 'Choose folder', project('pick-folder', { destination: 'baseDir' }), { plain: true })]);
     return null;
   })();
+  // A sign-in waiting for the browser, on every view: the same link to copy, and why a page may not load.
+  const waiting = signInWaiting(state);
+  const signInCard = waiting && Box({ key: 'sign-in-waiting', flexDirection: 'column', gap: 1, paddingX: 1, paddingY: 1, borderStyle: 'round', borderColor: 'warning', children: [
+    title('Waiting for you to sign in in your browser'),
+    caption(signInHelp(waiting.browser)),
+    waiting.browser.shown && Code({ source: clean(waiting.browser.url), language: 'text', wrap: 'wrap' }),
+    buttons([button('sign-in-copy', 'Copy sign-in link', actions.copySignInLink, { primary: true }),
+      button('sign-in-cancel', 'Cancel sign-in', () => actions.cancel(waiting.id), { plain: true })]),
+  ].filter(Boolean) });
   const header = column([
     options.placement === 'dock' ? inline([brand, Box({ flexGrow: 1 }), chips], { justifyContent: 'space-between', flexWrap: 'wrap' }) : column([brand, chips]),
-    pluginHelp, navigation,
+    pluginHelp, navigation, signInCard,
     ending && inline([status('warning', `Your MainSequence session ends ${notice.when}. Sign in again to keep working.`), signIn('renew-login', 'Sign in again')], { flexWrap: 'wrap' }),
     blocker,
     state.tab !== 'Activity' && runningSetups.some(op => !(state.tab === 'Code' && state.codeDetail && !state.codeDetail.root && op.setupTarget === setupKey(f)))

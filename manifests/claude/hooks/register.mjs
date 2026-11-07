@@ -1,5 +1,5 @@
 import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget,
-  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS, loginNotice, LOGIN_WARN_MS } from './model.mjs';
+  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS, loginNotice, LOGIN_WARN_MS, signInWaiting } from './model.mjs';
 import { renderPane, renderRecovery, renderLoginBand } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
@@ -560,6 +560,16 @@ function actionsFor($, state) {
     hideLoginBand: () => { state.loginBandHidden = state.loginNotice?.key || ''; update($); },
     accept: () => { const confirmation = state.confirmation; state.confirmation = null; update($); if (confirmation) background(confirmation.callback()); },
     cancel: id => { const op = state.operations.find(value => value.id === id); if (op?.cancel) { op.progress = 'Cancelling…'; background(op.cancel()); update($); } },
+    // The page the sign-in opened, for a browser other than the default one. Where the surface has no
+    // clipboard the link is shown instead, to select and copy by hand.
+    copySignInLink: press => background((async () => {
+      const op = signInWaiting(state);
+      if (!op) return;
+      let copied = false;
+      try { copied = (await $.ui.copy({ text: op.browser.url, ...(press?.surface ? { surface: press.surface } : {}) }))?.isCopied === true; } catch { /* an engine without a clipboard */ }
+      if (copied)$.ui.toast('Sign-in link copied. Paste it into your browser\'s address bar.');
+      else { op.browser.shown = true; update($); }
+    })()),
     checkPlugin: () => background(checkPlugin($, state)),
     updatePlugin: () => {
       const plugin = state.plugin;
@@ -1184,6 +1194,10 @@ export async function runWorker($, state, envelope, operation, onProgress) {
         try { message = JSON.parse(line); } catch { invalid = true; break; }
         if (message.id !== undefined && message.id !== envelope.id) { invalid = true; break; }
         if (message.type === 'progress' && typeof message.message === 'string' && !answer) onProgress(clean(message.message));
+        // The sign-in link stays in this session: Activity shares the operation, never the link.
+        else if (message.type === 'browser' && typeof message.url === 'string' && /^https?:\/\//.test(message.url) && message.url.length <= 4096 && !answer) {
+          operation.browser = { url: message.url, localNetwork: message.localNetwork === true };
+        }
         else if (message.type === 'result' && !answer && message.result?.schemaVersion === 1
           && ['success', 'failure', 'cancelled'].includes(message.result.status) && typeof message.result.summary === 'string') answer = message.result;
         else { invalid = true; break; }
