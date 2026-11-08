@@ -1,5 +1,5 @@
 import { VIEWS, PANE, initialState, meetsVersion, clean, record, rows, request, actionOptions, fail, publicValue, mcpDisplayName, setupKey, agentHandle, deployTarget,
-  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS, loginNotice, LOGIN_WARN_MS, signInWaiting } from './model.mjs';
+  basename, SHARED_SETTINGS, SEARCH_FIELDS, viewSnapshot, activityEntry, publishedOperation, remoteOperations, allOperations, ACTIVITY_KEEP_MS, loginNotice, LOGIN_WARN_MS, signInWaiting, workerFailure } from './model.mjs';
 import { renderPane, renderRecovery, renderLoginBand } from './view.mjs';
 import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
@@ -1177,14 +1177,21 @@ export async function runWorker($, state, envelope, operation, onProgress) {
   let answer;
   let invalid = false;
   let timedOut = false;
+  let started = false;
+  let tooLarge = false;
+  let stderr = '';
+  let exit;
   try {
     child = $.process.spawn({ argv: [state.fields.nodePath, `${$.plugin.root}/dist/claudeRunner.js`], cwd: state.cwd, input });
     operation.cancel = () => { operation.cancelled = true; return child.return({ code: null, signal: 'SIGTERM' }); };
     timer = $.clock.after(1_800_000, () => { timedOut = true; return child.return({ code: null, signal: 'SIGTERM' }); });
     for await (const chunk of child) {
-      if (chunk.stream !== 'stdout') continue; // Child stderr is private and never rendered.
+      started = true;
+      // Child stderr is private and never rendered: it only tells the failures below apart.
+      if (chunk.stream === 'stderr') { if (stderr.length < 16_384) stderr += chunk.text; continue; }
+      if (chunk.stream !== 'stdout') continue;
       bytes += chunk.text.length;
-      if (bytes > 4_000_000) { invalid = true; break; }
+      if (bytes > 4_000_000) { invalid = tooLarge = true; break; }
       pending += chunk.text;
       let newline;
       while ((newline = pending.indexOf('\n')) >= 0) {
@@ -1204,14 +1211,15 @@ export async function runWorker($, state, envelope, operation, onProgress) {
       }
       if (invalid) break;
     }
-    const exit = await child.result;
+    exit = await child.result;
+    started = true;
     if (answer && !invalid && !pending.trim() && exit.code === 0) return answer;
   } catch { /* Only a fixed error reaches the UI; exceptions can hold private child output. */ }
   finally { timer?.cancel(); operation.cancel = undefined; }
   const action = envelope.request.request.action;
   return operation.cancelled ? fail(action, 'The operation was cancelled.', 'CANCELLED', true)
     : timedOut ? fail(action, 'The operation timed out.', 'PROCESS_TIMEOUT', true)
-    : fail(action, 'The MainSequence worker did not report a valid result. Check Node 22+ and the plugin installation.', 'PROCESS_FAILED', true);
+    : workerFailure(action, { nodePath: state.fields.nodePath, folder: `${$.plugin.root}/dist`, started, exit, stderr, tooLarge });
 }
 
 // Native host effect analysis follows $ only through functions in this module.

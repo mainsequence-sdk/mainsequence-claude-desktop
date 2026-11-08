@@ -20,7 +20,8 @@ export async function main(): Promise<void> {
   let id = 'invalid', action = 'invalid';
   const progress = (message: string) => process.stdout.write(JSON.stringify({ type: 'progress', id, message }) + '\n');
   try {
-    if (Number(process.versions.node.split('.')[0]) < 22) throw new ToolingError('MISSING_PREREQUISITE', 'Node 22 or later is required. Set the Node executable in General → Advanced.');
+    if (Number(process.versions.node.split('.')[0]) < 22) throw new ToolingError('MISSING_PREREQUISITE', `Node.js ${process.version} (${process.execPath}) is too old: MainSequence needs Node 22 or later. `
+      + 'Set Settings → Advanced → Runtime & diagnostics → Executable overrides → Node.js executable to the full path of Node 22 or later on the machine this session runs on.');
     let input = '';
     if (process.argv.length !== 2) throw new ToolingError('INVALID_REQUEST', 'The Desktop worker accepts structured input on stdin only.');
     for await (const chunk of process.stdin) {
