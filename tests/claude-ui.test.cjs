@@ -301,6 +301,33 @@ test('worker protocol rejects malformed result and cancellation closes the real 
   const $ = { plugin: { root: '/plugin' }, process: { spawn: () => child }, clock: { after: () => ({ cancel() {} }) } };
   const result = await runWorker($, { cwd: '/work', fields: { nodePath: 'node' } }, { protocolVersion: 1, id: 'x', request: { scope: 'devtools', request: { action: 'status' } } }, {}, () => {});
   assert.equal(result.status, 'failure'); assert.equal(result.effects.state, 'partial-or-uncertain'); assert.equal(closed, 1);
+  assert.equal(result.error.code, 'WORKER_PROTOCOL');
+});
+
+test('a worker that gives no answer says what failed and what fixes it, never what it wrote to stderr', async () => {
+  const { runWorker } = await load();
+  const run = async (pieces, exit, nodePath = '/usr/bin/node') => {
+    const child = (async function* () { for (const piece of pieces) { if (piece instanceof Error) throw piece; yield piece; } return exit; })();
+    child.result = Promise.resolve(exit);
+    const $ = { plugin: { root: '/home/me/.claude/plugins/mainsequence' }, process: { spawn: () => child }, clock: { after: () => ({ cancel() {} }) } };
+    return runWorker($, { cwd: '/work', fields: { nodePath } }, { protocolVersion: 1, id: 'x', request: { scope: 'devtools', request: { action: 'status' } } }, {}, () => {});
+  };
+  const secret = 'token=private-value';
+  const cases = [
+    [[new Error('spawn /opt/node ENOENT')], undefined, 'NODE_NOT_STARTED', /couldn't start Node\.js \("\/usr\/bin\/node"\).*Executable overrides → Node\.js executable.*command -v node/, false],
+    [[{ stream: 'stderr', text: `Error: Cannot find module '/Users/me/dist/claudeRunner.js' ${secret}\n` }], { code: 1, signal: null }, 'WORKER_MISSING', /incomplete.*\/home\/me\/\.claude\/plugins\/mainsequence\/dist.*Reinstall MainSequence/, false],
+    [[{ stream: 'stderr', text: `SyntaxError: Unexpected token '?' ${secret}\n` }], { code: 1, signal: null }, 'NODE_TOO_OLD', /older than Node 22.*\/usr\/bin\/node --version/, false],
+    [[{ stream: 'stderr', text: `${secret}\n` }], { code: 3, signal: null }, 'WORKER_EXITED', /exited with code 3.*v22 or later/, true],
+    [[], { code: null, signal: 'SIGKILL' }, 'WORKER_STOPPED', /stopped \(SIGKILL\)/, true],
+    [[], { code: 0, signal: null }, 'WORKER_PROTOCOL', /without an answer.*new Code session/, true],
+  ];
+  for (const [pieces, exit, code, summary, uncertain] of cases) {
+    const result = await run(pieces, exit);
+    assert.equal(result.status, 'failure', code); assert.equal(result.error.code, code); assert.match(result.summary, summary);
+    assert.equal(result.effects?.state === 'partial-or-uncertain', uncertain, `${code}: only a worker that ran may have changed something`);
+    assert.doesNotMatch(JSON.stringify(result), /private-value|\/Users\/me/, `${code} keeps the child's stderr private`);
+    assert.doesNotMatch(result.summary, /did not report a valid result/);
+  }
 });
 
 test('older bundled engines show a guard instead of running worker operations', async () => {

@@ -158,6 +158,24 @@ export function fail(action, message, code = 'PROCESS_FAILED', uncertain = false
   return { schemaVersion: 1, action, status: code === 'CANCELLED' ? 'cancelled' : 'failure', summary: message,
     error: { code, message }, ...(uncertain ? { effects: { state: 'partial-or-uncertain', message: 'The operation stopped before reporting completion. Inspect changes before retrying.' } } : {}) };
 }
+const NODE_SETTING = 'Settings → Advanced → Runtime & diagnostics → Executable overrides → Node.js executable';
+/** Why the worker gave no answer, and what fixes it on the machine the session runs on. The child's
+ * stderr only selects a message and is never shown: it can hold private output. */
+export function workerFailure(action, { nodePath, folder, started, exit, stderr = '', tooLarge = false }) {
+  const node = nodePath || 'node', here = 'the machine this session runs on';
+  if (!started) return fail(action, `Claude couldn't start Node.js ("${node}") on ${here}, so MainSequence can't run. `
+    + `Set ${NODE_SETTING} to the full path of Node 22 or later there (in a terminal on that machine, \`command -v node\` prints it), then try again.`, 'NODE_NOT_STARTED');
+  if (/Cannot find module|MODULE_NOT_FOUND/.test(stderr)) return fail(action, `MainSequence's files are incomplete on ${here}: Node.js couldn't load the worker from ${folder}. `
+    + 'Reinstall MainSequence there (Customize → Plugins), then start a new Code session.', 'WORKER_MISSING');
+  if (/SyntaxError|Unexpected token|ERR_UNKNOWN_FILE_EXTENSION/.test(stderr)) return fail(action, `Node.js ("${node}") couldn't read the MainSequence worker, which happens when it is older than Node 22. `
+    + `Run \`${node} --version\` on ${here}, and set ${NODE_SETTING} to Node 22 or later.`, 'NODE_TOO_OLD');
+  if (tooLarge) return fail(action, 'The MainSequence worker sent more than 4 MB, so its answer was dropped. Narrow the request and try again.', 'WORKER_PROTOCOL', true);
+  if (exit?.signal) return fail(action, `The MainSequence worker was stopped (${exit.signal}) before it answered. Try again; if it keeps happening, ${here} may be out of memory.`, 'WORKER_STOPPED', true);
+  if (typeof exit?.code === 'number' && exit.code !== 0) return fail(action, `Node.js ("${node}") exited with code ${exit.code} before MainSequence answered. `
+    + `Check that \`${node} --version\` prints v22 or later on ${here}; if it does, reinstall MainSequence there and start a new Code session.`, 'WORKER_EXITED', true);
+  return fail(action, 'The MainSequence worker ended without an answer this pane reads, usually because the pane and the worker come from different MainSequence versions. '
+    + 'Start a new Code session; if it keeps happening, reinstall MainSequence.', 'WORKER_PROTOCOL', true);
+}
 export function actionOptions(state) {
   const f = state.fields;
   return { ...(f.backend.trim() ? { backend: f.backend.trim() } : {}), root: f.root || state.cwd,
