@@ -315,6 +315,7 @@ function ensureInitialized($, state) {
 function wakeOnDesktop($, state, e) {
   if (e.surface !== 'desktop' || state.paneFault) return;
   if (!state.booted && !state.booting) { void ensureBoot($, state, e); return; }
+  if (state.booted) void syncCwd($, state).catch(() => {});
   if (state.booted && !state.initPromise) void ensureInitialized($, state);
   else void syncShared($, state);
 }
@@ -875,8 +876,26 @@ async function boot($, state, e) {
   update($);
 }
 
+/** Desktop starts a session's engine early, as a spare in a temporary folder, and moves it to the session's folder
+ * when the session claims it. session.start ran before the move, the engine announces none, and Desktop deletes the
+ * spare's folder: read the folder again before work that depends on it. */
+async function syncCwd($, state) {
+  let cwd;
+  try { cwd = await $.session.cwd(); } catch { return state.cwd; }
+  if (typeof cwd !== 'string' || !cwd || cwd === state.cwd) return state.cwd;
+  const previous = state.cwd;
+  state.cwd = cwd;
+  if (!state.fields.root || state.fields.root === previous) state.fields.root = cwd;
+  if (state.selectedLocal === previous) state.selectedLocal = cwd;
+  update($);
+  // A startup that already finished attached the spare's folder; this folder's project repositories attach now.
+  if (state.initPromise && !state.initializing) void attachWorkspace($, state).catch(() => {});
+  return cwd;
+}
+
 async function initializeWorkspace($, state) {
   if (!state.ready || state.closed) { state.preferencesLoading = false; return; }
+  await syncCwd($, state);
   state.initializing = true; update($);
   void checkPlugin($, state).catch(() => {});
   try {
@@ -1181,8 +1200,9 @@ export async function runWorker($, state, envelope, operation, onProgress) {
   let tooLarge = false;
   let stderr = '';
   let exit;
+  const cwd = await syncCwd($, state);
   try {
-    child = $.process.spawn({ argv: [state.fields.nodePath, `${$.plugin.root}/dist/claudeRunner.js`], cwd: state.cwd, input });
+    child = $.process.spawn({ argv: [state.fields.nodePath, `${$.plugin.root}/dist/claudeRunner.js`], cwd, input });
     operation.cancel = () => { operation.cancelled = true; return child.return({ code: null, signal: 'SIGTERM' }); };
     timer = $.clock.after(1_800_000, () => { timedOut = true; return child.return({ code: null, signal: 'SIGTERM' }); });
     for await (const chunk of child) {
@@ -1217,9 +1237,14 @@ export async function runWorker($, state, envelope, operation, onProgress) {
   } catch { /* Only a fixed error reaches the UI; exceptions can hold private child output. */ }
   finally { timer?.cancel(); operation.cancel = undefined; }
   const action = envelope.request.request.action;
+  // A missing working folder fails the start exactly as a missing Node.js does (ENOENT naming the executable).
+  let folderMissing = false;
+  if (!started && !operation.cancelled && !timedOut && typeof cwd === 'string' && cwd) {
+    try { folderMissing = (await $.fs.exists(cwd)) === false; } catch { /* unknown: name Node.js */ }
+  }
   return operation.cancelled ? fail(action, 'The operation was cancelled.', 'CANCELLED', true)
     : timedOut ? fail(action, 'The operation timed out.', 'PROCESS_TIMEOUT', true)
-    : workerFailure(action, { nodePath: state.fields.nodePath, folder: `${$.plugin.root}/dist`, started, exit, stderr, tooLarge });
+    : workerFailure(action, { nodePath: state.fields.nodePath, folder: `${$.plugin.root}/dist`, sessionFolder: folderMissing ? cwd : '', started, exit, stderr, tooLarge });
 }
 
 // Native host effect analysis follows $ only through functions in this module.

@@ -161,8 +161,10 @@ export function fail(action, message, code = 'PROCESS_FAILED', uncertain = false
 const NODE_SETTING = 'Settings → Advanced → Runtime & diagnostics → Executable overrides → Node.js executable';
 /** Why the worker gave no answer, and what fixes it on the machine the session runs on. The child's
  * stderr only selects a message and is never shown: it can hold private output. */
-export function workerFailure(action, { nodePath, folder, started, exit, stderr = '', tooLarge = false }) {
+export function workerFailure(action, { nodePath, folder, sessionFolder = '', started, exit, stderr = '', tooLarge = false }) {
   const node = nodePath || 'node', here = 'the machine this session runs on';
+  if (!started && sessionFolder) return fail(action, `This session's folder (${sessionFolder}) no longer exists on ${here}, so MainSequence can't run there. `
+    + 'Start a new Code session in a folder that exists.', 'SESSION_FOLDER_MISSING');
   if (!started) return fail(action, `Claude couldn't start Node.js ("${node}") on ${here}, so MainSequence can't run. `
     + `Set ${NODE_SETTING} to the full path of Node 22 or later there (in a terminal on that machine, \`command -v node\` prints it), then try again.`, 'NODE_NOT_STARTED');
   if (/Cannot find module|MODULE_NOT_FOUND/.test(stderr)) return fail(action, `MainSequence's files are incomplete on ${here}: Node.js couldn't load the worker from ${folder}. `

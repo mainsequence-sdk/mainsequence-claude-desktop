@@ -429,8 +429,8 @@ remove projects. Use MainSequence's confirmed Sign out action only when desired.
 
 If the pane is missing, verify a local Code session with the plugin enabled, then
 use `/ms`. When the worker gives no answer, the pane says which step failed on the machine
-the session runs on, and what fixes it: Node.js could not start from the configured path,
-the plugin's worker files are missing there, Node.js is older than 22, Node.js exited with
+the session runs on, and what fixes it: the session's folder no longer exists (a deleted
+worktree), Node.js could not start from the configured path, the plugin's worker files are missing there, Node.js is older than 22, Node.js exited with
 a code, the worker was stopped by a signal, or it ended without an answer the pane reads
 (a pane and worker from different versions). What the worker wrote to stderr only picks
 the message and is never shown. Then open **Settings → Advanced → Runtime & diagnostics**.

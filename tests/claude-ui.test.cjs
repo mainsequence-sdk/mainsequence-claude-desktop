@@ -100,7 +100,8 @@ function fixture(options = {}) {
     if (type === 'Select') assert.ok(props.options.length > 0 && props.options.length <= 64, 'Native Select supports 1–64 options');
     return { type, props };
   }]));
-  let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1', now = 1000;
+  let nextCalls = 0, draft = options.draft || '', hostSessionId = options.hostSessionId || 'session-1', now = 1000, cwd = options.cwd || '/work/repo';
+  const spawns = [];
   const json = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   const on = (event, matcher, hook) => {
     if (typeof matcher === 'function') { hook = matcher; matcher = {}; }
@@ -109,7 +110,7 @@ function fixture(options = {}) {
   };
   const $ = {
     plugin: { root: '/plugin', name: 'mainsequence' },
-    session: { cwd: async () => options.cwd || '/work/repo', id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }),
+    session: { cwd: async () => cwd, id: async () => hostSessionId, version: async () => ({ version: options.version || '2.1.295' }),
       ...(options.surfaces ? { surfaces: async () => options.surfaces } : {}) },
     // Values round-trip through JSON, as the engine's store file does; sessions given one `stores` share it.
     store: { get: async key => json(stores.has(key) ? stores.get(key) : key === 'settings' ? options.saved : key === 'mcp-environments' ? options.environments : undefined),
@@ -128,7 +129,8 @@ function fixture(options = {}) {
       spawn: input => {
         assert.ok(input.input && !Object.hasOwn(input, 'stdin'));
         assert.deepEqual(input.argv, ['node', '/plugin/dist/claudeRunner.js']);
-        assert.equal(input.cwd, options.cwd || '/work/repo');
+        spawns.push(input.cwd);
+        assert.equal(input.cwd, cwd);
         const envelope = JSON.parse(input.input); calls.push(envelope);
         const result = options.respond ? options.respond(envelope.request) : success(envelope.request.request.action, {});
         const line = JSON.stringify({ type: 'result', id: envelope.id, result }) + '\n';
@@ -158,7 +160,7 @@ function fixture(options = {}) {
   const field = async (key, value) => { const node = find(await pane(), `field-${key}`); assert.ok(node, `Missing field ${key}`); node.props.onInput(value); await flush(); };
   /** Runs the pending one-shot timers of these delays (the shared-state writers), as their time passing would. */
   const fire = async (...delays) => { for (const timer of timers.filter(t => t.once && !t.cancelled && !t.fired && delays.includes(t.ms))) { timer.fired = true; timer.callback(); } await flush(); };
-  return { hooks, $, on, emit, pane, press, field, fire, calls, tools, registered, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; }, get now() { return now; }, set now(value) { now = value; } };
+  return { hooks, $, on, emit, pane, press, field, fire, calls, tools, registered, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; }, get now() { return now; }, set now(value) { now = value; }, spawns, set cwd(value) { cwd = value; } };
 }
 
 test('one native pane has five sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
@@ -328,6 +330,33 @@ test('a worker that gives no answer says what failed and what fixes it, never wh
     assert.doesNotMatch(JSON.stringify(result), /private-value|\/Users\/me/, `${code} keeps the child's stderr private`);
     assert.doesNotMatch(result.summary, /did not report a valid result/);
   }
+});
+
+test('a session Desktop moves out of its spare folder runs the worker in its own folder', async () => {
+  const { register } = await load();
+  // Desktop starts the engine as a spare in a temporary folder: session.start runs there, with no surface.
+  const f = fixture({ cwd: '/home/me/.claude/spares/spare-1' }); register(f.on); await f.emit('session.start');
+  // The claim moves the engine to the session's folder and Desktop deletes the spare's; nothing announces it.
+  f.cwd = '/work/repo';
+  await f.pane(); await flush(); await f.pane(); await flush();
+  assert.ok(f.spawns.length > 0, 'opening the pane runs startup work');
+  assert.deepEqual([...new Set(f.spawns)], ['/work/repo'], 'every worker starts in the session folder, never the spare one');
+  assert.doesNotMatch(JSON.stringify(f.calls.filter(call => call.request)), /spare-1/, 'no request names the spare folder');
+  assert.doesNotMatch(JSON.stringify(await f.pane()), /spare-1/, 'the pane shows the session folder');
+});
+
+test('a worker that cannot start because the session folder is gone says so, not that Node.js is missing', async () => {
+  const { runWorker } = await load();
+  const child = (async function* () { throw new Error("ENOENT: no such file or directory, posix_spawn '/usr/bin/node'"); })();
+  child.result = Promise.resolve(undefined);
+  const $ = { plugin: { root: '/plugin' }, process: { spawn: () => child }, clock: { after: () => ({ cancel() {} }) },
+    session: { cwd: async () => '/work/deleted-worktree' }, fs: { exists: async path => path !== '/work/deleted-worktree' } };
+  const result = await runWorker($, { cwd: '/work/deleted-worktree', fields: { nodePath: '/usr/bin/node' } },
+    { protocolVersion: 1, id: 'x', request: { scope: 'devtools', request: { action: 'status' } } }, {}, () => {});
+  assert.equal(result.error.code, 'SESSION_FOLDER_MISSING');
+  assert.match(result.summary, /This session's folder \(\/work\/deleted-worktree\) no longer exists.*new Code session/);
+  assert.doesNotMatch(result.summary, /Node\.js/);
+  assert.notEqual(result.effects?.state, 'partial-or-uncertain', 'a worker that never ran changed nothing');
 });
 
 test('older bundled engines show a guard instead of running worker operations', async () => {
