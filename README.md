@@ -52,9 +52,9 @@ diagnostics → Executable overrides**.
    pane says so when that applies.
 2. The backend defaults to `https://api.main-sequence.app`. If your organization runs its
    own MainSequence deployment, set its API URL as the backend in Settings before signing
-   in. Set the **Command Center URL** there as well, so project and repository links open
-   in Command Center, and the **repositories folder** where local checkouts go. Edits
-   apply at once, with no Save step.
+   in. Set the **repositories folder** where local checkouts go. The **Command Center URL**
+   is optional: it only makes project and repository links open in Command Center instead
+   of GitHub, and setting up projects never needs it. Edits apply at once, with no Save step.
 3. Choose an **organization environment** in the pane header. Nothing is selected for
    you, not even Production. Agents, MCPs, projects and deployments are shown for that
    environment, and the MainSequence tools Claude calls are bound to it.
