@@ -77,6 +77,16 @@ test('project setup confirms the selected project and opens its prepared Claude 
   assert.equal(open.root,'/repos/project-workspace');assert.equal(open.projectUid,projectId(1));assert.equal(f.calls.some(call=>call.submitted),false);
   await f.press('project-open-local');assert.equal(f.calls.filter(call=>call.request?.request.action==='organization-project-setup').length,1);
 });
+test('project setup never needs Command Center: without its URL the link is absent, not a disabled nag',async()=>{
+  const {register}=await load();const f=projectFixture();register(f.on);await f.emit('session.start');await selectFixtureProject(f);
+  const tree=await f.pane();assert.equal(f.find(tree,'project-open'),undefined);assert.doesNotMatch(JSON.stringify(tree),/Command Center/);
+  assert.equal(f.find(tree,'project-setup').props.disabled,undefined);
+  await f.press('project-setup');await f.press('confirm-action');
+  const setup=f.calls.find(call=>call.request?.request.action==='organization-project-setup').request.request;
+  assert.equal(Object.hasOwn(setup,'commandCenterUrl'),false,'setup sends no Command Center URL');
+  const g=projectFixture({saved:{commandCenterUrl:'https://cc.example'}});register(g.on);await g.emit('session.start');await selectFixtureProject(g);
+  await g.press('project-open');assert.equal(g.calls.find(call=>call.request?.request.action==='organization-project-link').request.request.commandCenterUrl,'https://cc.example');
+});
 test('changing environment dismisses project setup and clears the previous workspace',async()=>{
   const {register}=await load();const f=projectFixture();register(f.on);await f.emit('session.start');await selectFixtureProject(f);
   await f.press('project-setup');f.find(await f.pane(),'mcp-environment').props.onSelect(projectId(9));await flush();

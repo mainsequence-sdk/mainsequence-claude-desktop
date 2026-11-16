@@ -23,7 +23,8 @@ export function renderProjects(ui, state, actions) {
         state.projectWorkspace ? button('project-open-local', 'Open in Claude', actions.openOrganizationWorkspace, { primary: true }) : null,
         button('project-setup', state.projectSetupRunning ? 'Setting up…' : state.projectWorkspace ? 'Update local workspace' : 'Set up locally', actions.setupOrganizationProject,
           { primary: !state.projectWorkspace, available: canSetup, reason: !selected.branches.length ? 'This project has no accessible branches.' : !state.fields.baseDir ? 'Choose a repositories folder in Settings first.' : '' }),
-        button('project-open', 'Open in Command Center', () => actions.projectLink('project'), { plain: true, available: hasCommandCenter, reason: 'Set the Command Center URL in Settings to open platform pages.' }),
+        // Setup never needs Command Center: the link shows only where a Command Center URL is set.
+        hasCommandCenter ? button('project-open', 'Open in Command Center', () => actions.projectLink('project'), { plain: true }) : null,
       ]),
       state.projectWorkspace && caption(`Local workspace: ${state.projectWorkspace.root}`),
       setupOp && status('warning', setupOp.progress),

@@ -244,7 +244,8 @@ Projects lists `OrganizationProject` records within the selected environment.
 Search and pagination use the backend. Select a project to load its visible member
 branches, grouped by repository. Repository and branch buttons open their exact
 Command Center detail when Settings has a Command Center URL; otherwise they open
-the authorized GitHub repository/branch. A project link requires that platform URL.
+the authorized GitHub repository/branch. **Open in Command Center** appears only when that URL
+is set; setting up a project never needs it.
 An inaccessible parent repository does not hide an otherwise visible project branch.
 
 **Set up project locally** reviews the selected project, then:
