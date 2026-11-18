@@ -130,7 +130,7 @@ function fixture(options = {}) {
     command: { register: async spec => { calls.push({ command: spec }); }, run: async spec => { calls.push({runCommand:spec}); return options.commandResult ? options.commandResult(spec) : {text:`Added ${spec.args} as a working directory for this session`}; } },
     ui: { resolve: () => elements, invalidate: () => {}, open: async spec => { calls.push({ pane: spec }); },
       toast: value => { calls.push({ toast: value }); }, notify: async (text, spec) => { calls.push({ notify: text, title: spec?.title }); return { isSent: false, reason: 'no-surface' }; }, ask: async () => options.ask || 'Run tool', status: value => { calls.push({ status: value }); } },
-    tool: { register: async spec => { registered.push(spec); if (spec.name !== 'ms_deployment_status') tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
+    tool: { register: async spec => { registered.push(spec); if (!['ms_deployment_status', 'ms_releases'].includes(spec.name)) tools.push(spec); return { tool: `mcp__mainsequence__${spec.name}` }; } },
     clock: { now: async () => now, after: (ms, callback) => { const timer = { ms, callback, once: true, cancel() { timer.cancelled = true; } }; timers.push(timer); return timer; }, every: (ms, callback) => { const timer = { ms, callback, cancel() { timer.cancelled = true; } }; timers.push(timer); return timer; } },
     env: { get: async key => env.get(key), set: async (key, value) => { value === undefined ? env.delete(key) : env.set(key, value); } },
     fs: { read: async () => JSON.stringify({ claudeAiOauth: { accessToken: 'secret-new-token', expiresAt: 1000000 } }) },
@@ -173,7 +173,7 @@ function fixture(options = {}) {
   return { hooks, $, on, emit, pane, press, field, fire, calls, tools, registered, timers, env, stores, find, get draft() { return draft; }, set draft(value) { draft = value; }, set hostSessionId(value) { hostSessionId = value; }, get nextCalls() { return nextCalls; }, get now() { return now; }, set now(value) { now = value; }, spawns, set cwd(value) { cwd = value; } };
 }
 
-test('one native pane has five sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
+test('one native pane has six sections, a status header with Settings and Activity, and no above-prompt launcher', async () => {
   const { register } = await load(); const f = fixture(); register(f.on); await f.emit('session.start', {surface:'desktop'});
   assert.equal(f.calls[0].command.name, 'ms');
   assert.equal(f.calls.some(c => c.pane), false, 'startup must not open a pane');
@@ -2162,4 +2162,160 @@ test('a folder changed in Codex reaches an open Claude session when its pane ope
   await f.fire(800);
   assert.equal(f.stores.get('settings').baseDir, '/fixture/home/codex-folder');
   assert.deepEqual(writes, []);
+});
+
+// Releases: the environment's APIs, agents and static sites with their run history.
+const relId = n => `00000000-0000-4000-8000-${String(900 + n).padStart(12, '0')}`;
+const RELEASE_API = relId(1), RELEASE_AGENT = relId(2), ACTIVE_RUN = relId(10), DONE_RUN = relId(11);
+const releaseRun = (uid, state, extra = {}) => ({ uid, state, outcome: state === 'succeeded' ? 'deployed' : '', operation: 'build_and_deploy', source: 'repository_event', commit: 'abc1234',
+  createdAt: '2026-10-21T07:50:00.000Z', startedAt: '2026-10-21T07:50:00.000Z', finishedAt: ['queued', 'running'].includes(state) ? null : '2026-10-21T07:55:00.000Z',
+  durationMs: ['queued', 'running'].includes(state) ? 120000 : 300000, error: '', errorCode: '', currentStepKey: '', stepsDone: state === 'succeeded' ? 2 : 1, stepsTotal: 2,
+  releaseUid: RELEASE_API, targetLabel: 'pricing-api', repositoryName: 'Real project', branchName: 'main', ...extra });
+const stats = (over = {}) => ({ runs: 3, succeeded: 2, failed: 1, blocked: 0, cancelled: 0, superseded: 0, skipped: 0, active: 0, successRate: 2 / 3, medianMs: 300000, p90Ms: 300000,
+  slowestStage: { name: 'Waiting to start', medianMs: 240000 }, commonFailure: { code: 'runtime_readiness_timeout', count: 1, of: 1 }, ...over });
+function releaseFixture(options = {}) {
+  const live = { deploying: options.deploying !== false, finished: false, active: [], waits: 0 };
+  const list = () => [
+    { uid: RELEASE_API, name: 'pricing-api', kind: 'fastapi', kindLabel: 'API', branchUid: deployBranch, repositoryName: 'Real project', branchName: 'main',
+      recent: [{ uid: ACTIVE_RUN, state: live.deploying ? 'running' : 'succeeded' }, { uid: DONE_RUN, state: 'succeeded' }, { uid: relId(12), state: 'failed' }],
+      lastRun: releaseRun(ACTIVE_RUN, live.deploying ? 'running' : 'succeeded'), activeRun: live.deploying ? releaseRun(ACTIVE_RUN, 'running') : null, stats: stats({ active: live.deploying ? 1 : 0 }) },
+    { uid: RELEASE_AGENT, name: 'risk-agent', kind: 'harness_agent', kindLabel: 'Agent', branchUid: deployBranch, repositoryName: 'Real project', branchName: 'main',
+      recent: [{ uid: relId(13), state: 'blocked' }], lastRun: releaseRun(relId(13), 'blocked', { releaseUid: RELEASE_AGENT, outcome: 'workflow_prerequisite_failed', finishedAt: '2026-10-21T05:00:00.000Z' }),
+      activeRun: null, stats: stats({ runs: 1, succeeded: 0, failed: 0, blocked: 1, successRate: 0, medianMs: null, p90Ms: null, slowestStage: null, commonFailure: { code: 'workflow_prerequisite_failed', count: 1, of: 1 } }) },
+  ];
+  const f = deployFixture({ ...options, respond: q => {
+    if (q.action === 'deployment-releases') {
+      const rows = list().filter(row => (!q.releaseKind || row.kind === q.releaseKind) && (!q.search || row.name.includes(q.search)));
+      return success(q.action, { environmentUid: q.environmentUid, days: q.days, count: rows.length, limit: q.limit, offset: q.offset, now: '2026-10-21T08:00:00.000Z', runsCounted: 4, runsInWindow: 4, runsTruncated: false, results: rows });
+    }
+    if (q.action === 'deployment-release') return q.releaseUid === relId(99) ? { ...success(q.action, { hidden: true, uid: q.releaseUid }), summary: "You can't see this release." }
+      : success(q.action, { hidden: false, uid: q.releaseUid, environmentUid: q.environmentUid, days: q.days, now: '2026-10-21T08:00:00.000Z',
+        release: { ...list()[0], activeRevision: { uid: relId(20), commit: 'fff0000', configurationRevision: 14 }, desiredRevision: { uid: relId(21), commit: 'abc1234', configurationRevision: 15 } },
+        count: 3, counted: 3, truncated: false, runs: [releaseRun(ACTIVE_RUN, live.deploying ? 'running' : 'succeeded'), releaseRun(DONE_RUN, 'succeeded'), releaseRun(relId(12), 'failed', { error: 'runtime_readiness_timeout: not ready', errorCode: 'runtime_readiness_timeout' })], stats: stats() });
+    if (q.action === 'deployment-active') return success(q.action, { environmentUid: q.environmentUid, count: live.deploying ? 1 : 0, now: '2026-10-21T08:00:30.000Z', runs: live.deploying ? [releaseRun(ACTIVE_RUN, 'running')] : [] });
+    if (q.action === 'deployment-run' && q.runUid === ACTIVE_RUN) return success(q.action, { hidden: false, uid: q.runUid, kind: 'deployment_run', now: '2026-10-21T08:01:00.000Z',
+      run: { kind: 'deployment_run', uid: ACTIVE_RUN, state: live.deploying ? 'running' : 'succeeded', commit: 'abc1234', error: '', steps: [{ id: 'a', state: 'succeeded' }, { id: 'b', state: live.deploying ? 'running' : 'succeeded' }] } });
+    if (q.action === 'deployment-wait') { live.waits++; return success(q.action, { hidden: false, uid: q.runUid, finished: !live.deploying, waitedMs: 120000, reads: 13, now: '2026-10-21T08:02:00.000Z',
+      run: { kind: 'deployment_run', uid: q.runUid, state: live.deploying ? 'running' : 'succeeded', commit: 'abc1234', repositoryName: 'Real project', branchName: 'main', targetLabel: 'pricing-api', steps: [{ key: 'deploy', state: live.deploying ? 'running' : 'succeeded' }] } }); }
+    return options.respond?.(q);
+  } });
+  f.live = live;
+  return f;
+}
+const pollTimers = (f, ms) => f.timers.filter(t => t.ms === ms && !t.cancelled && !t.once);
+
+test('Releases lists each release with its recent runs and reads nothing more while nothing deploys', async () => {
+  const { register } = await load(); const f = releaseFixture({ deploying: false }); register(f.on); await f.start();
+  await f.press('tab-Releases'); await flush();
+  const reads = deployRequests(f, 'deployment-releases');
+  assert.equal(reads.length, 1, 'one read opens the section'); assert.equal(reads[0].environmentUid, 'env-1'); assert.equal(reads[0].days, 30); assert.equal(reads[0].releaseKind, undefined);
+  const tree = await f.pane(), text = JSON.stringify(tree);
+  assert.ok(f.find(tree, `release-row-${RELEASE_API}`)); assert.ok(f.find(tree, `release-row-${RELEASE_AGENT}`));
+  assert.match(text, /Research · 2 releases · last 30 days/); assert.match(text, /Real project · main/);
+  assert.match(text, /2 of 3 ok/, 'a release whose last run deployed counts its recent successes'); assert.match(text, /! Blocked 3h ago/, 'a blocked last run reads as a failure');
+  const dots = f.find(tree, `release-dots-${RELEASE_API}`).props.children.map(child => child.props.children[0]);
+  assert.deepEqual(dots, ['●', '●', '!'], 'newest run first');
+  assert.equal(f.find(tree, `release-active-${RELEASE_API}`), undefined, 'nothing is pinned as deploying');
+  assert.equal(pollTimers(f, 30000).length + pollTimers(f, 15000).length, 0, 'nothing polls while nothing deploys');
+  await f.press('releases-kind-fastapi'); await flush();
+  assert.equal(deployRequests(f, 'deployment-releases').at(-1).releaseKind, 'fastapi', 'a kind filter is read from the backend');
+  assert.equal(f.find(await f.pane(), `release-row-${RELEASE_AGENT}`), undefined);
+  await f.press('releases-all-deployments'); await flush();
+  assert.ok(f.find(await f.pane(), 'deploy-back')); assert.match(JSON.stringify(f.find(await f.pane(), 'deploy-back')), /← Releases/);
+  await f.press('deploy-back'); await flush(); assert.ok(f.find(await f.pane(), 'releases-refresh'), 'the deployments list returns to Releases');
+});
+
+test('while a release deploys, one shared active-run check every 30 s re-reads the list only when the run ends, then stops', async () => {
+  const { register } = await load(); const stores = new Map();
+  const f = releaseFixture({ stores }); register(f.on); await f.start();
+  await f.press('tab-Releases'); await flush();
+  let tree = await f.pane();
+  assert.ok(f.find(tree, `release-active-${RELEASE_API}`), 'the deploying release is pinned'); assert.match(JSON.stringify(f.find(tree, `release-active-${RELEASE_API}`)), /abc1234 · stage 2 of 2 · 10m 0s/);
+  assert.match(JSON.stringify(tree), /Checking every 30 s while a release deploys/);
+  assert.equal(pollTimers(f, 30000).length, 1, 'one 30 s check while a shown release deploys');
+  pollTimers(f, 30000)[0].callback(); await flush(); await flush();
+  assert.equal(deployRequests(f, 'deployment-active').length, 1); assert.equal(deployRequests(f, 'deployment-releases').length, 1, 'still running: the list is not read again');
+  assert.equal(stores.get('releases-active').runs.length, 1, 'the check is shared through the store');
+  // Another session's tick within 25 s reuses the shared answer.
+  const g = releaseFixture({ stores, hostSessionId: 'session-2' }); register(g.on); await g.start(); await g.press('tab-Releases'); await flush();
+  pollTimers(g, 30000)[0].callback(); await flush(); await flush();
+  assert.equal(deployRequests(g, 'deployment-active').length, 0, 'a second session reads the shared check instead of the backend');
+  f.now += 26000; f.live.deploying = false; pollTimers(f, 30000)[0].callback(); await flush(); await flush(); await flush();
+  assert.equal(deployRequests(f, 'deployment-active').length, 2);
+  assert.equal(deployRequests(f, 'deployment-releases').length, 2, 'the run ended: the list is read once more');
+  assert.equal(pollTimers(f, 30000).length, 0, 'nothing deploys any more: polling stops');
+  assert.equal(f.find(await f.pane(), `release-active-${RELEASE_API}`), undefined);
+  f.live.deploying = true; await f.press('releases-refresh'); await flush();
+  assert.equal(pollTimers(f, 30000).length, 1); await f.press('tab-Tools'); assert.equal(pollTimers(f, 30000).length, 0, 'leaving the section stops the check');
+  await f.press('tab-Releases'); await flush(); assert.equal(pollTimers(f, 30000).length, 1);
+  await f.emit('ui.close', { id: 'mainsequence', origin: { kind: 'person' } }); assert.equal(pollTimers(f, 30000).length, 0, 'a closed pane checks nothing');
+  await f.pane(); await flush(); const timer = pollTimers(f, 30000)[0]; assert.ok(timer, 'a draw of the reopened pane resumes it');
+  for (let i = 0; i < 121; i++) { f.now += 26000; timer.callback(); await flush(); }
+  assert.equal(pollTimers(f, 30000).length, 0, 'an hour of checks pauses'); assert.match(JSON.stringify(await f.pane()), /Auto-refresh paused after an hour/);
+});
+
+test('a release shows what serves and what is wanted, its stats and runs; the window re-reads and a run opens its detail', async () => {
+  const { register } = await load(); const f = releaseFixture({ deploying: false }); register(f.on); await f.start();
+  await f.press('tab-Releases'); await flush(); await f.press(`release-open-${RELEASE_API}`); await flush();
+  const read = deployRequests(f, 'deployment-release'); assert.equal(read.length, 1); assert.equal(read[0].releaseUid, RELEASE_API); assert.equal(read[0].days, 30);
+  let tree = await f.pane(), text = JSON.stringify(tree);
+  assert.match(text, /Serving fff0000 \(revision 14\) · wanted abc1234 \(revision 15\)/);
+  assert.match(JSON.stringify(f.find(tree, 'release-stat-rate')), /67%/); assert.match(JSON.stringify(f.find(tree, 'release-stat-median')), /5m 0s/);
+  assert.match(JSON.stringify(f.find(tree, 'release-stat-slowest')), /Waiting to start · 4m 0s/);
+  assert.match(text, /Most common failure: Runtime readiness timeout \(1 of 1\)/);
+  assert.match(JSON.stringify(f.find(tree, `release-run-${relId(12)}`)), /Repository push · 1 of 2 stages · 5m 0s · runtime_readiness_timeout: not ready/);
+  assert.equal(pollTimers(f, 30000).length, 0, 'a settled release is not polled');
+  await f.press('release-days-7'); await flush();
+  assert.equal(deployRequests(f, 'deployment-release').at(-1).days, 7, 'the window is read from the backend');
+  await f.press(`release-run-open-${DONE_RUN}`); await flush();
+  const run = deployRequests(f, 'deployment-run').at(-1); assert.equal(run.runUid, DONE_RUN); assert.equal(run.kind, 'deployment_run');
+  assert.match(JSON.stringify(f.find(await f.pane(), 'deploy-back')), /← Releases/);
+  await f.press('deploy-back'); await flush(); tree = await f.pane();
+  assert.ok(f.find(tree, 'release-back'), 'Back returns to the release'); await f.press('release-back'); await flush();
+  assert.ok(f.find(await f.pane(), `release-row-${RELEASE_API}`), 'and from there to the list');
+  const hidden = releaseFixture({ deploying: false }); register(hidden.on); await hidden.start(); await hidden.press('tab-Releases'); await flush();
+  await hidden.emit('ui.render', { surface: 'desktop', component: 'Pane', requestId: 'mainsequence', props: {} });
+});
+
+test('Notify me follows one deploying run every 15 s in the status line and says how it ended', async () => {
+  const { register } = await load(); const f = releaseFixture(); register(f.on); await f.start();
+  await f.press('tab-Releases'); await flush(); await f.press(`release-watch-${RELEASE_API}`); await flush();
+  assert.equal(pollTimers(f, 15000).length, 1, 'one 15 s watch'); assert.match(JSON.stringify(f.find(await f.pane(), `release-active-${RELEASE_API}`)), /Watching/);
+  assert.equal(f.calls.filter(c => 'status' in c).at(-1).status, 'MainSequence: deploying pricing-api 1/2');
+  await f.press('tab-Home'); assert.equal(pollTimers(f, 15000).length, 1, 'the watch outlives the section');
+  pollTimers(f, 15000)[0].callback(); await flush(); await flush();
+  assert.equal(deployRequests(f, 'deployment-run').at(-1).runUid, ACTIVE_RUN);
+  f.live.deploying = false; pollTimers(f, 15000)[0].callback(); await flush(); await flush();
+  assert.equal(pollTimers(f, 15000).length, 0, 'the watch ends with the run');
+  assert.ok(f.calls.some(c => c.toast === 'pricing-api deployed abc1234.'), 'a toast says it deployed');
+  assert.equal(f.calls.filter(c => 'status' in c).at(-1).status, undefined, 'the status line clears');
+});
+
+test('ms_releases lists releases, reads a history by name, says what deploys and waits for a run, without confirmation', async () => {
+  const { register } = await load(); const f = releaseFixture(); register(f.on); await f.start();
+  const spec = f.registered.find(t => t.name === 'ms_releases'); assert.ok(spec); assert.match(spec.description, /Research/); assert.match(spec.description, /never deploys/);
+  assert.deepEqual(spec.inputSchema.properties.action.enum, ['list', 'history', 'active', 'wait']);
+  const asks = f.$.ui.ask; f.$.ui.ask = async () => assert.fail('a read-only tool needs no confirmation');
+  const call = async (input, id) => f.emit('tool.call', { tool: 'mcp__mainsequence__ms_releases', tool_use_id: id, ...input });
+  const list = await call({ action: 'list' }, 'r1');
+  assert.match(list.result[0].text, /Environment: Research · last 30 days/); assert.match(list.result[0].text, /pricing-api \(API\) · Real project · main · .* DEPLOYING abc1234 stage 2 of 2/);
+  assert.match(list.result[0].text, /! risk-agent \(Agent\) .* last run blocked/);
+  const history = await call({ action: 'history', release: 'pricing-api', days: 7 }, 'r2');
+  assert.equal(deployRequests(f, 'deployment-release').at(-1).days, 7);
+  assert.match(history.result[0].text, /Serving: fff0000 \(revision 14\) · wanted: abc1234 \(revision 15\)/); assert.match(history.result[0].text, /success rate 67%/);
+  assert.match(history.result[0].text, /slowest stage Waiting to start/); assert.match(history.result[0].text, /Most common failure: runtime_readiness_timeout/);
+  assert.match((await call({ action: 'history', release: 'nope' }, 'r3')).result[0].text, /No release named nope/);
+  assert.match((await call({ action: 'active' }, 'r4')).result[0].text, /◌ pricing-api · Real project\/main · abc1234 · running/);
+  const waiting = await call({ action: 'wait', release: 'pricing-api', timeoutSeconds: 60 }, 'r5');
+  assert.equal(deployRequests(f, 'deployment-wait').at(-1).runUid, ACTIVE_RUN); assert.equal(deployRequests(f, 'deployment-wait').at(-1).timeoutSeconds, 60);
+  assert.match(waiting.result[0].text, /Still running after 120 s \(0 of 1 stages done\)\. Call wait again with runUid/);
+  f.live.deploying = false;
+  const done = await call({ action: 'wait', runUid: ACTIVE_RUN }, 'r6');
+  assert.equal(deployRequests(f, 'deployment-wait').at(-1).timeoutSeconds, 120); assert.match(done.result[0].text, /Deployment succeeded after waiting 120 s/);
+  assert.match((await call({ action: 'wait', release: 'pricing-api' }, 'r7')).result[0].text, /pricing-api is not deploying now\. Its last run succeeded/);
+  assert.match((await call({ action: 'nope' }, 'r8')).result[0].text, /action is list, history, active or wait/);
+  f.$.ui.ask = asks;
+  const none = releaseFixture({ noEnvironment: true }); register(none.on); await none.start();
+  assert.equal(none.registered.some(t => t.name === 'ms_releases'), false);
+  assert.match((await none.emit('tool.call', { tool: 'mcp__mainsequence__ms_releases', tool_use_id: 'r9', action: 'list' })).deny, /Choose a MainSequence organization environment/);
 });

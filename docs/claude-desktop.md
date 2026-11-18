@@ -1,7 +1,7 @@
 # MainSequence for Claude Desktop Code
 
-MainSequence provides a native pane in local Claude Desktop Code sessions. The layout is a status header plus five sections with one active selection:
-**Home, Code, Projects, Agents, Tools**. The header shows the account, the organization
+MainSequence provides a native pane in local Claude Desktop Code sessions. The layout is a status header plus six sections with one active selection:
+**Home, Code, Projects, Agents, Tools, Releases**. The header shows the account, the organization
 environment, a running-operations counter that opens **Activity**, and **Settings**.
 There is no Accounts page, rotation configuration or launcher strip above the chat.
 The MainSequence emblem
@@ -244,6 +244,46 @@ with its steps and states as text, and with `logs: true` the last 80 log lines o
 first failed step. It reads only and needs no confirmation; it is denied while no
 environment is selected.
 
+### Releases
+
+**Releases** lists the selected environment's releases (APIs, agents and static sites)
+with their runs of the last 30 days, read in two requests: one page of releases, then
+their runs together. Each row shows the release, its kind, repository · branch, its last
+ten runs as glyphs (newest first: ● succeeded, ! failed or blocked, ◌ deploying, ○
+superseded, cancelled or skipped) and either how many of them deployed or when the last
+one failed. A release that is deploying is pinned on top with its commit, stage and
+elapsed time. **All kinds / APIs / Agents / Static sites** and **This repository** (when
+the session folder is a known checkout) filter on the backend. **All deployments,
+including jobs and images** opens the environment-wide deployment list.
+
+A release shows the commit and revision it serves and, when different, the one it
+wants; a 7, 30 or 90 day window; its run count, success rate (succeeded out of those that
+succeeded, failed or were blocked), median time of the runs that succeeded, its slowest
+stage and its most common failure. The time a run waits before its first stage, usually
+for its workflow's image build, counts as the stage **Waiting to start**. A blocked run
+without an error code is named by its outcome. The runs follow, newest first, with
+source, stages done and time; a run opens the deployment detail above. The backend has
+no statistics endpoint: devtools computes these from the runs it reads.
+
+Nothing is re-read while nothing deploys. While the section shows a deploying release
+and the pane is open, one check every 30 s reads only the runs still queued or running;
+every session uses the same answer for 25 s, so several open sessions don't each ask the
+backend. The section is read again only when a shown run ends or one of its releases
+starts another; the check stops when nothing deploys, the section changes, the pane
+closes or the session ends, and pauses after an hour until **Refresh**. **Notify me** on
+a deploying release re-reads only that run every 15 s, shows `MainSequence: deploying
+<release> <stages done>/<stages>` in Claude's status line, and when it ends shows a toast
+with how it ended. It stops then, or after an hour.
+
+The model tool `ms_releases` is registered with the environment selection. `action`
+`list` returns the releases with their last run, 30-day success rate and what is
+deploying (`kind` and `thisRepository` filter); `history` returns one release's serving
+and wanted commits, stats and runs (`release` by name or uid, `days`); `active` returns
+what is deploying now; `wait` waits up to `timeoutSeconds` (at most 120) for the release's
+deploying run, or `runUid`, to end, re-reading it every 10 s, and says when it is still
+running so Claude can call again. It reads only and needs no confirmation; it is denied
+while no environment is selected.
+
 ## MainSequence Projects
 
 Projects lists `OrganizationProject` records within the selected environment.
@@ -389,6 +429,7 @@ conversation through Claude, task polling, local continuity and uncertain reques
 | Diagnostics/errors/previews | Bundle/runtime checks, actionable errors, Activity results/cancellation, explicit mutation confirmations, and previews for supported SDK/skills operations, Docker, container configuration and local deletion. Cancellation can leave partial effects, which are reported. |
 | Agent discovery and conversations | Shared environment selector, public card details, session preparation without sending, editable native command drafts, separate per-agent status and approved follow-ups, Task status/wait/cancel and local conversation continuity. |
 | MCP discovery/connections/tools | Search/paginate project MCPs, connect/disconnect exact releases, inspect/call tools and register them for Claude. Tool calls request approval and disconnected tools are refused. |
+| Releases | Environment releases with their last runs, release history with success rate, median time, slowest stage and most common failure, polling only while a shown release deploys, **Notify me**, and the read-only `ms_releases` tool. |
 | Deployment history | Latest run of the checked-out branch, run detail with an SVG step timeline, step records and cursor-paged logs, the environment-wide list, 10 s / 30 s polling of active runs only, and the read-only `ms_deployment_status` tool. Hidden runs use Command Center's wording. |
 
 The signed-terminal, session-navigation and container-launch limitations are explicit

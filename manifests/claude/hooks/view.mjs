@@ -3,10 +3,11 @@ import { primitives, OPERATION_STATUS, OPERATION_KIND } from './primitives.mjs';
 import { renderAgents } from './agentView.mjs';
 import { renderProjects } from './projectView.mjs';
 import { renderDeployCard, renderDeployments, renderHomeDeployLine } from './deploymentView.mjs';
+import { renderReleases } from './releaseView.mjs';
 import { EMBLEM } from './branding.mjs';
 import { PLUGIN_VERSION } from './release.mjs';
 
-const VIEW_NOUN = { Code: 'your repositories', Projects: 'its projects', Agents: 'its agents', Tools: 'its MCP tools' };
+const VIEW_NOUN = { Code: 'your repositories', Projects: 'its projects', Agents: 'its agents', Tools: 'its MCP tools', Releases: 'its releases' };
 
 export function signedInState(state) {
   const auth = state.results['devtools.auth-status'];
@@ -111,7 +112,7 @@ export function renderPane(ui, state, actions, options = {}) {
     if (auth?.status === 'failure') return inline([status('error', auth.summary), signedOut && signIn('blocker-login')], { flexWrap: 'wrap' });
     if (ended && VIEW_NOUN[state.tab]) return inline([status('warning', `Your MainSequence session ended ${notice.when}. Sign in again to see ${VIEW_NOUN[state.tab]}.`), signIn('blocker-login', 'Sign in again')], { flexWrap: 'wrap' });
     if (signedOut && VIEW_NOUN[state.tab]) return status('warning', `Sign in to MainSequence to see ${VIEW_NOUN[state.tab]}.`);
-    if (['Projects', 'Agents', 'Tools'].includes(state.tab) && !f.mcpEnvironment && !state.environmentsLoading) {
+    if (['Projects', 'Agents', 'Tools', 'Releases'].includes(state.tab) && !f.mcpEnvironment && !state.environmentsLoading) {
       return inline([status(environmentsFailed ? 'error' : 'warning', environmentsFailed ? environmentsFailed.summary : `Choose an organization environment to see ${VIEW_NOUN[state.tab]}.`),
         !environments.length && !signedOut && button('blocker-environments', environmentsFailed ? 'Try again' : 'Load environments', actions.refreshEnvironments, { plain: true })], { flexWrap: 'wrap' });
     }
@@ -148,7 +149,7 @@ export function renderPane(ui, state, actions, options = {}) {
     state.confirmation.detail.split('\n').length > 3 ? Code({ source: clean(state.confirmation.detail), language: 'text', wrap: 'wrap' }) : text(state.confirmation.detail, { wrap: 'wrap' }),
     buttons([button('confirm-action', 'Confirm', actions.accept, { primary: true }), button('dismiss-confirmation', 'Cancel', actions.dismiss)]),
   ] });
-  const gated = blocker && (signedOut || (['Projects', 'Agents', 'Tools'].includes(state.tab) && !f.mcpEnvironment));
+  const gated = blocker && (signedOut || (['Projects', 'Agents', 'Tools', 'Releases'].includes(state.tab) && !f.mcpEnvironment));
   let body = null;
 
   if (state.tab === 'Home') {
@@ -194,6 +195,7 @@ export function renderPane(ui, state, actions, options = {}) {
   if (state.tab === 'Projects') body = gated ? null : renderProjects(ui, state, actions);
   if (state.tab === 'Agents') body = gated ? null : renderAgents(ui, state, actions);
   if (state.tab === 'Tools') body = gated ? null : renderTools(p, state, actions, { dev, mut, busy, environment });
+  if (state.tab === 'Releases') body = gated || !f.mcpEnvironment ? null : renderReleases(p, state, actions, { environment, target: deployTarget(state, { root: state.cwd }) });
 
   if (state.tab === 'Activity') body = column([
     inline([heading('Activity'), operations.length ? caption(['running', 'success', 'failure', 'cancelled', 'stale'].map(kind => {

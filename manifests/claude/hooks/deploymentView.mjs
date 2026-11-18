@@ -149,7 +149,7 @@ export function renderDeployments(p, state, actions, environment) {
   if (state.deployView === 'list') {
     const list = state.deployList, entries = list?.entries || [];
     return column([
-      button('deploy-back', '← Code', actions.closeDeployments, { plain: true, dim: true }),
+      button('deploy-back', state.deployOrigin === 'home' ? '← Home' : state.deployOrigin === 'releases' ? '← Releases' : '← Code', actions.closeDeployments, { plain: true, dim: true }),
       inline([heading('Deployments'), list && caption(`${environment?.name || 'Environment'} · ${list.count} ${list.count === 1 ? 'entry' : 'entries'}`)], { justifyContent: 'space-between', flexWrap: 'wrap' }),
       state.deployListLoading && !entries.length && muted('Loading deployments…'),
       state.deployListError && status('error', state.deployListError),
@@ -166,7 +166,7 @@ export function renderDeployments(p, state, actions, environment) {
     ]);
   }
   const detail = state.deployDetail;
-  const back = button('deploy-back', state.deployHistory.length ? '← Workflow run' : state.deployOrigin === 'list' ? '← Deployments' : state.deployOrigin === 'home' ? '← Home' : '← Code', actions.deployBack, { plain: true, dim: true });
+  const back = button('deploy-back', state.deployHistory.length ? '← Workflow run' : state.deployOrigin === 'list' ? '← Deployments' : state.deployOrigin === 'home' ? '← Home' : state.deployOrigin === 'releases' ? '← Releases' : '← Code', actions.deployBack, { plain: true, dim: true });
   if (!detail) return column([back, muted('Loading the run…')]);
   if (detail.hidden) return column([back, heading(detail.kind === 'workflow_run' ? 'Workflow run' : 'Deployment'), status('info', HIDDEN_DEPLOYMENT)]);
   const run = detail.run;

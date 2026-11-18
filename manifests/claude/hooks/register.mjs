@@ -5,13 +5,14 @@ import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 import { HIDDEN_DEPLOYMENT, isActiveRun, defaultStep, failedStep, logSource, describeRun, logTimestamp, stateLabel, kindLabel, stepLabel } from './deploymentView.mjs';
+import { HIDDEN_RELEASE, RELEASE_DAYS, describeReleaseRow, describeActiveRun, describeReleaseHistory } from './releaseView.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
 
 async function openPane($, state) {
   await $.ui.open({ id: PANE, title: 'MainSequence', focus: true, closeOnEscape: true });
-  state.paneOpen = true; syncDeploymentPolling($, state); syncAgentIconPolling($, state);
+  state.paneOpen = true; syncDeploymentPolling($, state); syncReleasePolling($, state); syncAgentIconPolling($, state);
   update($);
   if (!state.booted) await ensureBoot($, state, { surface: 'desktop' });
   syncSharedPolling($, state); void syncShared($, state, true);
@@ -61,6 +62,7 @@ function operationTitle(action) {
     'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
     'organization-project-setup': 'Set up project locally', 'open-project-workspace': 'Open project in Claude',
     'local-repositories': 'Discover local repositories', 'deployment-history': 'Read deployment history', 'deployment-run': 'Read deployment run',
+    'deployment-releases': 'Read releases', 'deployment-release': 'Read release history', 'deployment-active': 'Check running deployments', 'deployment-wait': 'Wait for a deployment',
     'deployment-logs': 'Read deployment logs', 'plugin-version': 'Check for MainSequence updates', 'plugin-update': 'Update MainSequence plugin' })[action] || action.replaceAll('-', ' ');
 }
 
@@ -174,8 +176,9 @@ async function announceLogin($, state, notice) {
 
 /** Mirror the running operations of every session in Claude's status line. */
 function statusLine($, state) {
-  const running = allOperations(state).filter(op => op.status === 'running').length;
-  $.ui.status(running ? `MainSequence: ${running} running` : undefined);
+  const running = allOperations(state).filter(op => op.status === 'running').length, watch = state.releaseWatch;
+  const parts = [running ? `${running} running` : '', watch ? `deploying ${watch.name}${watch.stepsTotal ? ` ${watch.stepsDone}/${watch.stepsTotal}` : ''}` : ''].filter(Boolean);
+  $.ui.status(parts.length ? `MainSequence: ${parts.join(' · ')}` : undefined);
 }
 
 function devRequest(state, action, extra = {}) {
@@ -387,13 +390,21 @@ async function refreshToolsNow($, state) {
     inputSchema: { type: 'object', properties: { repository: { type: 'string', description: 'MainSequence repository name or uid; defaults to the session folder\'s repository' },
       branch: { type: 'string', description: 'Branch name; defaults to the checked-out branch' }, runUid: { type: 'string', description: 'A deployment or workflow run uid, instead of repository and branch' },
       logs: { type: 'boolean', description: 'Include the last 80 log lines of the first failed step' } }, additionalProperties: false } });
+  await $.tool.register({ name: RELEASE_TOOL, description: clean(`MainSequence releases [${environmentLabel(state)}]: read-only, never deploys. action "list": the environment's releases (APIs, agents, static sites) with their last run, success rate over 30 days and what is deploying; "history": one release's serving and wanted commits, its runs and stats (success rate, median time, slowest stage, most common failure); "active": what is deploying now; "wait": wait up to 120 s for a deploying run to finish, and call again while it is still running.`),
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'history', 'active', 'wait'] },
+      release: { type: 'string', description: 'history and wait: the release name or uid' },
+      runUid: { type: 'string', description: 'wait: a deployment run uid; defaults to the release\'s deploying run' },
+      kind: { type: 'string', enum: ['fastapi', 'harness_agent', 'static_site'], description: 'list: only releases of this kind' },
+      thisRepository: { type: 'boolean', description: 'list and active: only this session checkout\'s repository branch' },
+      days: { type: 'integer', minimum: 1, maximum: 90, description: 'history: the window in days, default 30' },
+      timeoutSeconds: { type: 'integer', minimum: 1, maximum: 120, description: 'wait: how long to wait, default 120' } }, required: ['action'], additionalProperties: false } });
 }
 
 function environmentLabel(state) {
   return rows(state.results['devtools.mcp-environments']?.data).find(row => row.uid === state.fields.mcpEnvironment)?.name || state.fields.mcpEnvironment;
 }
 function clearMcp($, state) {
-  clearAgents($, state); clearOrganizationProjects($, state); clearDeployments($, state);
+  clearAgents($, state); clearOrganizationProjects($, state); clearDeployments($, state); clearReleases($, state);
   state.contextRevision++; state.mcpTools = {}; state.selectedMcp = ''; state.confirmation = null; state.toolsView = 'list';
   state.fields.mcpTool = ''; state.mcpOffset = 0;
   for (const key of ['mcp-tool', 'mcp-environment']) delete state.selectPages[key];
@@ -440,7 +451,7 @@ function selectTab($, state, tab) {
   if (!VIEWS.includes(tab)) return;
   state.tab = tab; state.confirmation = null;
   // Remote-run polling and the agent icon re-check follow the section: timers for what is no longer shown are cancelled here.
-  syncDeploymentPolling($, state); syncAgentIconPolling($, state); update($);
+  syncDeploymentPolling($, state); syncReleasePolling($, state); syncAgentIconPolling($, state); update($);
   loadTab($, state);
 }
 /** What the open section draws and has not loaded yet. */
@@ -450,11 +461,12 @@ function loadTab($, state) {
   // While startup is still resolving the session, initializeWorkspace loads the
   // environments for whichever section is open; a second load here would clear
   // and refetch agents, tools and icons.
-  if (['Projects', 'Tools', 'Agents'].includes(tab) && !state.results['devtools.mcp-environments']) { if (!state.initializing) background(loadEnvironments($, state)); }
+  if (['Projects', 'Tools', 'Agents', 'Releases'].includes(tab) && !state.results['devtools.mcp-environments']) { if (!state.initializing) background(loadEnvironments($, state)); }
   else if (tab === 'Agents' && !state.results['devtools.agents-list']) background(loadAgents($, state));
   if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
   if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
   if (tab === 'Home' || tab === 'Code') background(ensureLatestDeployments($, state));
+  if (tab === 'Releases' && state.fields.mcpEnvironment && !state.releases && !state.releasesLoading && !state.releaseDetail) background(loadReleases($, state));
 }
 
 /** A field edit: the shared settings and the session's own operation target clear what depended on them. */
@@ -504,6 +516,15 @@ function actionsFor($, state) {
     deployLogsOlder: () => { const logs = state.deployLogs; if (logs?.previous.length) background(loadDeploymentLogs($, state, { cursor: logs.previous.at(-1), previous: logs.previous.slice(0, -1) })); },
     refreshDeployments: () => background(refreshDeployments($, state)),
     moreDeployments: () => background(loadDeploymentList($, state, { offset: state.deployList?.entries.length || 0, limit: 25 })),
+    releasesKind: kind => { state.releaseKind = ['fastapi', 'harness_agent', 'static_site'].includes(kind) ? kind : ''; background(loadReleases($, state)); },
+    releasesMine: () => { state.releaseMine = !state.releaseMine; background(loadReleases($, state)); },
+    openRelease: uid => background(openRelease($, state, uid)),
+    closeRelease: () => background(closeRelease($, state)),
+    releaseDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseDays === days) return; state.releaseDays = days; background(loadReleaseDetail($, state)); },
+    refreshReleases: () => background(refreshReleases($, state)),
+    moreReleases: () => background(loadReleases($, state, { offset: state.releases?.results.length || 0 })),
+    watchRelease: uid => background(watchRelease($, state, uid)),
+    openReleaseRun: uid => background(openDeployment($, state, uid, 'deployment_run', 'releases')),
     codeFilter: value => { state.codeFilter = value === 'local' ? 'local' : 'all'; update($); },
     checkHomeStatus: () => background(openCode($, state, { root: state.cwd }, false)),
     showProjectList: () => { state.projectListView = true; update($); },
@@ -809,7 +830,7 @@ async function applyView($, state, value, json) {
       state.codeDetail = code; state.confirmation = null;
       if (code) work.push(openCode($, state, code, false)); else syncDeploymentPolling($, state);
     }
-    const deploy = record(view.deploy), origin = ['home', 'list', 'code'].includes(deploy.origin) ? deploy.origin : 'code';
+    const deploy = record(view.deploy), origin = ['home', 'list', 'code', 'releases'].includes(deploy.origin) ? deploy.origin : 'code';
     if (deploy.view === 'list' && state.deployView !== 'list') work.push(openDeploymentList($, state, origin));
     else if (deploy.view === 'detail' && (state.deployView !== 'detail' || state.deployDetail?.uid !== deploy.uid)) work.push(openDeployment($, state, deploy.uid, deploy.kind, origin));
     else if (!view.deploy && state.deployView) {
@@ -824,6 +845,14 @@ async function applyView($, state, value, json) {
         state.projectDetailRevision++; state.selectedProject = ''; state.projectDetail = null; state.projectWorkspace = null; state.projectOpenMessage = ''; state.projectError = '';
       }
     }
+    const releases = record(view.releases);
+    if (typeof releases.kind === 'string' && ['', 'fastapi', 'harness_agent', 'static_site'].includes(releases.kind) && (releases.kind !== state.releaseKind || !!releases.mine !== state.releaseMine)) {
+      state.releaseKind = releases.kind; state.releaseMine = !!releases.mine; if (state.releases) work.push(loadReleases($, state));
+    }
+    if (RELEASE_DAYS.includes(releases.days)) state.releaseDays = releases.days;
+    const releaseUid = typeof releases.uid === 'string' ? releases.uid : '';
+    if (releaseUid && uuid(releaseUid) && state.releaseDetail?.uid !== releaseUid) work.push(openRelease($, state, releaseUid));
+    else if (!releaseUid && state.releaseDetail && releases.uid === '') { state.releaseDetail = null; syncReleasePolling($, state); }
     const tools = record(view.tools);
     if (tools.view === 'detail' && typeof tools.uid === 'string' && tools.uid && (state.toolsView !== 'detail' || state.selectedMcp !== tools.uid)) work.push(openTool($, state, tools.uid));
     else if (tools.view === 'add' && state.toolsView !== 'add') { state.toolsView = 'add'; if (!state.results['devtools.mcp-discover'] || searched.has('mcp')) work.push(runDev($, state, 'mcp-discover', { offset: 0 })); }
@@ -1108,7 +1137,7 @@ export function register(on, options = {}) {
     // A pane draw proves the pane is open: remote-run polling resumes for the section shown.
     if (!state.paneOpen) {
       state.paneOpen = true;
-      try { syncDeploymentPolling($, state); syncAgentIconPolling($, state); syncSharedPolling($, state); } catch { /* polling is optional */ }
+      try { syncDeploymentPolling($, state); syncReleasePolling($, state); syncAgentIconPolling($, state); syncSharedPolling($, state); } catch { /* polling is optional */ }
       if (state.booted && !state.initializing) void readSharedFolder($, state).catch(() => {});
     }
     if (state.paneFault) return renderRecovery(ui, state, actions);
@@ -1117,7 +1146,7 @@ export function register(on, options = {}) {
   });
   on('ui.close', { id: 'mainsequence' }, ($, e, next) => {
     // Nothing polls a remote run while the pane is closed; reopening it resumes.
-    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list'); syncAgentIconPolling($, state); syncSharedPolling($, state);
+    state.paneOpen = false; cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list'); cancelReleaseTimer(state); syncAgentIconPolling($, state); syncSharedPolling($, state);
     return next(e);
   });
   on('ui.fault', { component: 'Pane', requestId: 'mainsequence' }, ($, e, next) => {
@@ -1152,6 +1181,7 @@ export function register(on, options = {}) {
   on('tool.call', { tool: /^mcp__mainsequence__/ }, async ($, e) => {
     if (e.tool.startsWith('mcp__mainsequence__ms_agent_')) return handleAgentTool($, state, e);
     if (e.tool === `mcp__mainsequence__${DEPLOY_TOOL}`) return deploymentStatusTool($, state, e);
+    if (e.tool === `mcp__mainsequence__${RELEASE_TOOL}`) return releasesTool($, state, e);
     // A session in the background follows an environment chosen in another one before its tools run.
     await syncShared($, state);
     let entry = state.mcpTools[e.tool];
@@ -1314,7 +1344,7 @@ async function loadDeploymentList($, state, { offset = 0, limit = 25 } = {}) {
 async function openDeploymentList($, state, origin) {
   if (!state.fields.mcpEnvironment) { $.ui.toast('Choose an organization environment to see deployments.'); return; }
   cancelDeployTimer(state, 'run');
-  state.tab = 'Code'; state.deployView = 'list'; state.deployOrigin = origin === 'home' ? 'home' : 'code'; state.deployHistory = []; state.confirmation = null;
+  state.tab = 'Code'; state.deployView = 'list'; state.deployOrigin = ['home', 'releases'].includes(origin) ? origin : 'code'; state.deployHistory = []; state.confirmation = null;
   state.deployDetail = null; state.deployLogs = null; state.deployStep = ''; state.deployPolls = 0; state.deployPaused = false;
   update($);
   await loadDeploymentList($, state, { offset: 0, limit: Math.max(25, state.deployList?.entries.length || 0) });
@@ -1323,13 +1353,14 @@ function closeDeployments($, state) {
   const origin = state.deployOrigin;
   state.deployView = ''; state.deployHistory = []; state.deployDetail = null; state.deployLogs = null; state.deployStep = ''; state.confirmation = null;
   if (origin === 'home') state.tab = 'Home';
-  syncDeploymentPolling($, state); update($);
+  if (origin === 'releases') state.tab = 'Releases';
+  syncDeploymentPolling($, state); syncReleasePolling($, state); update($);
   void ensureLatestDeployments($, state).catch(() => {});
 }
 async function openDeployment($, state, uid, kind, origin) {
   if (!uuid(uid) || !state.fields.mcpEnvironment) return;
   if (origin === 'detail' && state.deployDetail) state.deployHistory.push({ uid: state.deployDetail.uid, kind: state.deployDetail.kind, step: state.deployStep });
-  else if (origin !== 'back') { state.deployHistory = []; state.deployOrigin = origin === 'list' ? 'list' : origin === 'home' ? 'home' : 'code'; }
+  else if (origin !== 'back') { state.deployHistory = []; state.deployOrigin = ['list', 'home', 'releases'].includes(origin) ? origin : 'code'; }
   if (state.deployHistory.length > 10) state.deployHistory.shift();
   cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list');
   state.tab = 'Code'; state.deployView = 'detail'; state.confirmation = null;
@@ -1500,6 +1531,241 @@ async function deploymentStatusTool($, state, e) {
     }
   }
   return answer(`${kindLabel(run)} ${stateLabel(run.state).toLowerCase()}.`, blocks);
+}
+// Releases: the environment's releases and their run history, read from devtools. Opening the
+// section or a release reads it once. Only while a shown release is deploying does a timer run:
+// every 30 s one check of the runs still queued or running, shared by every session for 25 s,
+// and the section is read again when one of them ends or a new one starts. A run the person
+// watches is re-read every 15 s until it ends, then a toast says how it ended. Both stop after an hour.
+const RELEASE_ACTIONS = ['deployment-releases', 'deployment-release', 'deployment-active', 'deployment-wait'];
+const RELEASE_TOOL = 'ms_releases';
+const RELEASE_POLL_MS = 30000, RELEASE_POLL_LIMIT = 120, RELEASE_SHARE_MS = 25000, WATCH_POLL_MS = 15000, WATCH_POLL_LIMIT = 240;
+const RUN_ACTIVE = new Set(['queued', 'running']);
+
+function clearReleases($, state) {
+  cancelReleaseTimer(state); state.releaseRevision++;
+  state.releases = null; state.releasesLoading = false; state.releasesError = ''; state.releaseDetail = null; state.releasePolls = 0; state.releasePaused = false;
+  if (state.releaseWatch && state.releaseWatch.backend !== state.fields.backend) { stopWatch(state); statusLine($, state); }
+  for (const op of state.running.values()) if (RELEASE_ACTIONS.some(action => op.label === `projects · ${action}`) && op.cancel) void op.cancel().catch(() => {});
+}
+function releaseFilter(state) {
+  const branchUid = state.releaseMine ? deployTarget(state, { root: state.cwd }).branchUid : '';
+  return { ...(state.releaseKind ? { releaseKind: state.releaseKind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) };
+}
+async function loadReleases($, state, { offset = 0, quiet = false } = {}) {
+  if (!state.fields.mcpEnvironment) return;
+  const selection = context(state), revision = state.releaseRevision;
+  state.releasesLoading = true; if (!quiet) update($);
+  try {
+    const limit = offset ? 50 : Math.max(50, Math.min(100, state.releases?.results.length || 0));
+    const result = await execute($, state, request('projects', 'deployment-releases', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment,
+      days: 30, limit, offset, ...releaseFilter(state) }), true);
+    if (state.closed || selection !== context(state) || revision !== state.releaseRevision) return;
+    if (result.status !== 'success') { state.releasesError = result.summary; return; }
+    const kept = offset && state.releases ? state.releases.results.slice(0, offset) : [];
+    const seen = new Set(kept.map(row => row.uid));
+    state.releases = { ...result.data, results: [...kept, ...rows(result.data).filter(row => !seen.has(row.uid))] };
+    state.releasesError = '';
+  } finally { if (revision === state.releaseRevision) { state.releasesLoading = false; syncReleasePolling($, state); update($); } }
+}
+async function openRelease($, state, uid) {
+  if (!uuid(uid) || !state.fields.mcpEnvironment) return;
+  state.tab = 'Releases'; state.confirmation = null; state.releasePolls = 0; state.releasePaused = false;
+  state.releaseDetail = { uid: uid.toLowerCase(), data: null, loading: true, error: '', ticket: 0 };
+  update($);
+  await loadReleaseDetail($, state);
+}
+async function loadReleaseDetail($, state) {
+  const detail = state.releaseDetail;
+  if (!detail || !state.fields.mcpEnvironment) return;
+  const selection = context(state), revision = state.releaseRevision, ticket = ++state.sequence;
+  detail.ticket = ticket; detail.loading = true; update($);
+  const result = await execute($, state, request('projects', 'deployment-release', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment,
+    releaseUid: detail.uid, days: state.releaseDays, limit: 100 }), true);
+  if (state.closed || selection !== context(state) || revision !== state.releaseRevision || state.releaseDetail !== detail || detail.ticket !== ticket) return;
+  detail.loading = false;
+  if (result.status !== 'success') detail.error = result.summary;
+  else { detail.error = ''; detail.data = result.data.hidden ? { hidden: true } : result.data; }
+  syncReleasePolling($, state); update($);
+}
+async function closeRelease($, state) {
+  state.releaseDetail = null; state.releasePolls = 0; state.releasePaused = false; syncReleasePolling($, state); update($);
+  if (!state.releases) await loadReleases($, state);
+}
+async function refreshReleases($, state) {
+  state.releasePolls = 0; state.releasePaused = false;
+  if (state.releaseDetail) await loadReleaseDetail($, state); else await loadReleases($, state);
+}
+/** The deploying runs the open section shows: nothing polls when there are none. */
+function shownActiveRuns(state) {
+  if (state.releaseDetail) return (state.releaseDetail.data?.runs || []).filter(run => RUN_ACTIVE.has(run.state)).map(run => run.uid);
+  return (state.releases?.results || []).map(row => row.activeRun?.uid).filter(Boolean);
+}
+function releasePollWanted(state) {
+  return !state.closed && state.paneOpen && state.tab === 'Releases' && !!state.fields.mcpEnvironment && !state.releasePaused && shownActiveRuns(state).length > 0;
+}
+function cancelReleaseTimer(state) {
+  const timer = state.releaseTimer;
+  if (!timer) return;
+  timer.cancel(); state.timers = state.timers.filter(item => item !== timer); state.releaseTimer = null;
+}
+function syncReleasePolling($, state) {
+  if (!releasePollWanted(state)) { cancelReleaseTimer(state); return; }
+  if (state.releaseTimer) return;
+  const timer = $.clock.every(RELEASE_POLL_MS, () => { void pollReleases($, state).catch(() => {}); });
+  state.timers.push(timer); state.releaseTimer = timer;
+}
+async function pollReleases($, state) {
+  if (state.releaseChecking) return;
+  if (++state.releasePolls > RELEASE_POLL_LIMIT) { state.releasePaused = true; syncReleasePolling($, state); update($); return; }
+  if (!releasePollWanted(state)) { syncReleasePolling($, state); return; }
+  state.releaseChecking = true;
+  try {
+    const active = await readActiveRuns($, state);
+    if (!active || !releasePollWanted(state)) return;
+    const still = new Set(active.map(run => run.uid)), shown = shownActiveRuns(state);
+    const ours = state.releaseDetail ? new Set([state.releaseDetail.uid]) : new Set((state.releases?.results || []).map(row => row.uid));
+    // Read the section again only when a shown run ended or one of its releases started another.
+    if (shown.some(uid => !still.has(uid)) || active.some(run => ours.has(run.releaseUid) && !shown.includes(run.uid))) {
+      if (state.releaseDetail) await loadReleaseDetail($, state); else await loadReleases($, state, { quiet: true });
+    }
+  } finally { state.releaseChecking = false; syncReleasePolling($, state); }
+}
+/** The environment's queued and running runs, read at most once per 25 s by all the sessions together. */
+async function readActiveRuns($, state) {
+  const key = context(state), now = await $.clock.now();
+  const shared = record(await $.store.get('releases-active'));
+  if (shared.key === key && typeof shared.at === 'number' && now - shared.at < RELEASE_SHARE_MS && Array.isArray(shared.runs)) return shared.runs;
+  const result = await execute($, state, request('projects', 'deployment-active', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment }), true);
+  if (state.closed || key !== context(state) || result.status !== 'success') return null;
+  const runs = rows(result.data.runs).map(run => ({ uid: String(run.uid), state: String(run.state), releaseUid: run.releaseUid ? String(run.releaseUid) : null }));
+  await $.store.set('releases-active', { key, at: now, runs });
+  return runs;
+}
+/** Watch one deploying run of a release: the status line follows it and a toast says how it ended. */
+async function watchRelease($, state, releaseUid) {
+  const row = (state.releases?.results || []).find(item => item.uid === releaseUid);
+  const detail = state.releaseDetail?.uid === releaseUid ? state.releaseDetail.data : null;
+  const run = row?.activeRun || (detail?.runs || []).find(item => RUN_ACTIVE.has(item.state));
+  const name = row?.name || detail?.release?.name || 'The release';
+  if (!run) { $.ui.toast(`${name} is not deploying now.`); return; }
+  stopWatch(state);
+  state.releaseWatch = { runUid: run.uid, releaseUid, name, backend: state.fields.backend, state: run.state, stepsDone: run.stepsDone || 0, stepsTotal: run.stepsTotal || 0, polls: 0, reading: false };
+  const timer = $.clock.every(WATCH_POLL_MS, () => { void pollWatch($, state).catch(() => {}); });
+  state.timers.push(timer); state.releaseWatchTimer = timer;
+  statusLine($, state); update($);
+}
+function stopWatch(state) {
+  const timer = state.releaseWatchTimer;
+  if (timer) { timer.cancel(); state.timers = state.timers.filter(item => item !== timer); }
+  state.releaseWatchTimer = null; state.releaseWatch = null;
+}
+async function pollWatch($, state) {
+  const watch = state.releaseWatch;
+  if (!watch || watch.reading || state.closed) return;
+  if (++watch.polls > WATCH_POLL_LIMIT) {
+    stopWatch(state); statusLine($, state); update($);
+    $.ui.toast(`Stopped watching ${watch.name} after an hour; it was still ${stateLabel(watch.state).toLowerCase()}.`, { timeoutMs: 15000 });
+    return;
+  }
+  watch.reading = true;
+  try {
+    const result = await execute($, state, request('projects', 'deployment-run', { backend: watch.backend, runUid: watch.runUid, kind: 'deployment_run' }), true);
+    if (state.releaseWatch !== watch || result.status !== 'success') return;
+    if (result.data.hidden) { stopWatch(state); statusLine($, state); update($); return; }
+    const run = result.data.run, steps = run.steps || [];
+    watch.state = run.state; watch.stepsDone = steps.filter(step => step.state === 'succeeded').length; watch.stepsTotal = steps.length;
+    if (!RUN_ACTIVE.has(run.state)) {
+      stopWatch(state);
+      $.ui.toast(run.state === 'succeeded' ? `${watch.name} deployed${run.commit ? ` ${run.commit}` : ''}.`
+        : `${watch.name}: the deployment ${stateLabel(run.state).toLowerCase()}${run.error ? ` — ${run.error}` : ''}.`, { timeoutMs: 15000 });
+      if (state.tab === 'Releases' && !state.closed) void refreshReleases($, state).catch(() => {});
+    }
+    statusLine($, state); update($);
+  } finally { watch.reading = false; }
+}
+/** The model's read-only view of releases: no confirmation, denied without a selected environment. */
+async function releasesTool($, state, e) {
+  await toolsReady($, state);
+  if (state.closed) return { deny: 'This session has ended.' };
+  if (!state.fields.mcpEnvironment) return { deny: 'Choose a MainSequence organization environment in the pane before reading releases.' };
+  const { tool, tool_use_id, agentId, ...input } = e;
+  const failed = message => toolResult(fail('releases', message, 'INVALID_REQUEST'));
+  const action = input.action, release = typeof input.release === 'string' ? clean(input.release).trim().slice(0, 200) : '';
+  if (!['list', 'history', 'active', 'wait'].includes(action)) return failed('action is list, history, active or wait.');
+  if ((input.release !== undefined && typeof input.release !== 'string') || (input.runUid !== undefined && !uuid(input.runUid))
+    || (input.kind !== undefined && !['fastapi', 'harness_agent', 'static_site'].includes(input.kind)) || (input.thisRepository !== undefined && typeof input.thisRepository !== 'boolean')
+    || (input.days !== undefined && !(Number.isInteger(input.days) && input.days >= 1 && input.days <= 90))
+    || (input.timeoutSeconds !== undefined && !(Number.isInteger(input.timeoutSeconds) && input.timeoutSeconds >= 1 && input.timeoutSeconds <= 120))) {
+    return failed('release is a name or uid, runUid a run uid, kind fastapi, harness_agent or static_site, thisRepository a boolean, days 1–90 and timeoutSeconds 1–120.');
+  }
+  const selection = context(state), backend = state.fields.backend, environmentUid = state.fields.mcpEnvironment, environment = environmentLabel(state);
+  const stale = () => state.closed || selection !== context(state);
+  const changed = { deny: 'The selected environment changed while reading releases.' };
+  const answer = (summary, text) => toolResult({ schemaVersion: 1, action: 'releases', status: 'success', summary, data: { content: [{ type: 'text', text }] } });
+  const read = (name, values) => execute($, state, request('projects', name, { backend, environmentUid, ...values }), true);
+  let branchUid = '';
+  if (input.thisRepository === true) {
+    if (!state.results['devtools.repositories']) await execute($, state, devRequest(state, 'repositories'), true);
+    if (stale()) return changed;
+    branchUid = deployTarget(state, { root: state.cwd }).branchUid;
+    if (!branchUid) return failed('This session folder is not a known MainSequence repository checkout: leave out thisRepository.');
+  }
+  if (action === 'list') {
+    const result = await read('deployment-releases', { days: 30, limit: 100, ...(input.kind ? { releaseKind: input.kind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) });
+    if (stale()) return changed;
+    if (result.status !== 'success') return toolResult(result);
+    const entries = rows(result.data);
+    return answer(result.summary, `Environment: ${environment} · last 30 days\n${entries.map(row => describeReleaseRow(row, result.data.now)).join('\n') || 'No releases.'}`
+      + `${result.data.count > entries.length ? `\n(${entries.length} of ${result.data.count} shown)` : ''}`);
+  }
+  if (action === 'active') {
+    const result = await read('deployment-active', branchUid ? { codeRepositoryBranchUid: branchUid } : {});
+    if (stale()) return changed;
+    if (result.status !== 'success') return toolResult(result);
+    return answer(result.summary, `Environment: ${environment}\n${rows(result.data.runs).map(run => describeActiveRun(run, result.data.now)).join('\n') || 'Nothing is deploying now.'}`);
+  }
+  // history and wait name a release, by uid or by its exact name.
+  let releaseUid = '', found = null;
+  if (release && uuid(release)) releaseUid = release.toLowerCase();
+  else if (release) {
+    const result = await read('deployment-releases', { days: 1, limit: 20, search: release });
+    if (stale()) return changed;
+    if (result.status !== 'success') return toolResult(result);
+    const matches = rows(result.data).filter(row => String(row.name).toLowerCase() === release.toLowerCase());
+    if (!matches.length) return failed(`No release named ${release} in ${environment}.${rows(result.data).length ? ` Similar: ${rows(result.data).map(row => row.name).join(', ')}.` : ''}`);
+    if (matches.length > 1) return failed(`Several releases are named ${release} in ${environment}; pass the uid of one:\n${matches.map(row => describeReleaseRow(row, result.data.now)).join('\n')}`);
+    found = matches[0]; releaseUid = found.uid;
+  } else if (!(action === 'wait' && input.runUid)) return failed(action === 'wait' ? 'Name the release, or pass the runUid to wait for.' : 'Name the release whose history to read.');
+  if (action === 'history') {
+    const result = await read('deployment-release', { releaseUid, days: input.days || 30, limit: 100 });
+    if (stale()) return changed;
+    if (result.status !== 'success') return toolResult(result);
+    if (result.data.hidden) return answer(HIDDEN_RELEASE, HIDDEN_RELEASE);
+    return answer(result.summary, describeReleaseHistory(result.data, environment));
+  }
+  let runUid = input.runUid ? String(input.runUid).toLowerCase() : found?.activeRun?.uid || '';
+  if (!runUid) {
+    const result = await read('deployment-release', { releaseUid, days: 2, limit: 5 });
+    if (stale()) return changed;
+    if (result.status !== 'success') return toolResult(result);
+    if (result.data.hidden) return answer(HIDDEN_RELEASE, HIDDEN_RELEASE);
+    const runs = rows(result.data.runs), active = runs.find(run => RUN_ACTIVE.has(run.state)), name = result.data.release?.name || release;
+    if (!active) {
+      const text = `${name} is not deploying now.${runs[0] ? ` Its last run ${stateLabel(runs[0].state).toLowerCase()} at ${runs[0].commit || 'an unknown commit'} (run ${runs[0].uid}).` : ''}`;
+      return answer(text, text);
+    }
+    runUid = active.uid;
+  }
+  const waited = await execute($, state, request('projects', 'deployment-wait', { backend, runUid, timeoutSeconds: input.timeoutSeconds || 120 }), true);
+  if (stale()) return changed;
+  if (waited.status !== 'success') return toolResult(waited);
+  if (waited.data.hidden) return answer(HIDDEN_DEPLOYMENT, HIDDEN_DEPLOYMENT);
+  const run = waited.data.run, steps = run.steps || [], done = steps.filter(step => step.state === 'succeeded').length;
+  const text = waited.data.finished
+    ? `Deployment ${stateLabel(run.state).toLowerCase()} after waiting ${Math.round(waited.data.waitedMs / 1000)} s.\n${describeRun(run, waited.data.now)}`
+    : `Still ${stateLabel(run.state).toLowerCase()} after ${Math.round(waited.data.waitedMs / 1000)} s (${done} of ${steps.length} stages done). Call wait again with runUid ${run.uid} to keep waiting.`;
+  return answer(waited.summary, `Environment: ${environment}\n${text}`);
 }
 const context = state => `${state.fields.backend}\n${state.fields.mcpEnvironment}`;
 const storedKey = (state, account, uid) => JSON.stringify([state.fields.backend, state.fields.mcpEnvironment, account, uid]);
