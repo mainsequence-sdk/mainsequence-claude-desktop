@@ -15,7 +15,13 @@ of a separately installed command-line client does not establish GUI compatibili
 The startup guard rejects engines older than 2.1.286; this is not a claim that every
 intermediate build has been tested.
 
-In **Customize → Plugins → Add marketplace → Add from repository**, enter
+From a terminal, `claude plugin install mainsequence --marketplace
+mainsequence-sdk/mainsequence-claude-desktop` adds the marketplace if needed and installs
+MainSequence for your user; Desktop's Code sessions share the terminal's plugins. A
+`claude` that rejects `--marketplace` needs `claude plugin marketplace add
+mainsequence-sdk/mainsequence-claude-desktop` first, then `claude plugin install
+mainsequence@mainsequence-desktop`. In Desktop, the same comes from **Customize →
+Plugins → Add marketplace → Add from repository**: enter
 `https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git` and install
 MainSequence from `mainsequence-desktop`. The catalog supplies a versioned ZIP with
 a pinned SHA-256. A local build remains unpublished until the release workflow runs.

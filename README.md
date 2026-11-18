@@ -21,13 +21,27 @@ Vite + React repositories need npm; local image builds need Docker with buildx. 
 these are installed silently. The plugin runs on macOS and Linux. On Windows the shared
 sign-in cannot be kept between sessions, so the plugin is not supported there yet.
 
-1. In Claude Desktop open **Customize → Plugins → Add marketplace → Add from repository**
-   and enter `https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git`.
-2. Install **MainSequence** from `mainsequence-desktop`. The catalog points at a versioned
-   ZIP with a pinned SHA-256; nothing is built or downloaded from npm on your machine.
-3. Enable the plugin in a local Code session and press **MainSequence** in the session
-   footer to open the pane. Opening it submits no prompt and saves nothing. `/ms` opens
-   it too.
+From a terminal, one command installs it:
+
+```bash
+claude plugin install mainsequence --marketplace mainsequence-sdk/mainsequence-claude-desktop
+```
+
+It adds the `mainsequence-desktop` marketplace from this repository if you don't have it
+yet (over SSH, or HTTPS without a GitHub key) and installs MainSequence for your user.
+The terminal and Claude Desktop's Code sessions share the same plugins. An older `claude`
+that rejects `--marketplace` needs two commands instead:
+`claude plugin marketplace add mainsequence-sdk/mainsequence-claude-desktop`, then
+`claude plugin install mainsequence@mainsequence-desktop`.
+
+Or, in Claude Desktop, open **Customize → Plugins → Add marketplace → Add from repository**,
+enter `https://github.com/mainsequence-sdk/mainsequence-claude-desktop.git` and install
+**MainSequence** from `mainsequence-desktop`.
+
+Either way the catalog points at a versioned ZIP with a pinned SHA-256; nothing is built
+or downloaded from npm on your machine. Start a new local Code session (enable the plugin
+there if it is off) and press **MainSequence** in the session footer to open the pane.
+Opening it submits no prompt and saves nothing. `/ms` opens it too.
 
 The pane header always shows the plugin's version and whether a newer one is published.
 **Update to …** asks first, then runs Claude's own plugin updater; start a new Code

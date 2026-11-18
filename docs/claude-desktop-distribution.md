@@ -9,8 +9,12 @@ package.json and lockfile; no shared source is maintained here.
 
 ## Install, update and remove
 
-Open **Customize → Plugins → Add marketplace → Add from repository**, enter this
-repository's GitHub URL and install **MainSequence** from `mainsequence-desktop`.
+Run `claude plugin install mainsequence --marketplace
+mainsequence-sdk/mainsequence-claude-desktop`, which adds the marketplace from this
+repository if needed and installs the plugin for the user (an older `claude` without
+`--marketplace` needs `plugin marketplace add` first). In Desktop, open **Customize →
+Plugins → Add marketplace → Add from repository**, enter this repository's GitHub URL
+and install **MainSequence** from `mainsequence-desktop`.
 The catalog pins a versioned ZIP and SHA-256 digest. Node 22+ is required, and the
 [guide](claude-desktop.md) lists project-operation prerequisites. Installation does
 not need this source checkout or runtime npm downloads.
