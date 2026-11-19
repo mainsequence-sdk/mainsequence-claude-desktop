@@ -1,7 +1,7 @@
 # MainSequence for Claude Desktop
 
 MainSequence for Claude Desktop puts your MainSequence account inside Claude Desktop's
-Code sessions: one native pane with **Home, Code, Projects, Agents** and **Tools**, agent
+Code sessions: one native pane with **Home, Code, Projects, Agents, Tools** and **Releases**, agent
 conversations from Claude's own composer, project MCP tools Claude can call, and the
 deployment status of your repositories. It is the plugin `mainsequence` in the
 `mainsequence-desktop` marketplace, distributed as a ZIP from this repository's releases.
@@ -107,6 +107,14 @@ section and Activity are the same in every session, whichever project it is in. 
   with the project's own schema, and Claude asks before each call. **Advanced** in an
   MCP's detail calls a tool directly or re-registers the tools. The read-only
   `ms_deployment_status` tool gives Claude the same deployment view as the Deploys card.
+- **Releases.** The environment's APIs, agents and static sites, read-only: each with its
+  last ten runs, how many deployed and when one last failed, with what is deploying now
+  pinned on top. A release shows the commit it serves and the one it wants, 7, 30 or 90
+  days of runs, success rate, median time, its slowest stage and most common failure, and
+  each run's stages and logs. **Notify me** follows a deploying run in Claude's status line
+  and tells you how it ended. Nothing is re-read while nothing deploys. The read-only
+  `ms_releases` tool lets Claude list releases, read one's history and wait for a deploy
+  to finish.
 - **Activity.** Running and finished operations with progress, results, cancellation and
   partial-effect warnings. The running count also appears in Claude's status line.
 
