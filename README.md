@@ -108,10 +108,11 @@ section and Activity are the same in every session, whichever project it is in. 
   MCP's detail calls a tool directly or re-registers the tools. The read-only
   `ms_deployment_status` tool gives Claude the same deployment view as the Deploys card.
 - **Releases.** The environment's APIs, agents and static sites, read-only: each with its
-  last ten runs, how many deployed and when one last failed, with what is deploying now
-  pinned on top. A release shows the commit it serves and the one it wants, 7, 30 or 90
-  days of runs, success rate, median time, its slowest stage and most common failure, and
-  each run's stages and logs. **Notify me** follows a deploying run in Claude's status line
+  last ten runs, how many deployed, and the date and time it last deployed or its last run
+  ended, with what is deploying now and when it started pinned on top. A release shows the
+  commit it serves and since when, the one it wants, 7, 30 or 90 days of runs with their
+  start times, success rate, median time, its slowest stage and most common failure, and
+  each run's stages and logs. Times are in the machine's time zone, which the section names. **Notify me** follows a deploying run in Claude's status line
   and tells you how it ended. Nothing is re-read while nothing deploys. The read-only
   `ms_releases` tool lets Claude list releases, read one's history and wait for a deploy
   to finish.

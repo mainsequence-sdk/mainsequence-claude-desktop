@@ -5,7 +5,7 @@ import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 import { HIDDEN_DEPLOYMENT, isActiveRun, defaultStep, failedStep, logSource, describeRun, logTimestamp, stateLabel, kindLabel, stepLabel } from './deploymentView.mjs';
-import { HIDDEN_RELEASE, RELEASE_DAYS, describeReleaseRow, describeActiveRun, describeReleaseHistory } from './releaseView.mjs';
+import { HIDDEN_RELEASE, RELEASE_DAYS, describeReleaseRow, describeActiveRun, describeReleaseHistory, zoneLabel, stamp } from './releaseView.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
@@ -1716,14 +1716,14 @@ async function releasesTool($, state, e) {
     if (stale()) return changed;
     if (result.status !== 'success') return toolResult(result);
     const entries = rows(result.data);
-    return answer(result.summary, `Environment: ${environment} · last 30 days\n${entries.map(row => describeReleaseRow(row, result.data.now)).join('\n') || 'No releases.'}`
+    return answer(result.summary, `Environment: ${environment} · last 30 days · times in ${zoneLabel(result.data.now)}\n${entries.map(row => describeReleaseRow(row, result.data.now)).join('\n') || 'No releases.'}`
       + `${result.data.count > entries.length ? `\n(${entries.length} of ${result.data.count} shown)` : ''}`);
   }
   if (action === 'active') {
     const result = await read('deployment-active', branchUid ? { codeRepositoryBranchUid: branchUid } : {});
     if (stale()) return changed;
     if (result.status !== 'success') return toolResult(result);
-    return answer(result.summary, `Environment: ${environment}\n${rows(result.data.runs).map(run => describeActiveRun(run, result.data.now)).join('\n') || 'Nothing is deploying now.'}`);
+    return answer(result.summary, `Environment: ${environment} · times in ${zoneLabel(result.data.now)}\n${rows(result.data.runs).map(run => describeActiveRun(run, result.data.now)).join('\n') || 'Nothing is deploying now.'}`);
   }
   // history and wait name a release, by uid or by its exact name.
   let releaseUid = '', found = null;
@@ -1752,7 +1752,7 @@ async function releasesTool($, state, e) {
     if (result.data.hidden) return answer(HIDDEN_RELEASE, HIDDEN_RELEASE);
     const runs = rows(result.data.runs), active = runs.find(run => RUN_ACTIVE.has(run.state)), name = result.data.release?.name || release;
     if (!active) {
-      const text = `${name} is not deploying now.${runs[0] ? ` Its last run ${stateLabel(runs[0].state).toLowerCase()} at ${runs[0].commit || 'an unknown commit'} (run ${runs[0].uid}).` : ''}`;
+      const text = `${name} is not deploying now.${runs[0] ? ` Its last run ${stateLabel(runs[0].state).toLowerCase()}${runs[0].finishedAt ? ` ${stamp(runs[0].finishedAt, result.data.now)} ${zoneLabel(result.data.now)}` : ''} at ${runs[0].commit || 'an unknown commit'} (run ${runs[0].uid}).` : ''}`;
       return answer(text, text);
     }
     runUid = active.uid;

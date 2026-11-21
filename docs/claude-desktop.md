@@ -250,19 +250,22 @@ environment is selected.
 with their runs of the last 30 days, read in two requests: one page of releases, then
 their runs together. Each row shows the release, its kind, repository · branch, its last
 ten runs as glyphs (newest first: ● succeeded, ! failed or blocked, ◌ deploying, ○
-superseded, cancelled or skipped) and either how many of them deployed or when the last
-one failed. A release that is deploying is pinned on top with its commit, stage and
-elapsed time. **All kinds / APIs / Agents / Static sites** and **This repository** (when
+superseded, cancelled or skipped), how many of them deployed or **Failed**/**Blocked** when
+the last one did, and when the newest run happened: `deployed 2026-11-19 14:32 (2d ago)`
+for one that succeeded, `last run …` with its end for any other, `deploying since …` for
+one still running. A release that is deploying is pinned on top with its commit, stage,
+start time and elapsed time. Times are written in the machine's time zone, named under
+the list (`Times in UTC+01:00.`). **All kinds / APIs / Agents / Static sites** and **This repository** (when
 the session folder is a known checkout) filter on the backend. **All deployments,
 including jobs and images** opens the environment-wide deployment list.
 
-A release shows the commit and revision it serves and, when different, the one it
-wants; a 7, 30 or 90 day window; its run count, success rate (succeeded out of those that
+A release shows the commit and revision it serves and since when it serves it and, when
+different, the one it wants and when that was requested; a 7, 30 or 90 day window; its run count, success rate (succeeded out of those that
 succeeded, failed or were blocked), median time of the runs that succeeded, its slowest
 stage and its most common failure. The time a run waits before its first stage, usually
 for its workflow's image build, counts as the stage **Waiting to start**. A blocked run
 without an error code is named by its outcome. The runs follow, newest first, with
-source, stages done and time; a run opens the deployment detail above. The backend has
+their start date and time, source, stages done and duration; a run opens the deployment detail above. The backend has
 no statistics endpoint: devtools computes these from the runs it reads.
 
 Nothing is re-read while nothing deploys. While the section shows a deploying release
@@ -276,9 +279,9 @@ a deploying release re-reads only that run every 15 s, shows `MainSequence: depl
 with how it ended. It stops then, or after an hour.
 
 The model tool `ms_releases` is registered with the environment selection. `action`
-`list` returns the releases with their last run, 30-day success rate and what is
-deploying (`kind` and `thisRepository` filter); `history` returns one release's serving
-and wanted commits, stats and runs (`release` by name or uid, `days`); `active` returns
+`list` returns the releases with their last run and when it ended, 30-day success rate
+and what is deploying since when (`kind` and `thisRepository` filter); `history` returns one release's serving
+and wanted commits with their dates, stats and runs with start and end times (`release` by name or uid, `days`); `active` returns
 what is deploying now; `wait` waits up to `timeoutSeconds` (at most 120) for the release's
 deploying run, or `runUid`, to end, re-reading it every 10 s, and says when it is still
 running so Claude can call again. It reads only and needs no confirmation; it is denied
