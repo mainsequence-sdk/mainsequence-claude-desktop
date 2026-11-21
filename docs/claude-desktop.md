@@ -247,16 +247,18 @@ environment is selected.
 ### Releases
 
 **Releases** lists the selected environment's releases (APIs, agents and static sites)
-with their runs of the last 7 days, read in two requests: one page of releases, then
-their runs together. **1 day / 7 days / 30 days / 90 days** choose the window; a longer
-one is read only when chosen. A release's repository · branch and last run come from
-its runs, so a release without a run in the window shows its name and `no runs in the
-last 7 days`. Each row shows the release, its kind, repository · branch, its last
-ten runs as glyphs (newest first: ● succeeded, ! failed or blocked, ◌ deploying, ○
+with their runs of the last 7 days: one page of releases, then their runs together.
+**1 day / 7 days / 30 days / 90 days** choose the window; a longer one is read only when
+chosen. A release with no successful run in the window gets its newest successful run in
+one more request, and releases that never ran get their repository and branch names in
+another, so every row says where it comes from and when it last deployed, whatever the
+window. Each row shows the release, its kind, repository · branch, its last ten runs in
+the window as glyphs (newest first: ● succeeded, ! failed or blocked, ◌ deploying, ○
 superseded, cancelled or skipped), how many of them deployed or **Failed**/**Blocked** when
-the last one did, and when the newest run happened: `deployed 2026-11-19 14:32 (2d ago)`
-for one that succeeded, `last run …` with its end for any other, `deploying since …` for
-one still running. A release that is deploying is pinned on top with its commit, stage,
+the last one did, and when it last changed: `deployed 2026-11-19 14:32 (2d ago)` when its
+newest run succeeded or nothing ran in the window, `last run …` with its end and the last
+deploy after it otherwise, `deploying since …` for one still running, and `not deployed
+yet` for a release that never has. A release that is deploying is pinned on top with its commit, stage,
 start time and elapsed time. Times are written in the machine's time zone, named under
 the list (`Times in UTC+01:00.`). **All kinds / APIs / Agents / Static sites** and **This repository** (when
 the session folder is a known checkout) filter on the backend. **All deployments,

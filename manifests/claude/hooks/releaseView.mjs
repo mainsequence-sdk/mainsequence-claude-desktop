@@ -69,10 +69,21 @@ export function lastRunText(run, nowIso) {
   const at = stamp(run.finishedAt || startOf(run), nowIso);
   return at ? `${run.state === 'succeeded' ? 'deployed' : 'last run'} ${at}` : '';
 }
-/** The right-hand summary of a release row: a failure first, else how many of the recent runs deployed. */
+/**
+ * When a release last changed, whatever the window: its newest run in the window and, when that run did not
+ * deploy, when it last did. A release without runs in the window still says when it deployed, or that it never has.
+ */
+export function releaseWhen(row, nowIso) {
+  const run = row.lastRun, deploy = row.lastDeploy;
+  const deployed = deploy ? `deployed ${stamp(deploy.finishedAt || startOf(deploy), nowIso)}` : '';
+  if (!run) return deployed || (row.deployed === false ? 'not deployed yet' : '');
+  const latest = lastRunText(run, nowIso);
+  return run.state === 'succeeded' || !deployed || deploy.uid === run.uid ? latest : `${latest} · ${deployed}`;
+}
+/** The right-hand summary of a release row: a failure first, else how many of the recent runs deployed; nothing without runs. */
 export function recentText(row) {
   const last = row.lastRun;
-  if (!last) return { kind: 'info', text: 'No runs' };
+  if (!last) return null;
   if (runKind(last.state) === 'error') return { kind: 'error', text: stateLabel(last.state) };
   const recent = row.recent || [];
   return { kind: 'info', text: `${recent.filter(item => item.state === 'succeeded').length} of ${recent.length} ok` };
@@ -115,8 +126,8 @@ function renderReleaseList(p, state, actions, { environment, target }) {
       const summary = recentText(entry);
       return row(`release-row-${entry.uid}`, [
         inline([button(`release-open-${entry.uid}`, entry.name || 'Release', () => actions.openRelease(entry.uid), { plain: true }), badge(entry.kindLabel || humanize(entry.kind))], { flexWrap: 'wrap' }),
-        caption([place(entry), lastRunText(entry.lastRun, list.now) || `no runs in the ${windowText(list.days)}`].filter(Boolean).join(' · ')),
-      ], [entry.recent?.length ? dots(p, entry.recent, `release-dots-${entry.uid}`) : null, summary.kind === 'error' ? status('error', summary.text) : caption(summary.text)]);
+        caption([place(entry), releaseWhen(entry, list.now) || `no runs in the ${windowText(list.days)}`].filter(Boolean).join(' · ')),
+      ], [entry.recent?.length ? dots(p, entry.recent, `release-dots-${entry.uid}`) : null, !summary ? null : summary.kind === 'error' ? status('error', summary.text) : caption(summary.text)]);
     }),
     list && !entries.length && !state.releasesLoading && empty('No releases', state.releaseKind || state.releaseMine ? 'No releases match these filters.' : 'APIs, agents and static sites of this environment appear here.'),
     list && entries.length < list.count ? button('releases-more', state.releasesLoading ? 'Loading…' : 'Load more', actions.moreReleases, { plain: true, available: !state.releasesLoading }) : null,
@@ -172,6 +183,8 @@ export function describeReleaseRow(row, nowIso) {
   const glyph = STATUS[runKind(row.lastRun?.state)].glyph, stats = row.stats || {};
   const parts = [`${row.lastRun ? glyph : '·'} ${row.name || 'Release'} (${row.kindLabel || humanize(row.kind)})`, place(row) || 'no runs in the window'];
   if (row.lastRun) parts.push(`last run ${stateLabel(row.lastRun.state).toLowerCase()} ${isDeploying(row.lastRun) ? `since ${stamp(startOf(row.lastRun), nowIso)}` : stamp(row.lastRun.finishedAt || startOf(row.lastRun), nowIso)} at ${row.lastRun.commit || 'unknown commit'}`.replace(/ +/g, ' '));
+  if (row.lastDeploy && row.lastDeploy.uid !== row.lastRun?.uid) parts.push(`deployed ${stamp(row.lastDeploy.finishedAt || startOf(row.lastDeploy), nowIso)} at ${row.lastDeploy.commit || 'unknown commit'}`);
+  else if (!row.lastRun && row.deployed === false) parts.push('not deployed yet');
   if (stats.runs) parts.push(`${stats.runs} runs, ${percent(stats.successRate)} succeeded`);
   if (row.activeRun) parts.push(`DEPLOYING ${row.activeRun.commit || ''} ${stage(row.activeRun)} ${started(row.activeRun)} (run ${row.activeRun.uid})`.replace(/ +/g, ' '));
   parts.push(`uid ${row.uid}`);

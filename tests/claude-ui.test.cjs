@@ -2166,7 +2166,7 @@ test('a folder changed in Codex reaches an open Claude session when its pane ope
 
 // Releases: the environment's APIs, agents and static sites with their run history.
 const relId = n => `00000000-0000-4000-8000-${String(900 + n).padStart(12, '0')}`;
-const RELEASE_API = relId(1), RELEASE_AGENT = relId(2), ACTIVE_RUN = relId(10), DONE_RUN = relId(11);
+const RELEASE_API = relId(1), RELEASE_AGENT = relId(2), RELEASE_SITE = relId(3), ACTIVE_RUN = relId(10), DONE_RUN = relId(11);
 const releaseRun = (uid, state, extra = {}) => ({ uid, state, outcome: state === 'succeeded' ? 'deployed' : '', operation: 'build_and_deploy', source: 'repository_event', commit: 'abc1234',
   createdAt: '2026-10-21T07:50:00.000Z', startedAt: '2026-10-21T07:50:00.000Z', finishedAt: ['queued', 'running'].includes(state) ? null : '2026-10-21T07:55:00.000Z',
   durationMs: ['queued', 'running'].includes(state) ? 120000 : 300000, error: '', errorCode: '', currentStepKey: '', stepsDone: state === 'succeeded' ? 2 : 1, stepsTotal: 2,
@@ -2181,7 +2181,12 @@ function releaseFixture(options = {}) {
       lastRun: releaseRun(ACTIVE_RUN, live.deploying ? 'running' : 'succeeded'), activeRun: live.deploying ? releaseRun(ACTIVE_RUN, 'running') : null, stats: stats({ active: live.deploying ? 1 : 0 }) },
     { uid: RELEASE_AGENT, name: 'risk-agent', kind: 'harness_agent', kindLabel: 'Agent', branchUid: deployBranch, repositoryName: 'Real project', branchName: 'main',
       recent: [{ uid: relId(13), state: 'blocked' }], lastRun: releaseRun(relId(13), 'blocked', { releaseUid: RELEASE_AGENT, outcome: 'workflow_prerequisite_failed', finishedAt: '2026-10-21T05:00:00.000Z' }),
+      deployed: true, lastDeploy: releaseRun(relId(14), 'succeeded', { releaseUid: RELEASE_AGENT, commit: 'aaa1111', finishedAt: '2026-10-19T10:00:00.000Z' }),
       activeRun: null, stats: stats({ runs: 1, succeeded: 0, failed: 0, blocked: 1, successRate: 0, medianMs: null, p90Ms: null, slowestStage: null, commonFailure: { code: 'workflow_prerequisite_failed', count: 1, of: 1 } }) },
+    // Deployed days ago, nothing in the window: it still says when, and from where.
+    { uid: RELEASE_SITE, name: 'docs-site', kind: 'static_site', kindLabel: 'Static site', branchUid: deployBranch, repositoryName: 'Real project', branchName: 'main',
+      recent: [], lastRun: null, deployed: true, lastDeploy: releaseRun(relId(15), 'succeeded', { releaseUid: RELEASE_SITE, commit: 'bbb2222', finishedAt: '2026-10-18T09:00:00.000Z' }),
+      activeRun: null, stats: stats({ runs: 0, succeeded: 0, failed: 0, successRate: null, medianMs: null, p90Ms: null, slowestStage: null, commonFailure: null }) },
   ];
   const f = deployFixture({ ...options, respond: q => {
     if (q.action === 'deployment-releases') {
@@ -2215,9 +2220,12 @@ test('Releases lists each release with its recent runs and reads nothing more wh
   assert.equal(reads.length, 1, 'one read opens the section'); assert.equal(reads[0].environmentUid, 'env-1'); assert.equal(reads[0].days, 7, 'the list opens on a week'); assert.equal(reads[0].releaseKind, undefined);
   const tree = await f.pane(), text = JSON.stringify(tree);
   assert.ok(f.find(tree, `release-row-${RELEASE_API}`)); assert.ok(f.find(tree, `release-row-${RELEASE_AGENT}`));
-  assert.match(text, /Research · 2 releases · last 7 days/); assert.match(text, /Real project · main/);
+  assert.match(text, /Research · 3 releases · last 7 days/); assert.match(text, /Real project · main/);
   assert.match(text, /2 of 3 ok/, 'a release whose last run deployed counts its recent successes'); assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_AGENT}`)), /! Blocked"/, 'a blocked last run reads as a failure');
-  assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_AGENT}`)), new RegExp(esc(`Real project · main · last run ${shownTime('2026-10-21T05:00:00.000Z')} (3h ago)`)), 'a row says when its last run ended');
+  assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_AGENT}`)), new RegExp(esc(`Real project · main · last run ${shownTime('2026-10-21T05:00:00.000Z')} (3h ago) · deployed ${shownTime('2026-10-19T10:00:00.000Z')} (2d ago)`)), 'a row says when its last run ended, and when it last deployed');
+  const quiet = JSON.stringify(f.find(tree, `release-row-${RELEASE_SITE}`));
+  assert.match(quiet, new RegExp(esc(`Real project · main · deployed ${shownTime('2026-10-18T09:00:00.000Z')} (3d ago)`)), 'a release without runs in the window still says when it deployed');
+  assert.doesNotMatch(quiet, /No runs|no runs/, 'and does not read as undeployed'); assert.equal(f.find(tree, `release-dots-${RELEASE_SITE}`), undefined);
   assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_API}`)), new RegExp(esc(`Real project · main · deployed ${shownTime('2026-10-21T07:55:00.000Z')} (5 min ago)`)), 'and when it last deployed');
   assert.match(text, new RegExp(esc(`Times in ${localZone('2026-10-21T08:00:00.000Z')}.`)), 'the zone of those times is named');
   const dots = f.find(tree, `release-dots-${RELEASE_API}`).props.children.map(child => child.props.children[0]);
@@ -2311,7 +2319,8 @@ test('ms_releases lists releases, reads a history by name, says what deploys and
   const call = async (input, id) => f.emit('tool.call', { tool: 'mcp__mainsequence__ms_releases', tool_use_id: id, ...input });
   const list = await call({ action: 'list' }, 'r1');
   assert.match(list.result[0].text, /Environment: Research · last 7 days/); assert.equal(deployRequests(f, 'deployment-releases').at(-1).days, 7); assert.match(list.result[0].text, /pricing-api \(API\) · Real project · main · .* DEPLOYING abc1234 stage 2 of 2/);
-  assert.match(list.result[0].text, new RegExp(esc(`! risk-agent (Agent) · Real project · main · last run blocked ${shownTime('2026-10-21T05:00:00.000Z')} (3h ago)`)));
+  assert.match(list.result[0].text, new RegExp(esc(`! risk-agent (Agent) · Real project · main · last run blocked ${shownTime('2026-10-21T05:00:00.000Z')} (3h ago) at abc1234 · deployed ${shownTime('2026-10-19T10:00:00.000Z')} (2d ago) at aaa1111`)));
+  assert.match(list.result[0].text, new RegExp(esc(`· docs-site (Static site) · Real project · main · deployed ${shownTime('2026-10-18T09:00:00.000Z')} (3d ago) at bbb2222`)));
   const history = await call({ action: 'history', release: 'pricing-api', days: 7 }, 'r2');
   assert.equal(deployRequests(f, 'deployment-release').at(-1).days, 7);
   assert.match(history.result[0].text, new RegExp(esc(`Environment: Research · times in ${localZone('2026-10-21T08:00:00.000Z')}`)));
