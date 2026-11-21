@@ -5,7 +5,7 @@ import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 import { HIDDEN_DEPLOYMENT, isActiveRun, defaultStep, failedStep, logSource, describeRun, logTimestamp, stateLabel, kindLabel, stepLabel } from './deploymentView.mjs';
-import { HIDDEN_RELEASE, RELEASE_DAYS, describeReleaseRow, describeActiveRun, describeReleaseHistory, zoneLabel, stamp } from './releaseView.mjs';
+import { HIDDEN_RELEASE, RELEASE_DAYS, LIST_DAYS, HISTORY_DAYS, windowText, describeReleaseRow, describeActiveRun, describeReleaseHistory, zoneLabel, stamp } from './releaseView.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
@@ -390,13 +390,13 @@ async function refreshToolsNow($, state) {
     inputSchema: { type: 'object', properties: { repository: { type: 'string', description: 'MainSequence repository name or uid; defaults to the session folder\'s repository' },
       branch: { type: 'string', description: 'Branch name; defaults to the checked-out branch' }, runUid: { type: 'string', description: 'A deployment or workflow run uid, instead of repository and branch' },
       logs: { type: 'boolean', description: 'Include the last 80 log lines of the first failed step' } }, additionalProperties: false } });
-  await $.tool.register({ name: RELEASE_TOOL, description: clean(`MainSequence releases [${environmentLabel(state)}]: read-only, never deploys. action "list": the environment's releases (APIs, agents, static sites) with their last run, success rate over 30 days and what is deploying; "history": one release's serving and wanted commits, its runs and stats (success rate, median time, slowest stage, most common failure); "active": what is deploying now; "wait": wait up to 120 s for a deploying run to finish, and call again while it is still running.`),
+  await $.tool.register({ name: RELEASE_TOOL, description: clean(`MainSequence releases [${environmentLabel(state)}]: read-only, never deploys. action "list": the environment's releases (APIs, agents, static sites) with their last run in the window (default the last 7 days), success rate and what is deploying; "history": one release's serving and wanted commits, its runs and stats over the window (default the last day; pass days 7, 30 or 90 for longer history) (success rate, median time, slowest stage, most common failure); "active": what is deploying now; "wait": wait up to 120 s for a deploying run to finish, and call again while it is still running.`),
     inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'history', 'active', 'wait'] },
       release: { type: 'string', description: 'history and wait: the release name or uid' },
       runUid: { type: 'string', description: 'wait: a deployment run uid; defaults to the release\'s deploying run' },
       kind: { type: 'string', enum: ['fastapi', 'harness_agent', 'static_site'], description: 'list: only releases of this kind' },
       thisRepository: { type: 'boolean', description: 'list and active: only this session checkout\'s repository branch' },
-      days: { type: 'integer', minimum: 1, maximum: 90, description: 'history: the window in days, default 30' },
+      days: { type: 'integer', minimum: 1, maximum: 90, description: 'list and history: the window in days; list default 7, history default 1' },
       timeoutSeconds: { type: 'integer', minimum: 1, maximum: 120, description: 'wait: how long to wait, default 120' } }, required: ['action'], additionalProperties: false } });
 }
 
@@ -521,6 +521,7 @@ function actionsFor($, state) {
     openRelease: uid => background(openRelease($, state, uid)),
     closeRelease: () => background(closeRelease($, state)),
     releaseDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseDays === days) return; state.releaseDays = days; background(loadReleaseDetail($, state)); },
+    releaseListDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseListDays === days) return; state.releaseListDays = days; background(loadReleases($, state)); },
     refreshReleases: () => background(refreshReleases($, state)),
     moreReleases: () => background(loadReleases($, state, { offset: state.releases?.results.length || 0 })),
     watchRelease: uid => background(watchRelease($, state, uid)),
@@ -846,9 +847,12 @@ async function applyView($, state, value, json) {
       }
     }
     const releases = record(view.releases);
+    let listChanged = false;
     if (typeof releases.kind === 'string' && ['', 'fastapi', 'harness_agent', 'static_site'].includes(releases.kind) && (releases.kind !== state.releaseKind || !!releases.mine !== state.releaseMine)) {
-      state.releaseKind = releases.kind; state.releaseMine = !!releases.mine; if (state.releases) work.push(loadReleases($, state));
+      state.releaseKind = releases.kind; state.releaseMine = !!releases.mine; listChanged = true;
     }
+    if (RELEASE_DAYS.includes(releases.listDays) && releases.listDays !== state.releaseListDays) { state.releaseListDays = releases.listDays; listChanged = true; }
+    if (listChanged && state.releases) work.push(loadReleases($, state));
     if (RELEASE_DAYS.includes(releases.days)) state.releaseDays = releases.days;
     const releaseUid = typeof releases.uid === 'string' ? releases.uid : '';
     if (releaseUid && uuid(releaseUid) && state.releaseDetail?.uid !== releaseUid) work.push(openRelease($, state, releaseUid));
@@ -1559,7 +1563,7 @@ async function loadReleases($, state, { offset = 0, quiet = false } = {}) {
   try {
     const limit = offset ? 50 : Math.max(50, Math.min(100, state.releases?.results.length || 0));
     const result = await execute($, state, request('projects', 'deployment-releases', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment,
-      days: 30, limit, offset, ...releaseFilter(state) }), true);
+      days: state.releaseListDays, limit, offset, ...releaseFilter(state) }), true);
     if (state.closed || selection !== context(state) || revision !== state.releaseRevision) return;
     if (result.status !== 'success') { state.releasesError = result.summary; return; }
     const kept = offset && state.releases ? state.releases.results.slice(0, offset) : [];
@@ -1712,11 +1716,11 @@ async function releasesTool($, state, e) {
     if (!branchUid) return failed('This session folder is not a known MainSequence repository checkout: leave out thisRepository.');
   }
   if (action === 'list') {
-    const result = await read('deployment-releases', { days: 30, limit: 100, ...(input.kind ? { releaseKind: input.kind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) });
+    const result = await read('deployment-releases', { days: input.days || LIST_DAYS, limit: 100, ...(input.kind ? { releaseKind: input.kind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) });
     if (stale()) return changed;
     if (result.status !== 'success') return toolResult(result);
     const entries = rows(result.data);
-    return answer(result.summary, `Environment: ${environment} · last 30 days · times in ${zoneLabel(result.data.now)}\n${entries.map(row => describeReleaseRow(row, result.data.now)).join('\n') || 'No releases.'}`
+    return answer(result.summary, `Environment: ${environment} · ${windowText(result.data.days)} · times in ${zoneLabel(result.data.now)}\n${entries.map(row => describeReleaseRow(row, result.data.now)).join('\n') || 'No releases.'}`
       + `${result.data.count > entries.length ? `\n(${entries.length} of ${result.data.count} shown)` : ''}`);
   }
   if (action === 'active') {
@@ -1738,7 +1742,7 @@ async function releasesTool($, state, e) {
     found = matches[0]; releaseUid = found.uid;
   } else if (!(action === 'wait' && input.runUid)) return failed(action === 'wait' ? 'Name the release, or pass the runUid to wait for.' : 'Name the release whose history to read.');
   if (action === 'history') {
-    const result = await read('deployment-release', { releaseUid, days: input.days || 30, limit: 100 });
+    const result = await read('deployment-release', { releaseUid, days: input.days || HISTORY_DAYS, limit: 100 });
     if (stale()) return changed;
     if (result.status !== 'success') return toolResult(result);
     if (result.data.hidden) return answer(HIDDEN_RELEASE, HIDDEN_RELEASE);

@@ -4,7 +4,13 @@ import { stateLabel, formatDuration, formatWhen } from './deploymentView.mjs';
 
 /** Releases: read-only history of the environment's APIs, agents and static sites. Nothing here deploys. */
 export const HIDDEN_RELEASE = "You can't see this release. A release is shown to the people it is shared with.";
-export const RELEASE_DAYS = [7, 30, 90];
+/** History windows. The list opens on a week, enough for most rows' last run, repository and branch;
+ * a release's history opens on the last day. Longer windows are read only when chosen. */
+export const RELEASE_DAYS = [1, 7, 30, 90];
+export const LIST_DAYS = 7, HISTORY_DAYS = 1;
+export const dayLabel = days => days === 1 ? '1 day' : `${days} days`;
+/** `last day`, `last 7 days`. */
+export const windowText = days => days === 1 ? 'last day' : `last ${days} days`;
 const KINDS = [['', 'All kinds'], ['fastapi', 'APIs'], ['harness_agent', 'Agents'], ['static_site', 'Static sites']];
 const ACTIVE = new Set(['queued', 'running']);
 const SOURCES = { repository_event: 'Repository push', manual: 'Manual', create: 'Created', system_reconciliation: 'Reconciliation' };
@@ -79,6 +85,9 @@ export function renderReleases(p, state, actions, { environment, target }) {
 function dots(p, recent, key) {
   return p.inline((recent || []).slice(0, 10).map((run, index) => p.Text({ key: `${key}-${index}`, color: STATUS[runKind(run.state)].color, children: [STATUS[runKind(run.state)].glyph] })), { key, gap: 0 });
 }
+function windowButtons(p, current, choose, prefix) {
+  return p.buttons(RELEASE_DAYS.map(days => p.button(`${prefix}-${days}`, dayLabel(days), () => choose(days), current === days ? { primary: true } : { plain: true, dim: true })));
+}
 function pollNote(p, state, deploying) {
   return state.releasePaused ? p.caption('Auto-refresh paused after an hour.') : deploying ? p.caption('Checking every 30 s while a release deploys.') : null;
 }
@@ -88,10 +97,11 @@ function renderReleaseList(p, state, actions, { environment, target }) {
   const list = state.releases, entries = list?.results || [], watch = state.releaseWatch;
   const deploying = entries.filter(entry => isDeploying(entry.activeRun));
   return column([
-    inline([heading('Releases'), caption(`${environment?.name || 'Environment'}${list ? ` · ${list.count} ${list.count === 1 ? 'release' : 'releases'} · last ${list.days} days` : ''}`)],
+    inline([heading('Releases'), caption(`${environment?.name || 'Environment'}${list ? ` · ${list.count} ${list.count === 1 ? 'release' : 'releases'} · ${windowText(list.days)}` : ''}`)],
       { justifyContent: 'space-between', flexWrap: 'wrap' }),
     buttons([...KINDS.map(([kind, label]) => button(`releases-kind-${kind || 'all'}`, label, () => actions.releasesKind(kind), state.releaseKind === kind ? { primary: true } : { plain: true, dim: true })),
       (target?.branchUid || state.releaseMine) && button('releases-mine', 'This repository', actions.releasesMine, state.releaseMine ? { primary: true } : { plain: true, dim: true })]),
+    windowButtons(p, state.releaseListDays, actions.releaseListDays, 'releases-days'),
     state.releasesLoading && !list && muted('Loading releases…'),
     state.releasesError && status('error', state.releasesError),
     deploying.length ? card('Deploying', deploying.map(entry => {
@@ -105,12 +115,12 @@ function renderReleaseList(p, state, actions, { environment, target }) {
       const summary = recentText(entry);
       return row(`release-row-${entry.uid}`, [
         inline([button(`release-open-${entry.uid}`, entry.name || 'Release', () => actions.openRelease(entry.uid), { plain: true }), badge(entry.kindLabel || humanize(entry.kind))], { flexWrap: 'wrap' }),
-        caption([place(entry), lastRunText(entry.lastRun, list.now)].filter(Boolean).join(' · ') || 'No runs in this window'),
+        caption([place(entry), lastRunText(entry.lastRun, list.now) || `no runs in the ${windowText(list.days)}`].filter(Boolean).join(' · ')),
       ], [entry.recent?.length ? dots(p, entry.recent, `release-dots-${entry.uid}`) : null, summary.kind === 'error' ? status('error', summary.text) : caption(summary.text)]);
     }),
     list && !entries.length && !state.releasesLoading && empty('No releases', state.releaseKind || state.releaseMine ? 'No releases match these filters.' : 'APIs, agents and static sites of this environment appear here.'),
     list && entries.length < list.count ? button('releases-more', state.releasesLoading ? 'Loading…' : 'Load more', actions.moreReleases, { plain: true, available: !state.releasesLoading }) : null,
-    list?.runsTruncated ? caption(`Run history uses the newest ${list.runsCounted} of ${list.runsInWindow} runs of these ${list.days} days.`) : null,
+    list?.runsTruncated ? caption(`Run history uses the newest ${list.runsCounted} of ${list.runsInWindow} runs of the ${windowText(list.days)}.`) : null,
     entries.length ? caption(`Newest run on the left: ● succeeded · ! failed or blocked · ◌ deploying · ○ superseded, cancelled or skipped. Times in ${zoneLabel(list.now)}.`) : null,
     inline([pollNote(p, state, deploying.length),
       button('releases-all-deployments', 'All deployments, including jobs and images', () => actions.openDeployments('releases'), { plain: true, dim: true }),
@@ -139,7 +149,7 @@ function renderReleaseDetail(p, state, actions) {
     detail.error && status('error', detail.error),
     deploying && inline([status('warning', ['Deploying' + (deploying.commit ? ` ${deploying.commit}` : ''), stage(deploying), started(deploying), elapsed(deploying, data.now)].filter(Boolean).join(' · ')),
       watch?.runUid === deploying.uid ? badge('Watching', 'warning') : button('release-watch', 'Notify me', () => actions.watchRelease(release.uid), { plain: true })], { flexWrap: 'wrap' }),
-    buttons(RELEASE_DAYS.map(days => button(`release-days-${days}`, `${days} days`, () => actions.releaseDays(days), state.releaseDays === days ? { primary: true } : { plain: true, dim: true }))),
+    windowButtons(p, state.releaseDays, actions.releaseDays, 'release-days'),
     inline([tile(p, 'release-stat-runs', 'Runs', String(stats.runs)), tile(p, 'release-stat-rate', 'Succeeded', percent(stats.successRate)),
       tile(p, 'release-stat-median', 'Median time', formatDuration(stats.medianMs) || '—'),
       tile(p, 'release-stat-slowest', 'Slowest stage', stats.slowestStage ? `${stats.slowestStage.name} · ${formatDuration(stats.slowestStage.medianMs)}` : '—')], { flexWrap: 'wrap', alignItems: 'stretch' }),
@@ -150,7 +160,7 @@ function renderReleaseDetail(p, state, actions) {
       button(`release-run-open-${run.uid}`, `${stamp(startOf(run), data.now) || 'Unknown start'} · ${run.commit || 'no commit'}`, () => actions.openReleaseRun(run.uid), { plain: true }),
       caption([sourceLabel(run.source), run.stepsTotal ? `${run.stepsDone} of ${run.stepsTotal} stages` : '', formatDuration(run.durationMs), run.error].filter(Boolean).join(' · ')),
     ], [badge(stateLabel(run.state), runKind(run.state))])),
-    !runs.length && muted(`No runs in the last ${data.days} days.`),
+    !runs.length && muted(`No runs in the ${windowText(data.days)}.`),
     runs.length || serving ? caption(`Runs by start time. Times in ${zoneLabel(data.now)}.`) : null,
     inline([pollNote(p, state, !!deploying),
       button('release-refresh', detail.loading ? 'Refreshing…' : 'Refresh', actions.refreshReleases, { plain: true, dim: true, available: !detail.loading })], { justifyContent: 'flex-end', flexWrap: 'wrap' }),
@@ -174,7 +184,7 @@ export function describeReleaseHistory(data, environment) {
   const release = data.release, stats = data.stats;
   const lines = [`Environment: ${environment} · times in ${zoneLabel(data.now)}`, `${release.name} (${release.kindLabel || humanize(release.kind)}) · ${place(release) || 'no runs in the window'} · uid ${release.uid}`,
     servingText(release, data.now) || 'Nothing serving yet',
-    `Last ${data.days} days: ${stats.runs} runs${data.truncated ? ` (newest ${data.counted} of ${data.count})` : ''} · ${stats.succeeded} succeeded, ${stats.failed} failed, ${stats.blocked} blocked, ${stats.superseded} superseded, ${stats.cancelled} cancelled, ${stats.active} deploying · success rate ${percent(stats.successRate)}`,
+    `${windowText(data.days).replace(/^l/, 'L')}: ${stats.runs} runs${data.truncated ? ` (newest ${data.counted} of ${data.count})` : ''} · ${stats.succeeded} succeeded, ${stats.failed} failed, ${stats.blocked} blocked, ${stats.superseded} superseded, ${stats.cancelled} cancelled, ${stats.active} deploying · success rate ${percent(stats.successRate)}`,
     `Time (succeeded runs): median ${formatDuration(stats.medianMs) || '—'}, 90th percentile ${formatDuration(stats.p90Ms) || '—'}${stats.slowestStage ? ` · slowest stage ${stats.slowestStage.name} (median ${formatDuration(stats.slowestStage.medianMs)})` : ''}`];
   if (stats.commonFailure) lines.push(`Most common failure: ${stats.commonFailure.code} (${stats.commonFailure.count} of ${stats.commonFailure.of})`);
   lines.push('Runs, newest first:');

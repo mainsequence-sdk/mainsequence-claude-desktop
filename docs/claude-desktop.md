@@ -247,8 +247,11 @@ environment is selected.
 ### Releases
 
 **Releases** lists the selected environment's releases (APIs, agents and static sites)
-with their runs of the last 30 days, read in two requests: one page of releases, then
-their runs together. Each row shows the release, its kind, repository · branch, its last
+with their runs of the last 7 days, read in two requests: one page of releases, then
+their runs together. **1 day / 7 days / 30 days / 90 days** choose the window; a longer
+one is read only when chosen. A release's repository · branch and last run come from
+its runs, so a release without a run in the window shows its name and `no runs in the
+last 7 days`. Each row shows the release, its kind, repository · branch, its last
 ten runs as glyphs (newest first: ● succeeded, ! failed or blocked, ◌ deploying, ○
 superseded, cancelled or skipped), how many of them deployed or **Failed**/**Blocked** when
 the last one did, and when the newest run happened: `deployed 2026-11-19 14:32 (2d ago)`
@@ -260,7 +263,7 @@ the session folder is a known checkout) filter on the backend. **All deployments
 including jobs and images** opens the environment-wide deployment list.
 
 A release shows the commit and revision it serves and since when it serves it and, when
-different, the one it wants and when that was requested; a 7, 30 or 90 day window; its run count, success rate (succeeded out of those that
+different, the one it wants and when that was requested; a window of the last day by default, or 7, 30 or 90 days, chosen apart from the list's; its run count, success rate (succeeded out of those that
 succeeded, failed or were blocked), median time of the runs that succeeded, its slowest
 stage and its most common failure. The time a run waits before its first stage, usually
 for its workflow's image build, counts as the stage **Waiting to start**. A blocked run
@@ -279,9 +282,9 @@ a deploying release re-reads only that run every 15 s, shows `MainSequence: depl
 with how it ended. It stops then, or after an hour.
 
 The model tool `ms_releases` is registered with the environment selection. `action`
-`list` returns the releases with their last run and when it ended, 30-day success rate
+`list` returns the releases with their last run and when it ended, success rate over `days` (default 7)
 and what is deploying since when (`kind` and `thisRepository` filter); `history` returns one release's serving
-and wanted commits with their dates, stats and runs with start and end times (`release` by name or uid, `days`); `active` returns
+and wanted commits with their dates, stats and runs with start and end times (`release` by name or uid, `days`, default 1); `active` returns
 what is deploying now; `wait` waits up to `timeoutSeconds` (at most 120) for the release's
 deploying run, or `runUid`, to end, re-reading it every 10 s, and says when it is still
 running so Claude can call again. It reads only and needs no confirmation; it is denied
