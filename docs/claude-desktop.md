@@ -303,9 +303,10 @@ An inaccessible parent repository does not hide an otherwise visible project bra
 **Set up project locally** reviews the selected project, then:
 
 1. Prepares any missing ordinary repositories using existing setup and deploy keys.
-2. Creates or reuses a UID-scoped container under
-   `<base>/<organization>/organization-projects/<backend-hash>/`, with a workspace
-   child named exactly after the project: **Ontology**, including its case, with no UID suffix.
+2. Creates or reuses the project's container,
+   `<base>/<organization>/organization-projects/<project>-<uid>`, beside the
+   organization's other projects (a container still in an older backend-hash folder
+   moves up on its next setup), with a workspace child named exactly after the project: **Ontology**, including its case, with no UID suffix.
 3. Creates independent repository branch checkouts alongside that workspace or switches
    existing clean checkouts to their assigned branches, then opens the workspace in Claude.
 4. On startup in that folder, the enabled MainSequence plugin explicitly adds every
