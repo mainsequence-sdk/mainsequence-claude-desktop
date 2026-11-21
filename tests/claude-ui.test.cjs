@@ -2190,7 +2190,7 @@ function releaseFixture(options = {}) {
     }
     if (q.action === 'deployment-release') return q.releaseUid === relId(99) ? { ...success(q.action, { hidden: true, uid: q.releaseUid }), summary: "You can't see this release." }
       : success(q.action, { hidden: false, uid: q.releaseUid, environmentUid: q.environmentUid, days: q.days, now: '2026-10-21T08:00:00.000Z',
-        release: { ...list()[0], activeRevision: { uid: relId(20), commit: 'fff0000', configurationRevision: 14 }, desiredRevision: { uid: relId(21), commit: 'abc1234', configurationRevision: 15 } },
+        release: { ...list()[0], activeRevision: { uid: relId(20), commit: 'fff0000', configurationRevision: 14, activatedAt: '2026-10-20T06:00:00.000Z' }, desiredRevision: { uid: relId(21), commit: 'abc1234', configurationRevision: 15, createdAt: '2026-10-21T07:49:00.000Z' } },
         count: 3, counted: 3, truncated: false, runs: [releaseRun(ACTIVE_RUN, live.deploying ? 'running' : 'succeeded'), releaseRun(DONE_RUN, 'succeeded'), releaseRun(relId(12), 'failed', { error: 'runtime_readiness_timeout: not ready', errorCode: 'runtime_readiness_timeout' })], stats: stats() });
     if (q.action === 'deployment-active') return success(q.action, { environmentUid: q.environmentUid, count: live.deploying ? 1 : 0, now: '2026-10-21T08:00:30.000Z', runs: live.deploying ? [releaseRun(ACTIVE_RUN, 'running')] : [] });
     if (q.action === 'deployment-run' && q.runUid === ACTIVE_RUN) return success(q.action, { hidden: false, uid: q.runUid, kind: 'deployment_run', now: '2026-10-21T08:01:00.000Z',
@@ -2203,20 +2203,31 @@ function releaseFixture(options = {}) {
   return f;
 }
 const pollTimers = (f, ms) => f.timers.filter(t => t.ms === ms && !t.cancelled && !t.once);
+// Release times show in the machine's zone; the expectations are written in it too.
+const shownTime = iso => { const d = new Date(iso), two = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+const localZone = iso => { const offset = -new Date(iso).getTimezoneOffset(), m = Math.abs(offset), two = n => String(n).padStart(2, '0'); return offset ? `UTC${offset > 0 ? '+' : '-'}${two(Math.floor(m / 60))}:${two(m % 60)}` : 'UTC'; };
+const esc = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 test('Releases lists each release with its recent runs and reads nothing more while nothing deploys', async () => {
   const { register } = await load(); const f = releaseFixture({ deploying: false }); register(f.on); await f.start();
   await f.press('tab-Releases'); await flush();
   const reads = deployRequests(f, 'deployment-releases');
-  assert.equal(reads.length, 1, 'one read opens the section'); assert.equal(reads[0].environmentUid, 'env-1'); assert.equal(reads[0].days, 30); assert.equal(reads[0].releaseKind, undefined);
+  assert.equal(reads.length, 1, 'one read opens the section'); assert.equal(reads[0].environmentUid, 'env-1'); assert.equal(reads[0].days, 7, 'the list opens on a week'); assert.equal(reads[0].releaseKind, undefined);
   const tree = await f.pane(), text = JSON.stringify(tree);
   assert.ok(f.find(tree, `release-row-${RELEASE_API}`)); assert.ok(f.find(tree, `release-row-${RELEASE_AGENT}`));
-  assert.match(text, /Research · 2 releases · last 30 days/); assert.match(text, /Real project · main/);
-  assert.match(text, /2 of 3 ok/, 'a release whose last run deployed counts its recent successes'); assert.match(text, /! Blocked 3h ago/, 'a blocked last run reads as a failure');
+  assert.match(text, /Research · 2 releases · last 7 days/); assert.match(text, /Real project · main/);
+  assert.match(text, /2 of 3 ok/, 'a release whose last run deployed counts its recent successes'); assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_AGENT}`)), /! Blocked"/, 'a blocked last run reads as a failure');
+  assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_AGENT}`)), new RegExp(esc(`Real project · main · last run ${shownTime('2026-10-21T05:00:00.000Z')} (3h ago)`)), 'a row says when its last run ended');
+  assert.match(JSON.stringify(f.find(tree, `release-row-${RELEASE_API}`)), new RegExp(esc(`Real project · main · deployed ${shownTime('2026-10-21T07:55:00.000Z')} (5 min ago)`)), 'and when it last deployed');
+  assert.match(text, new RegExp(esc(`Times in ${localZone('2026-10-21T08:00:00.000Z')}.`)), 'the zone of those times is named');
   const dots = f.find(tree, `release-dots-${RELEASE_API}`).props.children.map(child => child.props.children[0]);
   assert.deepEqual(dots, ['●', '●', '!'], 'newest run first');
   assert.equal(f.find(tree, `release-active-${RELEASE_API}`), undefined, 'nothing is pinned as deploying');
   assert.equal(pollTimers(f, 30000).length + pollTimers(f, 15000).length, 0, 'nothing polls while nothing deploys');
+  assert.deepEqual(['releases-days-1', 'releases-days-7', 'releases-days-30', 'releases-days-90'].map(key => f.find(tree, key)?.props.variant === 'primary'), [false, true, false, false]);
+  await f.press('releases-days-30'); await flush();
+  assert.equal(deployRequests(f, 'deployment-releases').at(-1).days, 30, 'a longer window is read only when chosen');
+  assert.match(JSON.stringify(await f.pane()), /last 30 days/);
   await f.press('releases-kind-fastapi'); await flush();
   assert.equal(deployRequests(f, 'deployment-releases').at(-1).releaseKind, 'fastapi', 'a kind filter is read from the backend');
   assert.equal(f.find(await f.pane(), `release-row-${RELEASE_AGENT}`), undefined);
@@ -2230,7 +2241,7 @@ test('while a release deploys, one shared active-run check every 30 s re-reads t
   const f = releaseFixture({ stores }); register(f.on); await f.start();
   await f.press('tab-Releases'); await flush();
   let tree = await f.pane();
-  assert.ok(f.find(tree, `release-active-${RELEASE_API}`), 'the deploying release is pinned'); assert.match(JSON.stringify(f.find(tree, `release-active-${RELEASE_API}`)), /abc1234 · stage 2 of 2 · 10m 0s/);
+  assert.ok(f.find(tree, `release-active-${RELEASE_API}`), 'the deploying release is pinned'); assert.match(JSON.stringify(f.find(tree, `release-active-${RELEASE_API}`)), new RegExp(esc(`abc1234 · stage 2 of 2 · started ${shownTime('2026-10-21T07:50:00.000Z')} · 10m 0s`)));
   assert.match(JSON.stringify(tree), /Checking every 30 s while a release deploys/);
   assert.equal(pollTimers(f, 30000).length, 1, 'one 30 s check while a shown release deploys');
   pollTimers(f, 30000)[0].callback(); await flush(); await flush();
@@ -2257,9 +2268,10 @@ test('while a release deploys, one shared active-run check every 30 s re-reads t
 test('a release shows what serves and what is wanted, its stats and runs; the window re-reads and a run opens its detail', async () => {
   const { register } = await load(); const f = releaseFixture({ deploying: false }); register(f.on); await f.start();
   await f.press('tab-Releases'); await flush(); await f.press(`release-open-${RELEASE_API}`); await flush();
-  const read = deployRequests(f, 'deployment-release'); assert.equal(read.length, 1); assert.equal(read[0].releaseUid, RELEASE_API); assert.equal(read[0].days, 30);
+  const read = deployRequests(f, 'deployment-release'); assert.equal(read.length, 1); assert.equal(read[0].releaseUid, RELEASE_API); assert.equal(read[0].days, 1, 'a release history opens on the last day');
   let tree = await f.pane(), text = JSON.stringify(tree);
-  assert.match(text, /Serving fff0000 \(revision 14\) · wanted abc1234 \(revision 15\)/);
+  assert.match(text, new RegExp(esc(`Serving fff0000 (revision 14) since ${shownTime('2026-10-20T06:00:00.000Z')} (1d ago) · wanted abc1234 (revision 15), requested ${shownTime('2026-10-21T07:49:00.000Z')} (11 min ago)`)));
+  assert.match(JSON.stringify(f.find(tree, `release-run-open-${DONE_RUN}`)), new RegExp(esc(`${shownTime('2026-10-21T07:50:00.000Z')} (10 min ago) · abc1234`)), 'a run says when it started');
   assert.match(JSON.stringify(f.find(tree, 'release-stat-rate')), /67%/); assert.match(JSON.stringify(f.find(tree, 'release-stat-median')), /5m 0s/);
   assert.match(JSON.stringify(f.find(tree, 'release-stat-slowest')), /Waiting to start · 4m 0s/);
   assert.match(text, /Most common failure: Runtime readiness timeout \(1 of 1\)/);
@@ -2298,12 +2310,15 @@ test('ms_releases lists releases, reads a history by name, says what deploys and
   const asks = f.$.ui.ask; f.$.ui.ask = async () => assert.fail('a read-only tool needs no confirmation');
   const call = async (input, id) => f.emit('tool.call', { tool: 'mcp__mainsequence__ms_releases', tool_use_id: id, ...input });
   const list = await call({ action: 'list' }, 'r1');
-  assert.match(list.result[0].text, /Environment: Research · last 30 days/); assert.match(list.result[0].text, /pricing-api \(API\) · Real project · main · .* DEPLOYING abc1234 stage 2 of 2/);
-  assert.match(list.result[0].text, /! risk-agent \(Agent\) .* last run blocked/);
+  assert.match(list.result[0].text, /Environment: Research · last 7 days/); assert.equal(deployRequests(f, 'deployment-releases').at(-1).days, 7); assert.match(list.result[0].text, /pricing-api \(API\) · Real project · main · .* DEPLOYING abc1234 stage 2 of 2/);
+  assert.match(list.result[0].text, new RegExp(esc(`! risk-agent (Agent) · Real project · main · last run blocked ${shownTime('2026-10-21T05:00:00.000Z')} (3h ago)`)));
   const history = await call({ action: 'history', release: 'pricing-api', days: 7 }, 'r2');
   assert.equal(deployRequests(f, 'deployment-release').at(-1).days, 7);
-  assert.match(history.result[0].text, /Serving: fff0000 \(revision 14\) · wanted: abc1234 \(revision 15\)/); assert.match(history.result[0].text, /success rate 67%/);
+  assert.match(history.result[0].text, new RegExp(esc(`Environment: Research · times in ${localZone('2026-10-21T08:00:00.000Z')}`)));
+  assert.match(history.result[0].text, new RegExp(esc(`Serving fff0000 (revision 14) since ${shownTime('2026-10-20T06:00:00.000Z')} (1d ago) · wanted abc1234 (revision 15)`)));
+  assert.match(history.result[0].text, new RegExp(esc(`● started ${shownTime('2026-10-21T07:50:00.000Z')}, ended ${shownTime('2026-10-21T07:55:00.000Z')} · abc1234 · succeeded`))); assert.match(history.result[0].text, /success rate 67%/);
   assert.match(history.result[0].text, /slowest stage Waiting to start/); assert.match(history.result[0].text, /Most common failure: runtime_readiness_timeout/);
+  await call({ action: 'history', release: 'pricing-api' }, 'r2b'); assert.equal(deployRequests(f, 'deployment-release').at(-1).days, 1, 'history defaults to the last day');
   assert.match((await call({ action: 'history', release: 'nope' }, 'r3')).result[0].text, /No release named nope/);
   assert.match((await call({ action: 'active' }, 'r4')).result[0].text, /◌ pricing-api · Real project\/main · abc1234 · running/);
   const waiting = await call({ action: 'wait', release: 'pricing-api', timeoutSeconds: 60 }, 'r5');
