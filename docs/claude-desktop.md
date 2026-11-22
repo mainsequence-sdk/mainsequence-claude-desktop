@@ -246,49 +246,39 @@ environment is selected.
 
 ### Releases
 
-**Releases** lists the selected environment's releases (APIs, agents and static sites)
-with their runs of the last 7 days, read in two requests: one page of releases, then
-their runs together. **1 day / 7 days / 30 days / 90 days** choose the window; a longer
-one is read only when chosen. A release's repository · branch and last run come from
-its runs, so a release without a run in the window shows its name and `no runs in the
-last 7 days`. Each row shows the release, its kind, repository · branch, its last
-ten runs as glyphs (newest first: ● succeeded, ! failed or blocked, ◌ deploying, ○
-superseded, cancelled or skipped), how many of them deployed or **Failed**/**Blocked** when
-the last one did, and when the newest run happened: `deployed 2026-11-19 14:32 (2d ago)`
-for one that succeeded, `last run …` with its end for any other, `deploying since …` for
-one still running. A release that is deploying is pinned on top with its commit, stage,
-start time and elapsed time. Times are written in the machine's time zone, named under
-the list (`Times in UTC+01:00.`). **All kinds / APIs / Agents / Static sites** and **This repository** (when
-the session folder is a known checkout) filter on the backend. **All deployments,
-including jobs and images** opens the environment-wide deployment list.
+**Releases** is the deployment history of resource releases (APIs, agents and static
+sites) in the selected environment, as Command Center's Deployment History shows it: one
+row per deployment, newest first. It has no workflow runs, Jobs or image builds, and it is
+not a list of releases: a release that wasn't deployed in the window has no row.
 
-A release shows the commit and revision it serves and since when it serves it and, when
-different, the one it wants and when that was requested; a window of the last day by default, or 7, 30 or 90 days, chosen apart from the list's; its run count, success rate (succeeded out of those that
-succeeded, failed or were blocked), median time of the runs that succeeded, its slowest
-stage and its most common failure. The time a run waits before its first stage, usually
-for its workflow's image build, counts as the stage **Waiting to start**. A blocked run
-without an error code is named by its outcome. The runs follow, newest first, with
-their start date and time, source, stages done and duration; a run opens the deployment detail above. The backend has
-no statistics endpoint: devtools computes these from the runs it reads.
+Each row shows the repository and release (an agent by its own name, because release
+names such as `app` repeat across repositories), its type, branch, commit, the date and
+time it started, its state, its stages with the one it is at or stopped at, its duration,
+its source and, when it failed, the error. Times are written in the machine's time zone,
+named under the history (`Times in UTC+01:00.`). The history opens on the last day;
+**7 days / 30 days / 90 days** read longer ones when chosen, 25 deployments at a time
+(**Load more**). **All types / APIs / Agents / Static sites** and **This repository**
+(when the session folder is a known checkout) filter on the backend. A deployment opens
+its stages and logs.
 
-Nothing is re-read while nothing deploys. While the section shows a deploying release
-and the pane is open, one check every 30 s reads only the runs still queued or running;
-every session uses the same answer for 25 s, so several open sessions don't each ask the
-backend. The section is read again only when a shown run ends or one of its releases
-starts another; the check stops when nothing deploys, the section changes, the pane
-closes or the session ends, and pauses after an hour until **Refresh**. **Notify me** on
-a deploying release re-reads only that run every 15 s, shows `MainSequence: deploying
-<release> <stages done>/<stages>` in Claude's status line, and when it ends shows a toast
-with how it ended. It stops then, or after an hour.
+Nothing is re-read while nothing deploys. While the section shows a deployment in
+progress and the pane is open, one check every 30 s reads only the release deployments
+still queued or running; every session uses the same answer for 25 s, so several open
+sessions don't each ask the backend. The history is read again only when a shown
+deployment ends or another starts; the check stops when nothing deploys, the section
+changes, the pane closes or the session ends, and pauses after an hour until **Refresh**.
+**Notify me** on a deployment in progress re-reads only that deployment every 15 s, shows
+`MainSequence: deploying <repository> · <release> <stages done>/<stages>` in Claude's
+status line, and when it ends shows a toast with how it ended. It stops then, or after an
+hour.
 
 The model tool `ms_releases` is registered with the environment selection. `action`
-`list` returns the releases with their last run and when it ended, success rate over `days` (default 7)
-and what is deploying since when (`kind` and `thisRepository` filter); `history` returns one release's serving
-and wanted commits with their dates, stats and runs with start and end times (`release` by name or uid, `days`, default 1); `active` returns
-what is deploying now; `wait` waits up to `timeoutSeconds` (at most 120) for the release's
-deploying run, or `runUid`, to end, re-reading it every 10 s, and says when it is still
-running so Claude can call again. It reads only and needs no confirmation; it is denied
-while no environment is selected.
+`history` returns the same deployments over `days` (default 1), filtered by `release`
+(name or uid), `kind` or `thisRepository`; `active` returns what is deploying now; `wait`
+waits up to `timeoutSeconds` (at most 120) for the release's deployment in progress, or
+`runUid`, to end, re-reading it every 10 s, and says when it is still running so Claude
+can call again. When several deployments match a name it asks for the `runUid`. It reads
+only and needs no confirmation; it is denied while no environment is selected.
 
 ## MainSequence Projects
 
@@ -436,7 +426,7 @@ conversation through Claude, task polling, local continuity and uncertain reques
 | Diagnostics/errors/previews | Bundle/runtime checks, actionable errors, Activity results/cancellation, explicit mutation confirmations, and previews for supported SDK/skills operations, Docker, container configuration and local deletion. Cancellation can leave partial effects, which are reported. |
 | Agent discovery and conversations | Shared environment selector, public card details, session preparation without sending, editable native command drafts, separate per-agent status and approved follow-ups, Task status/wait/cancel and local conversation continuity. |
 | MCP discovery/connections/tools | Search/paginate project MCPs, connect/disconnect exact releases, inspect/call tools and register them for Claude. Tool calls request approval and disconnected tools are refused. |
-| Releases | Environment releases with their last runs, release history with success rate, median time, slowest stage and most common failure, polling only while a shown release deploys, **Notify me**, and the read-only `ms_releases` tool. |
+| Releases | The deployment history of resource releases only, newest first, with a deployment's stages and logs, polling only while a shown one is in progress, **Notify me**, and the read-only `ms_releases` tool. |
 | Deployment history | Latest run of the checked-out branch, run detail with an SVG step timeline, step records and cursor-paged logs, the environment-wide list, 10 s / 30 s polling of active runs only, and the read-only `ms_deployment_status` tool. Hidden runs use Command Center's wording. |
 
 The signed-terminal, session-navigation and container-launch limitations are explicit

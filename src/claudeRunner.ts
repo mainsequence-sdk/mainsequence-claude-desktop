@@ -11,7 +11,7 @@ import { createClaudeAgentIcons } from './hosts/claudeAgentIcons';
 import { CLAUDE_DEPLOYMENT_ACTIONS, createClaudeDeployments } from './hosts/claudeDeployments';
 import { createDeployments, type DeploymentRequest } from '@dev-mainsequence/devtools';
 /** Read-only release reads served by devtools; the older deployment reads stay in claudeDeployments. */
-const RELEASE_ACTIONS = new Set(['deployment-releases', 'deployment-release', 'deployment-active', 'deployment-wait']);
+const RELEASE_ACTIONS = new Set(['deployment-release-history', 'deployment-active', 'deployment-wait']);
 import { announceSignInPage } from './hosts/claudeSignIn';
 import { CLAUDE_PLUGIN_UPDATE_ACTIONS, createClaudePluginUpdate } from './hosts/claudePluginUpdate';
 
@@ -59,7 +59,7 @@ export async function main(): Promise<void> {
         ? createClaudeAgentIcons({ host, signal: controller.signal, cacheDirectory: path.join(mainSequenceStateDirectory(), 'claude-desktop', 'agent-icons') }).dispatch(request)
         : CLAUDE_DEPLOYMENT_ACTIONS.has(request.action)
           ? createClaudeDeployments({ host, signal: controller.signal }).dispatch(request)
-          // Releases, their history and stats, the active-run check and the bounded wait: devtools' shared reads.
+          // Resource release deployment history, the active check and the bounded wait: devtools' shared reads.
           : RELEASE_ACTIONS.has(request.action)
             ? createDeployments({ host, signal: controller.signal }).dispatch(request as DeploymentRequest)
           : CLAUDE_PLUGIN_UPDATE_ACTIONS.has(request.action)

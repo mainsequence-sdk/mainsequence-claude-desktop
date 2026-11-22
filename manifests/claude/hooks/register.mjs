@@ -5,7 +5,7 @@ import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 import { HIDDEN_DEPLOYMENT, isActiveRun, defaultStep, failedStep, logSource, describeRun, logTimestamp, stateLabel, kindLabel, stepLabel } from './deploymentView.mjs';
-import { HIDDEN_RELEASE, RELEASE_DAYS, LIST_DAYS, HISTORY_DAYS, windowText, describeReleaseRow, describeActiveRun, describeReleaseHistory, zoneLabel, stamp } from './releaseView.mjs';
+import { RELEASE_DAYS, HISTORY_DAYS, windowText, deploymentTitle, describeDeployment, zoneLabel } from './releaseView.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
@@ -62,7 +62,7 @@ function operationTitle(action) {
     'organization-projects': 'Load MainSequence projects', 'organization-project': 'Load project branches', 'organization-project-link': 'Open project resource',
     'organization-project-setup': 'Set up project locally', 'open-project-workspace': 'Open project in Claude',
     'local-repositories': 'Discover local repositories', 'deployment-history': 'Read deployment history', 'deployment-run': 'Read deployment run',
-    'deployment-releases': 'Read releases', 'deployment-release': 'Read release history', 'deployment-active': 'Check running deployments', 'deployment-wait': 'Wait for a deployment',
+    'deployment-release-history': 'Read release deployment history', 'deployment-active': 'Check running deployments', 'deployment-wait': 'Wait for a deployment',
     'deployment-logs': 'Read deployment logs', 'plugin-version': 'Check for MainSequence updates', 'plugin-update': 'Update MainSequence plugin' })[action] || action.replaceAll('-', ' ');
 }
 
@@ -390,13 +390,13 @@ async function refreshToolsNow($, state) {
     inputSchema: { type: 'object', properties: { repository: { type: 'string', description: 'MainSequence repository name or uid; defaults to the session folder\'s repository' },
       branch: { type: 'string', description: 'Branch name; defaults to the checked-out branch' }, runUid: { type: 'string', description: 'A deployment or workflow run uid, instead of repository and branch' },
       logs: { type: 'boolean', description: 'Include the last 80 log lines of the first failed step' } }, additionalProperties: false } });
-  await $.tool.register({ name: RELEASE_TOOL, description: clean(`MainSequence releases [${environmentLabel(state)}]: read-only, never deploys. action "list": the environment's releases (APIs, agents, static sites) with their last run in the window (default the last 7 days), success rate and what is deploying; "history": one release's serving and wanted commits, its runs and stats over the window (default the last day; pass days 7, 30 or 90 for longer history) (success rate, median time, slowest stage, most common failure); "active": what is deploying now; "wait": wait up to 120 s for a deploying run to finish, and call again while it is still running.`),
-    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'history', 'active', 'wait'] },
-      release: { type: 'string', description: 'history and wait: the release name or uid' },
-      runUid: { type: 'string', description: 'wait: a deployment run uid; defaults to the release\'s deploying run' },
-      kind: { type: 'string', enum: ['fastapi', 'harness_agent', 'static_site'], description: 'list: only releases of this kind' },
-      thisRepository: { type: 'boolean', description: 'list and active: only this session checkout\'s repository branch' },
-      days: { type: 'integer', minimum: 1, maximum: 90, description: 'list and history: the window in days; list default 7, history default 1' },
+  await $.tool.register({ name: RELEASE_TOOL, description: clean(`MainSequence releases [${environmentLabel(state)}]: read-only, never deploys. The deployment history of resource releases (APIs, agents, static sites), as in Command Center; never workflow runs, Jobs or image builds. action "history": those deployments newest first with repository, branch, commit, date, state, stages and duration (default the last day; pass days 7, 30 or 90 for longer history); "active": what is deploying now; "wait": wait up to 120 s for a deployment to finish, and call again while it is still running.`),
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['history', 'active', 'wait'] },
+      release: { type: 'string', description: 'history and wait: the release name or uid; names repeat across repositories' },
+      runUid: { type: 'string', description: 'wait: a deployment uid; defaults to the release\'s deployment in progress' },
+      kind: { type: 'string', enum: ['fastapi', 'harness_agent', 'static_site'], description: 'history: only deployments of this kind of release' },
+      thisRepository: { type: 'boolean', description: 'only this session checkout\'s repository branch' },
+      days: { type: 'integer', minimum: 1, maximum: 90, description: 'history: the window in days, default 1' },
       timeoutSeconds: { type: 'integer', minimum: 1, maximum: 120, description: 'wait: how long to wait, default 120' } }, required: ['action'], additionalProperties: false } });
 }
 
@@ -466,7 +466,7 @@ function loadTab($, state) {
   if (tab === 'Projects' && state.fields.mcpEnvironment && !state.projectPage) background(loadOrganizationProjects($, state));
   if (tab === 'Code' && !state.results['devtools.repositories'] && !state.repositoriesLoading) background(loadRepositories($, state));
   if (tab === 'Home' || tab === 'Code') background(ensureLatestDeployments($, state));
-  if (tab === 'Releases' && state.fields.mcpEnvironment && !state.releases && !state.releasesLoading && !state.releaseDetail) background(loadReleases($, state));
+  if (tab === 'Releases' && state.fields.mcpEnvironment && !state.releases && !state.releasesLoading) background(loadReleases($, state));
 }
 
 /** A field edit: the shared settings and the session's own operation target clear what depended on them. */
@@ -518,14 +518,11 @@ function actionsFor($, state) {
     moreDeployments: () => background(loadDeploymentList($, state, { offset: state.deployList?.entries.length || 0, limit: 25 })),
     releasesKind: kind => { state.releaseKind = ['fastapi', 'harness_agent', 'static_site'].includes(kind) ? kind : ''; background(loadReleases($, state)); },
     releasesMine: () => { state.releaseMine = !state.releaseMine; background(loadReleases($, state)); },
-    openRelease: uid => background(openRelease($, state, uid)),
-    closeRelease: () => background(closeRelease($, state)),
-    releaseDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseDays === days) return; state.releaseDays = days; background(loadReleaseDetail($, state)); },
-    releaseListDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseListDays === days) return; state.releaseListDays = days; background(loadReleases($, state)); },
+    releaseDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseDays === days) return; state.releaseDays = days; background(loadReleases($, state)); },
     refreshReleases: () => background(refreshReleases($, state)),
     moreReleases: () => background(loadReleases($, state, { offset: state.releases?.results.length || 0 })),
     watchRelease: uid => background(watchRelease($, state, uid)),
-    openReleaseRun: uid => background(openDeployment($, state, uid, 'deployment_run', 'releases')),
+    openReleaseDeployment: uid => background(openDeployment($, state, uid, 'deployment_run', 'releases')),
     codeFilter: value => { state.codeFilter = value === 'local' ? 'local' : 'all'; update($); },
     checkHomeStatus: () => background(openCode($, state, { root: state.cwd }, false)),
     showProjectList: () => { state.projectListView = true; update($); },
@@ -851,12 +848,8 @@ async function applyView($, state, value, json) {
     if (typeof releases.kind === 'string' && ['', 'fastapi', 'harness_agent', 'static_site'].includes(releases.kind) && (releases.kind !== state.releaseKind || !!releases.mine !== state.releaseMine)) {
       state.releaseKind = releases.kind; state.releaseMine = !!releases.mine; listChanged = true;
     }
-    if (RELEASE_DAYS.includes(releases.listDays) && releases.listDays !== state.releaseListDays) { state.releaseListDays = releases.listDays; listChanged = true; }
+    if (RELEASE_DAYS.includes(releases.days) && releases.days !== state.releaseDays) { state.releaseDays = releases.days; listChanged = true; }
     if (listChanged && state.releases) work.push(loadReleases($, state));
-    if (RELEASE_DAYS.includes(releases.days)) state.releaseDays = releases.days;
-    const releaseUid = typeof releases.uid === 'string' ? releases.uid : '';
-    if (releaseUid && uuid(releaseUid) && state.releaseDetail?.uid !== releaseUid) work.push(openRelease($, state, releaseUid));
-    else if (!releaseUid && state.releaseDetail && releases.uid === '') { state.releaseDetail = null; syncReleasePolling($, state); }
     const tools = record(view.tools);
     if (tools.view === 'detail' && typeof tools.uid === 'string' && tools.uid && (state.toolsView !== 'detail' || state.selectedMcp !== tools.uid)) work.push(openTool($, state, tools.uid));
     else if (tools.view === 'add' && state.toolsView !== 'add') { state.toolsView = 'add'; if (!state.results['devtools.mcp-discover'] || searched.has('mcp')) work.push(runDev($, state, 'mcp-discover', { offset: 0 })); }
@@ -1368,7 +1361,8 @@ async function openDeployment($, state, uid, kind, origin) {
   if (state.deployHistory.length > 10) state.deployHistory.shift();
   cancelDeployTimer(state, 'run'); cancelDeployTimer(state, 'list');
   state.tab = 'Code'; state.deployView = 'detail'; state.confirmation = null;
-  state.deployDetail = { uid: uid.toLowerCase(), kind: kind === 'workflow_run' ? 'workflow_run' : 'deployment_run', run: null, hidden: false, error: '', loading: true, now: null, ticket: 0 };
+  state.deployDetail = { uid: uid.toLowerCase(), kind: kind === 'workflow_run' ? 'workflow_run' : 'deployment_run', run: null, hidden: false, error: '', loading: true, now: null, ticket: 0,
+    title: state.deployOrigin === 'releases' ? releaseTitleOf(state, uid) : '' };
   state.deployStep = ''; state.deployLogs = null; state.deployLogsLoading = false; state.deployPolls = 0; state.deployPaused = false;
   update($);
   await loadDeploymentDetail($, state);
@@ -1536,19 +1530,18 @@ async function deploymentStatusTool($, state, e) {
   }
   return answer(`${kindLabel(run)} ${stateLabel(run.state).toLowerCase()}.`, blocks);
 }
-// Releases: the environment's releases and their run history, read from devtools. Opening the
-// section or a release reads it once. Only while a shown release is deploying does a timer run:
-// every 30 s one check of the runs still queued or running, shared by every session for 25 s,
-// and the section is read again when one of them ends or a new one starts. A run the person
-// watches is re-read every 15 s until it ends, then a toast says how it ended. Both stop after an hour.
-const RELEASE_ACTIONS = ['deployment-releases', 'deployment-release', 'deployment-active', 'deployment-wait'];
+// Releases: the deployment history of resource releases, read from devtools. Opening the section
+// reads it once. Only while a shown deployment is in progress does a timer run: every 30 s one
+// check of the deployments still active, shared by every session, and a re-read when one ends
+// or another starts.
+const RELEASE_ACTIONS = ['deployment-release-history', 'deployment-active', 'deployment-wait'];
 const RELEASE_TOOL = 'ms_releases';
 const RELEASE_POLL_MS = 30000, RELEASE_POLL_LIMIT = 120, RELEASE_SHARE_MS = 25000, WATCH_POLL_MS = 15000, WATCH_POLL_LIMIT = 240;
 const RUN_ACTIVE = new Set(['queued', 'running']);
 
 function clearReleases($, state) {
   cancelReleaseTimer(state); state.releaseRevision++;
-  state.releases = null; state.releasesLoading = false; state.releasesError = ''; state.releaseDetail = null; state.releasePolls = 0; state.releasePaused = false;
+  state.releases = null; state.releasesLoading = false; state.releasesError = ''; state.releasePolls = 0; state.releasePaused = false;
   if (state.releaseWatch && state.releaseWatch.backend !== state.fields.backend) { stopWatch(state); statusLine($, state); }
   for (const op of state.running.values()) if (RELEASE_ACTIONS.some(action => op.label === `projects · ${action}`) && op.cancel) void op.cancel().catch(() => {});
 }
@@ -1556,54 +1549,38 @@ function releaseFilter(state) {
   const branchUid = state.releaseMine ? deployTarget(state, { root: state.cwd }).branchUid : '';
   return { ...(state.releaseKind ? { releaseKind: state.releaseKind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) };
 }
+const releaseTitleOf = (state, uid) => { const entry = (state.releases?.results || []).find(item => item.uid === uid); return entry ? deploymentTitle(entry) : ''; };
 async function loadReleases($, state, { offset = 0, quiet = false } = {}) {
   if (!state.fields.mcpEnvironment) return;
-  const selection = context(state), revision = state.releaseRevision;
-  state.releasesLoading = true; if (!quiet) update($);
-  try {
-    const limit = offset ? 50 : Math.max(50, Math.min(100, state.releases?.results.length || 0));
-    const result = await execute($, state, request('projects', 'deployment-releases', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment,
-      days: state.releaseListDays, limit, offset, ...releaseFilter(state) }), true);
-    if (state.closed || selection !== context(state) || revision !== state.releaseRevision) return;
-    if (result.status !== 'success') { state.releasesError = result.summary; return; }
-    const kept = offset && state.releases ? state.releases.results.slice(0, offset) : [];
-    const seen = new Set(kept.map(row => row.uid));
-    state.releases = { ...result.data, results: [...kept, ...rows(result.data).filter(row => !seen.has(row.uid))] };
-    state.releasesError = '';
-  } finally { if (revision === state.releaseRevision) { state.releasesLoading = false; syncReleasePolling($, state); update($); } }
-}
-async function openRelease($, state, uid) {
-  if (!uuid(uid) || !state.fields.mcpEnvironment) return;
-  state.tab = 'Releases'; state.confirmation = null; state.releasePolls = 0; state.releasePaused = false;
-  state.releaseDetail = { uid: uid.toLowerCase(), data: null, loading: true, error: '', ticket: 0 };
-  update($);
-  await loadReleaseDetail($, state);
-}
-async function loadReleaseDetail($, state) {
-  const detail = state.releaseDetail;
-  if (!detail || !state.fields.mcpEnvironment) return;
+  // The newest request wins: a window or type chosen while another read is under way is never overwritten by it.
   const selection = context(state), revision = state.releaseRevision, ticket = ++state.sequence;
-  detail.ticket = ticket; detail.loading = true; update($);
-  const result = await execute($, state, request('projects', 'deployment-release', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment,
-    releaseUid: detail.uid, days: state.releaseDays, limit: 100 }), true);
-  if (state.closed || selection !== context(state) || revision !== state.releaseRevision || state.releaseDetail !== detail || detail.ticket !== ticket) return;
-  detail.loading = false;
-  if (result.status !== 'success') detail.error = result.summary;
-  else { detail.error = ''; detail.data = result.data.hidden ? { hidden: true } : result.data; }
-  syncReleasePolling($, state); update($);
-}
-async function closeRelease($, state) {
-  state.releaseDetail = null; state.releasePolls = 0; state.releasePaused = false; syncReleasePolling($, state); update($);
-  if (!state.releases) await loadReleases($, state);
+  const stale = () => state.closed || selection !== context(state) || revision !== state.releaseRevision || state.releasesTicket !== ticket;
+  const query = { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment, days: state.releaseDays, ...releaseFilter(state) };
+  state.releasesTicket = ticket; state.releasesLoading = true; if (!quiet) update($);
+  try {
+    const before = state.releases?.results || [], found = offset ? before.slice(0, offset) : [];
+    // A re-read of the history keeps as many rows as were shown.
+    const wanted = offset ? offset + 25 : quiet ? Math.max(25, before.length) : 25;
+    let data = null, read = offset;
+    while (read < wanted) {
+      const result = await execute($, state, request('projects', 'deployment-release-history', { ...query, limit: Math.min(100, wanted - read), offset: read }), true);
+      if (stale()) return;
+      if (result.status !== 'success') { state.releasesError = result.summary; return; }
+      const page = rows(result.data), seen = new Set(found.map(item => item.uid));
+      found.push(...page.filter(item => !seen.has(item.uid)));
+      data = result.data; read += page.length;
+      if (!page.length || read >= data.count) break;
+    }
+    if (data) { state.releases = { ...data, results: found }; state.releasesError = ''; }
+  } finally { if (!stale()) { state.releasesLoading = false; syncReleasePolling($, state); update($); } }
 }
 async function refreshReleases($, state) {
   state.releasePolls = 0; state.releasePaused = false;
-  if (state.releaseDetail) await loadReleaseDetail($, state); else await loadReleases($, state);
+  await loadReleases($, state, { quiet: true });
 }
-/** The deploying runs the open section shows: nothing polls when there are none. */
+/** The deployments in progress the section shows: nothing polls when there are none. */
 function shownActiveRuns(state) {
-  if (state.releaseDetail) return (state.releaseDetail.data?.runs || []).filter(run => RUN_ACTIVE.has(run.state)).map(run => run.uid);
-  return (state.releases?.results || []).map(row => row.activeRun?.uid).filter(Boolean);
+  return (state.releases?.results || []).filter(entry => RUN_ACTIVE.has(entry.state)).map(entry => entry.uid);
 }
 function releasePollWanted(state) {
   return !state.closed && state.paneOpen && state.tab === 'Releases' && !!state.fields.mcpEnvironment && !state.releasePaused && shownActiveRuns(state).length > 0;
@@ -1625,36 +1602,39 @@ async function pollReleases($, state) {
   if (!releasePollWanted(state)) { syncReleasePolling($, state); return; }
   state.releaseChecking = true;
   try {
-    const active = await readActiveRuns($, state);
-    if (!active || !releasePollWanted(state)) return;
-    const still = new Set(active.map(run => run.uid)), shown = shownActiveRuns(state);
-    const ours = state.releaseDetail ? new Set([state.releaseDetail.uid]) : new Set((state.releases?.results || []).map(row => row.uid));
-    // Read the section again only when a shown run ended or one of its releases started another.
-    if (shown.some(uid => !still.has(uid)) || active.some(run => ours.has(run.releaseUid) && !shown.includes(run.uid))) {
-      if (state.releaseDetail) await loadReleaseDetail($, state); else await loadReleases($, state, { quiet: true });
+    const check = await readActiveDeployments($, state);
+    if (!check || !releasePollWanted(state)) return;
+    const list = state.releases, current = new Map(check.deployments.map(item => [item.uid, item]));
+    const { releaseKind, codeRepositoryBranchUid } = releaseFilter(state), from = Date.parse(check.now) - list.days * 86400000;
+    // Read the history again only when a shown deployment ended or another started that belongs in it.
+    if (shownActiveRuns(state).some(uid => !current.has(uid)) || check.deployments.some(item => !list.results.some(entry => entry.uid === item.uid)
+      && (!releaseKind || item.kind === releaseKind) && (!codeRepositoryBranchUid || item.branchUid === codeRepositoryBranchUid) && Date.parse(item.createdAt) >= from)) {
+      await loadReleases($, state, { quiet: true });
+    } else {
+      state.releases = { ...list, now: check.now, results: list.results.map(entry => current.get(entry.uid) || entry) };
+      update($);
     }
   } finally { state.releaseChecking = false; syncReleasePolling($, state); }
 }
-/** The environment's queued and running runs, read at most once per 25 s by all the sessions together. */
-async function readActiveRuns($, state) {
+/** The environment's release deployments in progress, read at most once per 25 s by all the sessions together. */
+async function readActiveDeployments($, state) {
   const key = context(state), now = await $.clock.now();
-  const shared = record(await $.store.get('releases-active'));
-  if (shared.key === key && typeof shared.at === 'number' && now - shared.at < RELEASE_SHARE_MS && Array.isArray(shared.runs)) return shared.runs;
+  const shared = record(await $.store.get('release-deployments-active'));
+  if (shared.key === key && typeof shared.at === 'number' && now - shared.at < RELEASE_SHARE_MS && Array.isArray(shared.deployments)) return shared;
   const result = await execute($, state, request('projects', 'deployment-active', { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment }), true);
   if (state.closed || key !== context(state) || result.status !== 'success') return null;
-  const runs = rows(result.data.runs).map(run => ({ uid: String(run.uid), state: String(run.state), releaseUid: run.releaseUid ? String(run.releaseUid) : null }));
-  await $.store.set('releases-active', { key, at: now, runs });
-  return runs;
+  const check = { key, at: now, now: result.data.now, deployments: rows(result.data) };
+  await $.store.set('release-deployments-active', check);
+  return check;
 }
-/** Watch one deploying run of a release: the status line follows it and a toast says how it ended. */
-async function watchRelease($, state, releaseUid) {
-  const row = (state.releases?.results || []).find(item => item.uid === releaseUid);
-  const detail = state.releaseDetail?.uid === releaseUid ? state.releaseDetail.data : null;
-  const run = row?.activeRun || (detail?.runs || []).find(item => RUN_ACTIVE.has(item.state));
-  const name = row?.name || detail?.release?.name || 'The release';
-  if (!run) { $.ui.toast(`${name} is not deploying now.`); return; }
+/** Watch one deployment in progress: the status line follows it and a toast says how it ended. */
+async function watchRelease($, state, uid) {
+  const entry = (state.releases?.results || []).find(item => item.uid === uid);
+  if (!entry || !RUN_ACTIVE.has(entry.state)) { $.ui.toast('That deployment is no longer in progress.'); return; }
   stopWatch(state);
-  state.releaseWatch = { runUid: run.uid, releaseUid, name, backend: state.fields.backend, state: run.state, stepsDone: run.stepsDone || 0, stepsTotal: run.stepsTotal || 0, polls: 0, reading: false };
+  const steps = entry.steps || [];
+  state.releaseWatch = { runUid: uid, name: deploymentTitle(entry), backend: state.fields.backend, state: entry.state,
+    stepsDone: steps.filter(step => step.state === 'succeeded').length, stepsTotal: steps.length, polls: 0, reading: false };
   const timer = $.clock.every(WATCH_POLL_MS, () => { void pollWatch($, state).catch(() => {}); });
   state.timers.push(timer); state.releaseWatchTimer = timer;
   statusLine($, state); update($);
@@ -1696,7 +1676,7 @@ async function releasesTool($, state, e) {
   const { tool, tool_use_id, agentId, ...input } = e;
   const failed = message => toolResult(fail('releases', message, 'INVALID_REQUEST'));
   const action = input.action, release = typeof input.release === 'string' ? clean(input.release).trim().slice(0, 200) : '';
-  if (!['list', 'history', 'active', 'wait'].includes(action)) return failed('action is list, history, active or wait.');
+  if (!['history', 'active', 'wait'].includes(action)) return failed('action is history, active or wait.');
   if ((input.release !== undefined && typeof input.release !== 'string') || (input.runUid !== undefined && !uuid(input.runUid))
     || (input.kind !== undefined && !['fastapi', 'harness_agent', 'static_site'].includes(input.kind)) || (input.thisRepository !== undefined && typeof input.thisRepository !== 'boolean')
     || (input.days !== undefined && !(Number.isInteger(input.days) && input.days >= 1 && input.days <= 90))
@@ -1715,51 +1695,45 @@ async function releasesTool($, state, e) {
     branchUid = deployTarget(state, { root: state.cwd }).branchUid;
     if (!branchUid) return failed('This session folder is not a known MainSequence repository checkout: leave out thisRepository.');
   }
-  if (action === 'list') {
-    const result = await read('deployment-releases', { days: input.days || LIST_DAYS, limit: 100, ...(input.kind ? { releaseKind: input.kind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) });
-    if (stale()) return changed;
-    if (result.status !== 'success') return toolResult(result);
-    const entries = rows(result.data);
-    return answer(result.summary, `Environment: ${environment} · ${windowText(result.data.days)} · times in ${zoneLabel(result.data.now)}\n${entries.map(row => describeReleaseRow(row, result.data.now)).join('\n') || 'No releases.'}`
-      + `${result.data.count > entries.length ? `\n(${entries.length} of ${result.data.count} shown)` : ''}`);
-  }
-  if (action === 'active') {
-    const result = await read('deployment-active', branchUid ? { codeRepositoryBranchUid: branchUid } : {});
-    if (stale()) return changed;
-    if (result.status !== 'success') return toolResult(result);
-    return answer(result.summary, `Environment: ${environment} · times in ${zoneLabel(result.data.now)}\n${rows(result.data.runs).map(run => describeActiveRun(run, result.data.now)).join('\n') || 'Nothing is deploying now.'}`);
-  }
-  // history and wait name a release, by uid or by its exact name.
-  let releaseUid = '', found = null;
-  if (release && uuid(release)) releaseUid = release.toLowerCase();
-  else if (release) {
-    const result = await read('deployment-releases', { days: 1, limit: 20, search: release });
-    if (stale()) return changed;
-    if (result.status !== 'success') return toolResult(result);
-    const matches = rows(result.data).filter(row => String(row.name).toLowerCase() === release.toLowerCase());
-    if (!matches.length) return failed(`No release named ${release} in ${environment}.${rows(result.data).length ? ` Similar: ${rows(result.data).map(row => row.name).join(', ')}.` : ''}`);
-    if (matches.length > 1) return failed(`Several releases are named ${release} in ${environment}; pass the uid of one:\n${matches.map(row => describeReleaseRow(row, result.data.now)).join('\n')}`);
-    found = matches[0]; releaseUid = found.uid;
-  } else if (!(action === 'wait' && input.runUid)) return failed(action === 'wait' ? 'Name the release, or pass the runUid to wait for.' : 'Name the release whose history to read.');
+  const named = uuid(release) ? release.toLowerCase() : '';
+  const matches = entry => named ? entry.releaseUid === named : [entry.releaseName, entry.agentName].some(name => String(name || '').toLowerCase() === release.toLowerCase());
+  const header = data => `Environment: ${environment} · times in ${zoneLabel(data.now)}`;
+  const branch = branchUid ? { codeRepositoryBranchUid: branchUid } : {};
+  // The backend searches release names; an agent's own name is matched here instead, so a name is read unfiltered when the search finds none.
+  const history = async (days, kind) => {
+    const query = { days, limit: 100, ...branch, ...(kind ? { releaseKind: kind } : {}), ...(named ? { releaseUid: named } : {}) };
+    let result = await read('deployment-release-history', { ...query, ...(release && !named ? { search: release } : {}) });
+    if (stale() || result.status !== 'success' || !release || named) return { result, found: result.status === 'success' ? rows(result.data) : [] };
+    let found = rows(result.data).filter(matches);
+    if (!found.length) { result = await read('deployment-release-history', query); if (result.status === 'success') found = rows(result.data).filter(matches); }
+    return { result, found };
+  };
   if (action === 'history') {
-    const result = await read('deployment-release', { releaseUid, days: input.days || HISTORY_DAYS, limit: 100 });
+    const { result, found } = await history(input.days || HISTORY_DAYS, input.kind);
     if (stale()) return changed;
     if (result.status !== 'success') return toolResult(result);
-    if (result.data.hidden) return answer(HIDDEN_RELEASE, HIDDEN_RELEASE);
-    return answer(result.summary, describeReleaseHistory(result.data, environment));
+    const { count, days, now } = result.data, read = rows(result.data).length;
+    return answer(result.summary, `${header(result.data)} · ${windowText(days)} · deployments of resource releases, newest first\n`
+      + (found.map(item => describeDeployment(item, now)).join('\n') || `No deployments${release ? ` of ${release}` : ''} in the ${windowText(days)}.`)
+      + (count > read ? `\n(The newest ${read} of ${count} deployments were read; narrow with kind, thisRepository, a release uid or fewer days.)` : ''));
   }
-  let runUid = input.runUid ? String(input.runUid).toLowerCase() : found?.activeRun?.uid || '';
+  let runUid = action === 'wait' && input.runUid ? String(input.runUid).toLowerCase() : '';
   if (!runUid) {
-    const result = await read('deployment-release', { releaseUid, days: 2, limit: 5 });
+    if (action === 'wait' && !release) return failed('Name the release, or pass the runUid to wait for.');
+    const result = await read('deployment-active', branch);
     if (stale()) return changed;
     if (result.status !== 'success') return toolResult(result);
-    if (result.data.hidden) return answer(HIDDEN_RELEASE, HIDDEN_RELEASE);
-    const runs = rows(result.data.runs), active = runs.find(run => RUN_ACTIVE.has(run.state)), name = result.data.release?.name || release;
-    if (!active) {
-      const text = `${name} is not deploying now.${runs[0] ? ` Its last run ${stateLabel(runs[0].state).toLowerCase()}${runs[0].finishedAt ? ` ${stamp(runs[0].finishedAt, result.data.now)} ${zoneLabel(result.data.now)}` : ''} at ${runs[0].commit || 'an unknown commit'} (run ${runs[0].uid}).` : ''}`;
+    const active = rows(result.data), now = result.data.now;
+    if (action === 'active') return answer(result.summary, `${header(result.data)}\n${active.map(item => describeDeployment(item, now)).join('\n') || 'Nothing is deploying now.'}`);
+    const found = active.filter(matches);
+    if (found.length > 1) return failed(`Several deployments in progress match ${release}; pass the runUid of one:\n${found.map(item => describeDeployment(item, now)).join('\n')}`);
+    if (!found.length) {
+      const last = await history(7);
+      if (stale()) return changed;
+      const text = `${release} is not deploying now.${last.found[0] ? ` Its newest deployment:\n${describeDeployment(last.found[0], last.result.data.now)}` : ''}`;
       return answer(text, text);
     }
-    runUid = active.uid;
+    runUid = found[0].uid;
   }
   const waited = await execute($, state, request('projects', 'deployment-wait', { backend, runUid, timeoutSeconds: input.timeoutSeconds || 120 }), true);
   if (stale()) return changed;

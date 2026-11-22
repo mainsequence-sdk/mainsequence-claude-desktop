@@ -38,7 +38,7 @@ export function viewSnapshot(state) {
       : state.deployView === 'detail' && detail ? { view: 'detail', uid: detail.uid, kind: detail.kind, origin: state.deployOrigin } : null,
     project: { uid: state.selectedProject || '', list: !!state.projectListView, offset: Number(state.projectPage?.offset) || 0 },
     tools: { view: state.toolsView, uid: state.toolsView === 'detail' ? state.selectedMcp || '' : '' },
-    releases: { uid: state.releaseDetail?.uid || '', days: state.releaseDays, listDays: state.releaseListDays, kind: state.releaseKind, mine: !!state.releaseMine },
+    releases: { days: state.releaseDays, kind: state.releaseKind, mine: !!state.releaseMine },
     agent: { uid: state.agentDetail?.uid || '', offset: state.agentOffset || 0 } };
 }
 // Reads draw the session's own screen; every other operation is published to the other sessions' Activity.
@@ -115,8 +115,8 @@ export function initialState(options = {}) {
     deployView: '', deployOrigin: 'code', deployHistory: [], deployList: null, deployListLoading: false, deployListError: '',
     deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,
     deployTimers: { run: null, list: null }, deployPolls: 0, deployPaused: false, paneOpen: false,
-    // Releases: the environment's releases with their run history, one release's history, and a run the person watches.
-    releases: null, releasesLoading: false, releasesError: '', releaseKind: '', releaseMine: false, releaseListDays: 7, releaseDays: 1, releaseDetail: null,
+    // Releases: the deployment history of resource releases, and a deployment the person watches.
+    releases: null, releasesLoading: false, releasesError: '', releaseKind: '', releaseMine: false, releaseDays: 1, releasesTicket: 0,
     releaseRevision: 0, releasePolls: 0, releasePaused: false, releaseTimer: null, releaseActive: null, releaseWatch: null, releaseWatchTimer: null,
     // The plugin's own release: the worker's answer to plugin-version, merged with plugin-update's.
     plugin: {}, pluginCheck: null, pluginCheckedAt: 0, pluginUpdating: false, pluginHelp: '',
