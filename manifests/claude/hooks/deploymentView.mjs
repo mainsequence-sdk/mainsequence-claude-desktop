@@ -165,12 +165,13 @@ export function renderDeployments(p, state, actions, environment) {
         button('deploy-refresh', state.deployListLoading ? 'Refreshing…' : 'Refresh', actions.refreshDeployments, { plain: true, dim: true, available: !state.deployListLoading })], { justifyContent: 'flex-end' }),
     ]);
   }
-  const detail = state.deployDetail;
+  const detail = state.deployDetail, inReleases = state.deployOrigin === 'releases' && !state.deployHistory.length;
   const back = button('deploy-back', state.deployHistory.length ? '← Workflow run' : state.deployOrigin === 'list' ? '← Deployments' : state.deployOrigin === 'home' ? '← Home' : state.deployOrigin === 'releases' ? '← Releases' : '← Code', actions.deployBack, { plain: true, dim: true });
-  if (!detail) return column([back, muted('Loading the run…')]);
+  const loading = inReleases ? 'Loading the deployment…' : 'Loading the run…';
+  if (!detail) return column([back, muted(loading)]);
   if (detail.hidden) return column([back, heading(detail.kind === 'workflow_run' ? 'Workflow run' : 'Deployment'), status('info', HIDDEN_DEPLOYMENT)]);
   const run = detail.run;
-  if (!run) return column([back, heading('Deployment'), detail.error ? status('error', detail.error) : muted('Loading the run…'),
+  if (!run) return column([back, heading('Deployment'), detail.error ? status('error', detail.error) : muted(loading),
     detail.error && button('deploy-retry', 'Try again', actions.refreshDeployments, { plain: true })]);
   const steps = run.steps || [];
   const selected = steps.find(step => step.id === state.deployStep) || defaultStep(run);
@@ -179,13 +180,13 @@ export function renderDeployments(p, state, actions, environment) {
   const ownedListed = uid => (run.deploymentRuns || []).some(owned => owned.uid === uid);
   return column([
     back,
-    inline([heading(runTitle(run)), badge(kindLabel(run))], { flexWrap: 'wrap' }),
+    inline([heading(inReleases && detail.title || runTitle(run)), badge(kindLabel(run))], { flexWrap: 'wrap' }),
     status(stepKind(run.state), `${stateLabel(run.state)}${run.outcome ? ` · ${run.outcome.replace(/_/g, ' ')}` : ''}${run.reason ? ` · ${run.reason.replace(/_/g, ' ')}` : ''}`),
     caption(`${runMeta(run) || 'Repository unknown'}${run.workflowPath ? ` · ${run.workflowPath}` : ''}${run.kind === 'deployment_run' && run.targetLabel ? ` · ${run.targetLabel}` : ''}`),
     caption(`${runTiming(run)}${isActiveRun(run) ? ` · as of ${formatWhen(detail.now)}` : ''}`),
     run.error && status('error', run.error),
     detail.error && status('warning', detail.error),
-    run.kind === 'deployment_run' && run.workflowRun && inline([caption(`Started by workflow ${run.workflowRun.workflowPath}${run.workflowStepKeys?.length ? ` · serves ${run.workflowStepKeys.join(', ')}` : ''}`),
+    !inReleases && run.kind === 'deployment_run' && run.workflowRun && inline([caption(`Started by workflow ${run.workflowRun.workflowPath}${run.workflowStepKeys?.length ? ` · serves ${run.workflowStepKeys.join(', ')}` : ''}`),
       button(`deploy-workflow-${run.workflowRun.uid}`, 'Open workflow run', () => actions.openDeployment(run.workflowRun.uid, 'workflow_run', 'detail'), { plain: true })], { flexWrap: 'wrap' }),
     // Native keys live on Boxes; the Svg is a plain image inside its keyed slot, like agent icons.
     steps.length ? p.Box({ key: 'deploy-timeline', flexShrink: 0, children: [Svg({ source: timelineSvg(run, detail.now), alt: `Timeline of ${steps.length} ${run.kind === 'workflow_run' ? 'steps' : 'stages'} on the run's clock`, width: 360, isInteractive: false })] }) : null,
@@ -195,7 +196,7 @@ export function renderDeployments(p, state, actions, environment) {
       caption([step.operation && `${step.operation}${step.resourceKey ? ` · ${step.resourceKey}` : ''}`, step.name && step.name !== step.key && step.name, step.kind, step.needs?.length && `needs ${step.needs.join(', ')}`,
         step.reason && step.reason.replace(/_/g, ' ')].filter(Boolean).join(' · ')),
     ], [badge(stateLabel(step.state), stepKind(step.state)), step.durationMs !== null && step.durationMs !== undefined ? badge(formatDuration(step.durationMs)) : null])),
-    !steps.length && muted('This run has no steps yet.'),
+    !steps.length && muted(inReleases ? 'This deployment has no stages yet.' : 'This run has no steps yet.'),
     selected && card(`${run.kind === 'workflow_run' ? 'Step' : 'Stage'} ${stepLabel(selected)}`, [
       line('State', stateLabel(selected.state), stepKind(selected.state)),
       selected.startedAt && line('Started', formatWhen(selected.startedAt)),

@@ -107,15 +107,13 @@ section and Activity are the same in every session, whichever project it is in. 
   with the project's own schema, and Claude asks before each call. **Advanced** in an
   MCP's detail calls a tool directly or re-registers the tools. The read-only
   `ms_deployment_status` tool gives Claude the same deployment view as the Deploys card.
-- **Releases.** The environment's APIs, agents and static sites, read-only: each with its
-  last ten runs of the last 7 days (or 1, 30 or 90), how many deployed, and the date and time it last deployed or its last run
-  ended, with what is deploying now and when it started pinned on top. A release shows the
-  commit it serves and since when, the one it wants, the last day of runs (or 7, 30 or 90 days) with
-  their start times, success rate, median time, its slowest stage and most common failure, and
-  each run's stages and logs. Times are in the machine's time zone, which the section names. **Notify me** follows a deploying run in Claude's status line
-  and tells you how it ended. Nothing is re-read while nothing deploys. The read-only
-  `ms_releases` tool lets Claude list releases, read one's history and wait for a deploy
-  to finish.
+- **Releases.** The deployment history of the environment's APIs, agents and static
+  sites, read-only and newest first: repository, release, branch, commit, date and time,
+  state, stages, duration and source, for the last day (or 7, 30 or 90 days). No workflow
+  runs, Jobs or image builds. A deployment opens its stages and logs. **Notify me** follows
+  one in progress in Claude's status line and tells you how it ended. Nothing is re-read
+  while nothing deploys. The read-only `ms_releases` tool lets Claude read that history
+  and wait for a deployment to finish.
 - **Activity.** Running and finished operations with progress, results, cancellation and
   partial-effect warnings. The running count also appears in Claude's status line.
 
