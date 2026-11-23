@@ -1578,12 +1578,13 @@ async function refreshReleases($, state) {
   state.releasePolls = 0; state.releasePaused = false;
   await loadReleases($, state, { quiet: true });
 }
-/** The deployments in progress the section shows: nothing polls when there are none. */
+/** The deployments in progress the section shows. */
 function shownActiveRuns(state) {
   return (state.releases?.results || []).filter(entry => RUN_ACTIVE.has(entry.state)).map(entry => entry.uid);
 }
 function releasePollWanted(state) {
-  return !state.closed && state.paneOpen && state.tab === 'Releases' && !!state.fields.mcpEnvironment && !state.releasePaused && shownActiveRuns(state).length > 0;
+  // While the section is shown, a deployment that starts later appears without Refresh.
+  return !state.closed && state.paneOpen && state.tab === 'Releases' && !!state.fields.mcpEnvironment && !state.releasePaused && !!state.releases;
 }
 function cancelReleaseTimer(state) {
   const timer = state.releaseTimer;
@@ -1609,6 +1610,8 @@ async function pollReleases($, state) {
     // Read the history again only when a shown deployment ended or another started that belongs in it.
     if (shownActiveRuns(state).some(uid => !current.has(uid)) || check.deployments.some(item => !list.results.some(entry => entry.uid === item.uid)
       && (!releaseKind || item.kind === releaseKind) && (!codeRepositoryBranchUid || item.branchUid === codeRepositoryBranchUid) && Date.parse(item.createdAt) >= from)) {
+      // Something started or ended: the hour before checks pause starts again.
+      state.releasePolls = 0;
       await loadReleases($, state, { quiet: true });
     } else {
       state.releases = { ...list, now: check.now, results: list.results.map(entry => current.get(entry.uid) || entry) };

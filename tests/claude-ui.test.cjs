@@ -142,9 +142,10 @@ function fixture(options = {}) {
         spawns.push(input.cwd);
         assert.equal(input.cwd, cwd);
         const envelope = JSON.parse(input.input); calls.push(envelope);
-        const result = options.respond ? options.respond(envelope.request) : success(envelope.request.request.action, {});
-        const line = JSON.stringify({ type: 'result', id: envelope.id, result }) + '\n';
+        // A fixture may answer later, or never, as a worker that hangs.
+        const answer = options.respond ? options.respond(envelope.request) : success(envelope.request.request.action, {});
         const stream = (async function* () {
+          const result = await answer, line = JSON.stringify({ type: 'result', id: envelope.id, result }) + '\n';
           yield { stream: 'stderr', text: 'private-error-token' };
           yield { stream: 'stdout', text: JSON.stringify({ type: 'progress', id: envelope.id, message: 'Working' }) + '\n' + line.slice(0, 10) };
           yield { stream: 'stdout', text: line.slice(10) };
@@ -1637,6 +1638,7 @@ test('an active run is refreshed every 10 s while shown, the list every 30 s, an
   await f.press('deploy-all'); await flush();
   assert.deepEqual(polls().map(t => t.ms), [30000], 'the list polls every 30 s while an entry is active');
   assert.ok(f.find(await f.pane(), `deploy-row-${deployRun}`));
+  { const listed = JSON.stringify(await f.pane()); assert.ok(listed.indexOf('"deploy-refresh"') > 0 && listed.indexOf('"deploy-refresh"') < listed.indexOf(`deploy-row-${deployRun}`), 'Refresh is beside the heading, above the list'); }
   f.deploy.latest = workflowFixtureEntry('failed'); polls()[0].callback(); await flush(); await flush();
   assert.deepEqual(polls(), [], 'a settled list stops polling');
   await f.emit('session.end'); assert.deepEqual(polls(), []);
@@ -2173,12 +2175,13 @@ const deploymentRow = (uid, state, extra = {}) => ({ uid, state, outcome: state 
   durationMs: ['queued', 'running'].includes(state) ? 120000 : 300000, error: '', errorCode: '',
   steps: [{ name: 'Build', state: 'succeeded' }, { name: 'Deploy', state: ['queued', 'running'].includes(state) ? 'running' : state }], ...extra });
 function releaseFixture(options = {}) {
-  const live = { deploying: options.deploying !== false, others: [] };
+  const live = { deploying: options.deploying !== false, others: [], hold: false };
   const list = () => [...live.others, deploymentRow(ACTIVE_RUN, live.deploying ? 'running' : 'succeeded'),
     deploymentRow(DONE_RUN, 'succeeded', { commit: 'fff0000', createdAt: '2026-10-21T06:00:00.000Z', startedAt: '2026-10-21T06:00:00.000Z', finishedAt: '2026-10-21T06:05:00.000Z' }),
     deploymentRow(FAILED_RUN, 'failed', { releaseUid: RELEASE_AGENT, releaseName: 'tau', agentName: 'Risk Analyst', kind: 'harness_agent', kindLabel: 'Harness Agent', commit: 'bad0000',
       createdAt: '2026-10-21T05:00:00.000Z', startedAt: '2026-10-21T05:00:00.000Z', finishedAt: '2026-10-21T05:05:00.000Z', error: 'runtime_readiness_timeout: not ready', errorCode: 'runtime_readiness_timeout' })];
   const f = deployFixture({ ...options, respond: q => {
+    if (q.action === 'deployment-release-history' && live.hold) return new Promise(() => {});
     if (q.action === 'deployment-release-history') {
       const found = options.empty ? [] : list().filter(row => (!q.releaseKind || row.kind === q.releaseKind) && (!q.releaseUid || row.releaseUid === q.releaseUid) && (!q.search || row.releaseName.includes(q.search)));
       return success(q.action, { environmentUid: q.environmentUid, days: q.days, count: found.length, limit: q.limit, offset: q.offset || 0, now: '2026-10-21T08:00:00.000Z', results: found.slice(q.offset || 0, (q.offset || 0) + q.limit) });
@@ -2202,6 +2205,7 @@ const pollTimers = (f, ms) => f.timers.filter(t => t.ms === ms && !t.cancelled &
 // Release times show in the machine's zone; the expectations are written in it too.
 const shownTime = iso => { const d = new Date(iso), two = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
 const localZone = iso => { const offset = -new Date(iso).getTimezoneOffset(), m = Math.abs(offset), two = n => String(n).padStart(2, '0'); return offset ? `UTC${offset > 0 ? '+' : '-'}${two(Math.floor(m / 60))}:${two(m % 60)}` : 'UTC'; };
+const clockTime = iso => { const d = new Date(iso), two = n => String(n).padStart(2, '0'); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; };
 const esc = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const historyReads = f => deployRequests(f, 'deployment-release-history');
@@ -2216,6 +2220,8 @@ test('Releases is the deployment history of resource releases, one row per deplo
   assert.match(text, /Deployment history/); assert.match(text, /Research · 3 deployments · last day/);
   const at = [ACTIVE_RUN, DONE_RUN, FAILED_RUN].map(uid => text.indexOf(`release-deployment-${uid}"`));
   assert.ok(at[0] > 0 && at[0] < at[1] && at[1] < at[2], 'newest first, and a release deployed twice has two rows');
+  assert.ok(text.indexOf('"releases-refresh"') > 0 && text.indexOf('"releases-refresh"') < at[0], 'Refresh is beside the heading, above the history');
+  assert.notEqual(f.find(tree, 'releases-refresh').props.plain, true, 'a full button, not a dim link');
   const done = JSON.stringify(f.find(tree, `release-deployment-${DONE_RUN}`)), failed = JSON.stringify(f.find(tree, `release-deployment-${FAILED_RUN}`));
   assert.match(done, /Real project · app/, 'the repository leads, as release names repeat'); assert.match(done, /FastAPI/);
   assert.match(done, new RegExp(esc(`main · fff0000 · ${shownTime('2026-10-21T06:00:00.000Z')} (2h ago)`)));
@@ -2223,7 +2229,10 @@ test('Releases is the deployment history of resource releases, one row per deplo
   assert.match(failed, /Real project · Risk Analyst/); assert.match(failed, /! Failed/); assert.match(failed, /1 of 2 stages · Deploy · 5m 0s/); assert.match(failed, /runtime_readiness_timeout: not ready/);
   assert.match(text, new RegExp(esc(`Times in ${localZone('2026-10-21T08:00:00.000Z')}.`)), 'the zone of those times is named');
   assert.doesNotMatch(text, /\bruns?\b|\d of \d+ ok|All deployments|Workflow/i, 'no runs, dots of other runs, workflows or other deployments');
-  assert.equal(pollTimers(f, 30000).length + pollTimers(f, 15000).length, 0, 'nothing polls while nothing deploys');
+  assert.equal(pollTimers(f, 30000).length, 1, 'one 30 s check for new deployments while the section is shown, even when nothing deploys');
+  assert.equal(pollTimers(f, 15000).length, 0, 'nothing is watched until Notify me');
+  assert.match(text, new RegExp(esc(`last day · updated ${clockTime('2026-10-21T08:00:00.000Z')}`)), 'the heading says when the history was read');
+  assert.match(text, /Checks for new deployments every 30 s/);
   assert.deepEqual(['releases-days-1', 'releases-days-7', 'releases-days-30', 'releases-days-90'].map(key => f.find(tree, key)?.props.variant === 'primary'), [true, false, false, false]);
   await f.press('releases-days-30'); await flush();
   assert.equal(historyReads(f).at(-1).days, 30, 'a longer window is read only when chosen'); assert.match(JSON.stringify(await f.pane()), /last 30 days/);
@@ -2268,13 +2277,13 @@ test('a deployment opens its stages and logs under its own name, without the wor
   assert.ok(f.find(await f.pane(), `release-deployment-${DONE_RUN}`), 'Back returns to the history');
 });
 
-test('while a deployment is in progress, one shared check every 30 s re-reads the history only when one ends or starts', async () => {
+test('while the section is shown, one shared check every 30 s re-reads the history only when a deployment ends or starts', async () => {
   const { register } = await load(); const stores = new Map();
   const f = releaseFixture({ stores }); register(f.on); await f.start();
   await f.press('tab-Releases'); await flush();
   const tree = await f.pane();
   assert.match(JSON.stringify(f.find(tree, `release-deployment-${ACTIVE_RUN}`)), /1 of 2 stages · Deploy · 10m 0s so far/);
-  assert.match(JSON.stringify(tree), /Checking every 30 s while a deployment is in progress/);
+  assert.match(JSON.stringify(tree), /Checks for new deployments every 30 s/);
   assert.equal(pollTimers(f, 30000).length, 1, 'one 30 s check while a shown deployment is in progress');
   pollTimers(f, 30000)[0].callback(); await flush(); await flush();
   assert.equal(deployRequests(f, 'deployment-active').length, 1); assert.equal(historyReads(f).length, 1, 'still in progress: the history is not read again');
@@ -2290,7 +2299,8 @@ test('while a deployment is in progress, one shared check every 30 s re-reads th
   f.now += 26000; f.live.others = []; f.live.deploying = false; pollTimers(f, 30000)[0].callback(); await flush(); await flush(); await flush();
   assert.equal(deployRequests(f, 'deployment-active').length, 3);
   assert.equal(historyReads(f).length, 3, 'they ended: the history is read once more');
-  assert.equal(pollTimers(f, 30000).length, 0, 'nothing deploys any more: polling stops');
+  assert.equal(pollTimers(f, 30000).length, 1, 'nothing deploys any more: the check goes on, so the next deployment appears by itself');
+  assert.match(JSON.stringify(await f.pane()), new RegExp(esc(`updated ${clockTime('2026-10-21T08:00:00.000Z')}`)));
   f.live.deploying = true; await f.press('releases-refresh'); await flush();
   assert.equal(pollTimers(f, 30000).length, 1); await f.press('tab-Tools'); assert.equal(pollTimers(f, 30000).length, 0, 'leaving the section stops the check');
   await f.press('tab-Releases'); await flush(); assert.equal(pollTimers(f, 30000).length, 1);
@@ -2298,6 +2308,23 @@ test('while a deployment is in progress, one shared check every 30 s re-reads th
   await f.pane(); await flush(); const timer = pollTimers(f, 30000)[0]; assert.ok(timer, 'a draw of the reopened pane resumes it');
   for (let i = 0; i < 121; i++) { f.now += 26000; timer.callback(); await flush(); }
   assert.equal(pollTimers(f, 30000).length, 0, 'an hour of checks pauses'); assert.match(JSON.stringify(await f.pane()), /Auto-refresh paused after an hour/);
+});
+
+test('a deployment that starts after the history was read appears at the next check, and Refresh never waits for a read under way', async () => {
+  const { register } = await load(); const f = releaseFixture({ deploying: false }); register(f.on); await f.start();
+  await f.press('tab-Releases'); await flush();
+  assert.equal(f.find(await f.pane(), `release-deployment-${relId(15)}`), undefined);
+  f.now += 26000; f.live.others = [deploymentRow(relId(15), 'queued', { repositoryName: 'Markets', releaseName: 'api', createdAt: '2026-10-21T08:00:20.000Z', steps: [{ name: 'Build', state: 'queued' }] })];
+  pollTimers(f, 30000)[0].callback(); await flush(); await flush(); await flush();
+  assert.equal(deployRequests(f, 'deployment-active').length, 1, 'the check finds it'); assert.equal(historyReads(f).length, 2, 'and the history is read once more');
+  const row = JSON.stringify(f.find(await f.pane(), `release-deployment-${relId(15)}`));
+  assert.match(row, /Markets · api/); assert.match(row, /Queued/);
+  // A read that never answers does not hold Refresh: the next press reads again, and the newest read is shown.
+  f.live.hold = true; await f.press('releases-refresh'); await flush();
+  assert.match(JSON.stringify(f.find(await f.pane(), 'releases-refresh')), /Refreshing…/);
+  f.live.hold = false; await f.press('releases-refresh'); await flush(); await flush();
+  assert.equal(historyReads(f).length, 4, 'the second press read again');
+  assert.doesNotMatch(JSON.stringify(f.find(await f.pane(), 'releases-refresh')), /Refreshing…/, 'the newest read is shown');
 });
 
 test('Notify me follows one deployment every 15 s in the status line and says how it ended', async () => {
