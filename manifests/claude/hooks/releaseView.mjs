@@ -42,6 +42,11 @@ export function stamp(iso, nowIso) {
   const since = ago(iso, nowIso);
   return since ? `${at} (${since})` : at;
 }
+/** `09:40:21`: when the history was last read or checked, in the machine's zone. */
+export function clockTime(iso) {
+  const at = new Date(Date.parse(iso || ''));
+  return Number.isFinite(at.getTime()) ? `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}` : '';
+}
 const startOf = deployment => deployment?.startedAt || deployment?.createdAt || '';
 /** Names repeat across repositories (several releases are named `app`), so the repository leads; an agent goes by its own name. */
 export const deploymentTitle = deployment => [deployment?.repositoryName, deployment?.agentName || deployment?.releaseName].filter(Boolean).join(' · ') || 'Deployment';
@@ -64,8 +69,12 @@ export function renderReleases(p, state, actions, { environment, target }) {
   const { muted, caption, heading, status, column, inline, buttons, button, row, badge, empty, Text } = p;
   const list = state.releases, entries = list?.results || [], watch = state.releaseWatch;
   return column([
-    inline([heading('Deployment history'), caption(`${environment?.name || 'Environment'}${list ? ` · ${list.count} ${list.count === 1 ? 'deployment' : 'deployments'} · ${windowText(list.days)}` : ''}`)],
+    // Refresh sits beside the heading, where it shows without scrolling past the history. It always reads again:
+    // a read already under way is overtaken, never waited for.
+    inline([column([heading('Deployment history'), caption(`${environment?.name || 'Environment'}${list ? ` · ${list.count} ${list.count === 1 ? 'deployment' : 'deployments'} · ${windowText(list.days)}${clockTime(list.now) ? ` · updated ${clockTime(list.now)}` : ''}` : ''}`)], { gap: 0 }),
+      button('releases-refresh', state.releasesLoading ? 'Refreshing…' : 'Refresh', actions.refreshReleases)],
       { justifyContent: 'space-between', flexWrap: 'wrap' }),
+    state.releasePaused ? caption('Auto-refresh paused after an hour. Refresh starts it again.') : list ? caption('Checks for new deployments every 30 s.') : null,
     buttons([...KINDS.map(([kind, label]) => button(`releases-kind-${kind || 'all'}`, label, () => actions.releasesKind(kind), state.releaseKind === kind ? { primary: true } : { plain: true, dim: true })),
       (target?.branchUid || state.releaseMine) && button('releases-mine', 'This repository', actions.releasesMine, state.releaseMine ? { primary: true } : { plain: true, dim: true })]),
     buttons(RELEASE_DAYS.map(days => button(`releases-days-${days}`, dayLabel(days), () => actions.releaseDays(days), state.releaseDays === days ? { primary: true } : { plain: true, dim: true }))),
@@ -87,9 +96,6 @@ export function renderReleases(p, state, actions, { environment, target }) {
       `${state.releaseKind || state.releaseMine ? 'Nothing matching these filters was deployed.' : 'No resource release was deployed.'}${list.days < RELEASE_DAYS.at(-1) ? ' Choose a longer window for older deployments.' : ''}`),
     list && entries.length < list.count ? button('releases-more', state.releasesLoading ? 'Loading…' : 'Load more', actions.moreReleases, { plain: true, available: !state.releasesLoading }) : null,
     entries.length ? caption(`Newest first. Times in ${zoneLabel(list.now)}.`) : null,
-    inline([state.releasePaused ? caption('Auto-refresh paused after an hour.') : entries.some(isDeploying) ? caption('Checking every 30 s while a deployment is in progress.') : null,
-      button('releases-refresh', state.releasesLoading ? 'Refreshing…' : 'Refresh', actions.refreshReleases, { plain: true, dim: true, available: !state.releasesLoading })],
-    { justifyContent: 'flex-end', flexWrap: 'wrap' }),
   ]);
 }
 

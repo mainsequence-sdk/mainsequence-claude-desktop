@@ -150,7 +150,9 @@ export function renderDeployments(p, state, actions, environment) {
     const list = state.deployList, entries = list?.entries || [];
     return column([
       button('deploy-back', state.deployOrigin === 'home' ? '← Home' : state.deployOrigin === 'releases' ? '← Releases' : '← Code', actions.closeDeployments, { plain: true, dim: true }),
-      inline([heading('Deployments'), list && caption(`${environment?.name || 'Environment'} · ${list.count} ${list.count === 1 ? 'entry' : 'entries'}`)], { justifyContent: 'space-between', flexWrap: 'wrap' }),
+      inline([column([heading('Deployments'), list && caption(`${environment?.name || 'Environment'} · ${list.count} ${list.count === 1 ? 'entry' : 'entries'}`)], { gap: 0 }),
+        button('deploy-refresh', state.deployListLoading ? 'Refreshing…' : 'Refresh', actions.refreshDeployments, { available: !state.deployListLoading })], { justifyContent: 'space-between', flexWrap: 'wrap' }),
+      state.deployPaused ? caption('Auto-refresh paused after an hour. Refresh starts it again.') : entries.some(isActiveRun) ? caption('Refreshing every 30 s while a run is active.') : null,
       state.deployListLoading && !entries.length && muted('Loading deployments…'),
       state.deployListError && status('error', state.deployListError),
       ...entries.map(entry => row(`deploy-row-${entry.uid}`, [
@@ -161,8 +163,6 @@ export function renderDeployments(p, state, actions, environment) {
       ], [badge(stateLabel(entry.state), stepKind(entry.state)), badge(kindLabel(entry))])),
       list && !entries.length && !state.deployListLoading && empty('No deployments', 'Deployments and workflow runs of this environment appear here.'),
       list && entries.length < list.count ? button('deploy-more', state.deployListLoading ? 'Loading…' : 'Load more', actions.moreDeployments, { plain: true, available: !state.deployListLoading }) : null,
-      inline([state.deployPaused ? caption('Auto-refresh paused after an hour.') : entries.some(isActiveRun) ? caption('Refreshing every 30 s while a run is active.') : null,
-        button('deploy-refresh', state.deployListLoading ? 'Refreshing…' : 'Refresh', actions.refreshDeployments, { plain: true, dim: true, available: !state.deployListLoading })], { justifyContent: 'flex-end' }),
     ]);
   }
   const detail = state.deployDetail, inReleases = state.deployOrigin === 'releases' && !state.deployHistory.length;

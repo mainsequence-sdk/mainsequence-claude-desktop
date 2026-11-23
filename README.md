@@ -111,9 +111,9 @@ section and Activity are the same in every session, whichever project it is in. 
   sites, read-only and newest first: repository, release, branch, commit, date and time,
   state, stages, duration and source, for the last day (or 7, 30 or 90 days). No workflow
   runs, Jobs or image builds. A deployment opens its stages and logs. **Notify me** follows
-  one in progress in Claude's status line and tells you how it ended. Nothing is re-read
-  while nothing deploys. The read-only `ms_releases` tool lets Claude read that history
-  and wait for a deployment to finish.
+  one in progress in Claude's status line and tells you how it ended. While it is shown, one
+  small check every 30 s brings in a deployment that starts after the read. The read-only
+  `ms_releases` tool lets Claude read that history and wait for a deployment to finish.
 - **Activity.** Running and finished operations with progress, results, cancellation and
   partial-effect warnings. The running count also appears in Claude's status line.
 

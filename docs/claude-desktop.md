@@ -232,8 +232,8 @@ deployment. A deployment is shown to the people who can see its release or Job."
 without saying whether it exists, as in Command Center. While a shown run is
 pending, queued or running and the pane is open, that run is refreshed every 10 s
 and the list every 30 s; the timers stop when the run settles, the section changes,
-the pane closes or the session ends, and pause after an hour until **Refresh**.
-Nothing polls when nothing is active. Remote runs are remote state, not local
+the pane closes or the session ends, and pause after an hour until **Refresh**, beside
+the list's heading. Nothing polls when nothing is active. Remote runs are remote state, not local
 operations: they never count in the header's running counter, Activity or Claude's
 status line.
 
@@ -261,12 +261,15 @@ named under the history (`Times in UTC+01:00.`). The history opens on the last d
 (when the session folder is a known checkout) filter on the backend. A deployment opens
 its stages and logs.
 
-Nothing is re-read while nothing deploys. While the section shows a deployment in
-progress and the pane is open, one check every 30 s reads only the release deployments
-still queued or running; every session uses the same answer for 25 s, so several open
+While the section is shown and the pane is open, one check every 30 s reads only the
+release deployments still queued or running, so a deployment that starts after the history
+was read appears by itself; every session uses the same answer for 25 s, so several open
 sessions don't each ask the backend. The history is read again only when a shown
-deployment ends or another starts; the check stops when nothing deploys, the section
-changes, the pane closes or the session ends, and pauses after an hour until **Refresh**.
+deployment ends or another starts. The heading says when the history was last read or
+checked (`updated 09:40:21`). The check stops when the section changes, the pane closes or
+the session ends, and pauses after an hour in which nothing started or ended, until
+**Refresh**. **Refresh**, beside the heading, reads the history again at once, even while another
+read is under way.
 **Notify me** on a deployment in progress re-reads only that deployment every 15 s, shows
 `MainSequence: deploying <repository> · <release> <stages done>/<stages>` in Claude's
 status line, and when it ends shows a toast with how it ended. It stops then, or after an
@@ -426,7 +429,7 @@ conversation through Claude, task polling, local continuity and uncertain reques
 | Diagnostics/errors/previews | Bundle/runtime checks, actionable errors, Activity results/cancellation, explicit mutation confirmations, and previews for supported SDK/skills operations, Docker, container configuration and local deletion. Cancellation can leave partial effects, which are reported. |
 | Agent discovery and conversations | Shared environment selector, public card details, session preparation without sending, editable native command drafts, separate per-agent status and approved follow-ups, Task status/wait/cancel and local conversation continuity. |
 | MCP discovery/connections/tools | Search/paginate project MCPs, connect/disconnect exact releases, inspect/call tools and register them for Claude. Tool calls request approval and disconnected tools are refused. |
-| Releases | The deployment history of resource releases only, newest first, with a deployment's stages and logs, polling only while a shown one is in progress, **Notify me**, and the read-only `ms_releases` tool. |
+| Releases | The deployment history of resource releases only, newest first, with a deployment's stages and logs, a 30 s check for deployments that start or end while it is shown, **Notify me**, and the read-only `ms_releases` tool. |
 | Deployment history | Latest run of the checked-out branch, run detail with an SVG step timeline, step records and cursor-paged logs, the environment-wide list, 10 s / 30 s polling of active runs only, and the read-only `ms_deployment_status` tool. Hidden runs use Command Center's wording. |
 
 The signed-terminal, session-navigation and container-launch limitations are explicit
