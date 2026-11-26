@@ -5,7 +5,7 @@ import { EMBLEM } from './branding.mjs';
 import { workspaceBinding } from './workspace.mjs';
 import { renderAgentIcon, renderAgentActivity, agentIconActivity } from './agentIcon.mjs';
 import { HIDDEN_DEPLOYMENT, isActiveRun, defaultStep, failedStep, logSource, describeRun, logTimestamp, stateLabel, kindLabel, stepLabel } from './deploymentView.mjs';
-import { RELEASE_DAYS, HISTORY_DAYS, windowText, deploymentTitle, describeDeployment, zoneLabel } from './releaseView.mjs';
+import { RELEASE_DAYS, HISTORY_DAYS, windowText, deploymentTitle, describeDeployment, zoneLabel, reasonText } from './releaseView.mjs';
 
 const sessionActions = new Set(['login', 'logout', 'refresh-token', 'auth-status', 'repositories']);
 const update = ($) => $.ui.invalidate('ui.render');
@@ -518,9 +518,9 @@ function actionsFor($, state) {
     moreDeployments: () => background(loadDeploymentList($, state, { offset: state.deployList?.entries.length || 0, limit: 25 })),
     releasesKind: kind => { state.releaseKind = ['fastapi', 'harness_agent', 'static_site'].includes(kind) ? kind : ''; background(loadReleases($, state)); },
     releasesMine: () => { state.releaseMine = !state.releaseMine; background(loadReleases($, state)); },
-    releaseDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseDays === days) return; state.releaseDays = days; background(loadReleases($, state)); },
-    refreshReleases: () => background(refreshReleases($, state)),
-    moreReleases: () => background(loadReleases($, state, { offset: state.releases?.results.length || 0 })),
+    releaseDays: days => { if (!RELEASE_DAYS.includes(days) || state.releaseDays === days) return; state.releaseDays = days; background(loadReleases($, state, { reading: `Loading the ${windowText(days)}` })); },
+    refreshReleases: () => background(refreshReleases($, state, 'Refreshing deployment history')),
+    moreReleases: () => background(loadReleases($, state, { offset: state.releases?.results.length || 0, reading: 'Loading more deployments' })),
     watchRelease: uid => background(watchRelease($, state, uid)),
     openReleaseDeployment: uid => background(openDeployment($, state, uid, 'deployment_run', 'releases')),
     codeFilter: value => { state.codeFilter = value === 'local' ? 'local' : 'all'; update($); },
@@ -1541,7 +1541,7 @@ const RUN_ACTIVE = new Set(['queued', 'running']);
 
 function clearReleases($, state) {
   cancelReleaseTimer(state); state.releaseRevision++;
-  state.releases = null; state.releasesLoading = false; state.releasesError = ''; state.releasePolls = 0; state.releasePaused = false;
+  state.releases = null; state.releasesLoading = false; state.releasesReading = null; state.releasesError = ''; state.releasePolls = 0; state.releasePaused = false;
   if (state.releaseWatch && state.releaseWatch.backend !== state.fields.backend) { stopWatch(state); statusLine($, state); }
   for (const op of state.running.values()) if (RELEASE_ACTIONS.some(action => op.label === `projects · ${action}`) && op.cancel) void op.cancel().catch(() => {});
 }
@@ -1550,13 +1550,18 @@ function releaseFilter(state) {
   return { ...(state.releaseKind ? { releaseKind: state.releaseKind } : {}), ...(branchUid ? { codeRepositoryBranchUid: branchUid } : {}) };
 }
 const releaseTitleOf = (state, uid) => { const entry = (state.releases?.results || []).find(item => item.uid === uid); return entry ? deploymentTitle(entry) : ''; };
-async function loadReleases($, state, { offset = 0, quiet = false } = {}) {
+/**
+ * `reading` names a read the person started, shown as a progress bar until it answers: by default every read that is
+ * not quiet. A quiet read the 30 s check starts shows none, so the history does not flicker while nobody asked.
+ */
+async function loadReleases($, state, { offset = 0, quiet = false, reading = quiet ? '' : 'Loading deployment history' } = {}) {
   if (!state.fields.mcpEnvironment) return;
   // The newest request wins: a window or type chosen while another read is under way is never overwritten by it.
   const selection = context(state), revision = state.releaseRevision, ticket = ++state.sequence;
   const stale = () => state.closed || selection !== context(state) || revision !== state.releaseRevision || state.releasesTicket !== ticket;
   const query = { backend: state.fields.backend, environmentUid: state.fields.mcpEnvironment, days: state.releaseDays, ...releaseFilter(state) };
-  state.releasesTicket = ticket; state.releasesLoading = true; if (!quiet) update($);
+  state.releasesTicket = ticket; state.releasesLoading = true; state.releasesReading = reading ? { label: reading, more: offset > 0 } : null;
+  if (!quiet || reading) update($);
   try {
     const before = state.releases?.results || [], found = offset ? before.slice(0, offset) : [];
     // A re-read of the history keeps as many rows as were shown.
@@ -1572,11 +1577,11 @@ async function loadReleases($, state, { offset = 0, quiet = false } = {}) {
       if (!page.length || read >= data.count) break;
     }
     if (data) { state.releases = { ...data, results: found }; state.releasesError = ''; }
-  } finally { if (!stale()) { state.releasesLoading = false; syncReleasePolling($, state); update($); } }
+  } finally { if (!stale()) { state.releasesLoading = false; state.releasesReading = null; syncReleasePolling($, state); update($); } }
 }
-async function refreshReleases($, state) {
+async function refreshReleases($, state, reading = '') {
   state.releasePolls = 0; state.releasePaused = false;
-  await loadReleases($, state, { quiet: true });
+  await loadReleases($, state, { quiet: true, reading });
 }
 /** The deployments in progress the section shows. */
 function shownActiveRuns(state) {
@@ -1665,7 +1670,7 @@ async function pollWatch($, state) {
     if (!RUN_ACTIVE.has(run.state)) {
       stopWatch(state);
       $.ui.toast(run.state === 'succeeded' ? `${watch.name} deployed${run.commit ? ` ${run.commit}` : ''}.`
-        : `${watch.name}: the deployment ${stateLabel(run.state).toLowerCase()}${run.error ? ` — ${run.error}` : ''}.`, { timeoutMs: 15000 });
+        : `${watch.name}: the deployment ${stateLabel(run.state).toLowerCase()}${reasonText(run) ? ` — ${reasonText(run)}` : ''}.`, { timeoutMs: 15000 });
       if (state.tab === 'Releases' && !state.closed) void refreshReleases($, state).catch(() => {});
     }
     statusLine($, state); update($);

@@ -116,7 +116,7 @@ export function initialState(options = {}) {
     deployDetail: null, deployStep: '', deployLogs: null, deployLogsLoading: false, deployLatest: {}, deployRevision: 0,
     deployTimers: { run: null, list: null }, deployPolls: 0, deployPaused: false, paneOpen: false,
     // Releases: the deployment history of resource releases, and a deployment the person watches.
-    releases: null, releasesLoading: false, releasesError: '', releaseKind: '', releaseMine: false, releaseDays: 1, releasesTicket: 0,
+    releases: null, releasesLoading: false, releasesReading: null, releasesError: '', releaseKind: '', releaseMine: false, releaseDays: 1, releasesTicket: 0,
     releaseRevision: 0, releasePolls: 0, releasePaused: false, releaseTimer: null, releaseActive: null, releaseWatch: null, releaseWatchTimer: null,
     // The plugin's own release: the worker's answer to plugin-version, merged with plugin-update's.
     plugin: {}, pluginCheck: null, pluginCheckedAt: 0, pluginUpdating: false, pluginHelp: '',

@@ -13,6 +13,22 @@ const COLOUR = { success: '#2f9e5b', warning: '#d99a1b', error: '#d64545', info:
 export const stepKind = state => STEP_KIND[String(state || '').toLowerCase()] || 'info';
 export const stateLabel = state => { const value = clean(state || 'unknown').replace(/_/g, ' '); return value.charAt(0).toUpperCase() + value.slice(1); };
 export const kindLabel = run => run?.kind === 'workflow_run' ? 'Workflow run' : 'Deployment';
+const andList = items => items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+/**
+ * `metatables-api.yaml: migrate failed`: the workflow steps that kept a blocked deployment from running, as Command
+ * Center says it. Its outcome alone (`workflow_prerequisite_failed`) names neither the step nor the workflow.
+ */
+export function blockedText(blockedBy) {
+  if (!blockedBy) return '';
+  const file = clean(blockedBy.workflowPath || '').split('/').pop() || 'Workflow', byState = new Map();
+  for (const step of blockedBy.steps || []) {
+    const state = clean(step.state || '').replace(/_/g, ' ');
+    byState.set(state, [...(byState.get(state) || []), clean(step.key || '')]);
+  }
+  const what = [...byState].map(([state, keys]) => `${andList(keys)} ${state}`).join(', ');
+  if (what) return `${file}: ${what}`;
+  return blockedBy.workflowState ? `${file}: the workflow ${clean(blockedBy.workflowState).replace(/_/g, ' ')}` : '';
+}
 export const isActiveRun = run => !!run && (ACTIVE.has(String(run.state)) || (run.deploymentRuns || []).some(owned => ACTIVE.has(String(owned.state))));
 export const runTitle = run => run.kind === 'workflow_run' ? `${run.repositoryName || 'Workflow'} · ${run.workflowPath ? run.workflowPath.split('/').pop() : 'workflow'}` : run.targetLabel || run.repositoryName || 'Deployment';
 export const stepLabel = step => step.key || step.name || step.id || 'step';
@@ -93,6 +109,7 @@ export function describeRun(run, nowIso) {
     `${kindLabel(run)}${run.kind === 'workflow_run' ? ` ${run.workflowPath}` : run.targetLabel ? ` of ${run.targetLabel}` : ''} — ${stateLabel(run.state)}${run.outcome ? ` (${run.outcome})` : ''}${run.reason ? ` · ${run.reason}` : ''}`,
     `${run.startedAt ? `Started ${formatWhen(run.startedAt)}` : `Created ${formatWhen(run.createdAt)}`}${run.finishedAt ? ` · finished ${formatWhen(run.finishedAt)}` : ''}${run.durationMs !== null && run.durationMs !== undefined ? ` · ${formatDuration(run.durationMs)}${isActiveRun(run) ? ` as of ${formatWhen(nowIso)}` : ''}` : ''}`];
   if (run.error) lines.push(`Error: ${run.error}`);
+  if (run.state === 'blocked' && blockedText(run.blockedBy)) lines.push(`Blocked by ${blockedText(run.blockedBy)}`);
   lines.push('Steps:');
   for (const step of run.steps || []) {
     const detail = [step.operation && `${step.operation}${step.resourceKey ? ` · ${step.resourceKey}` : ''}`, step.kind && step.kind].filter(Boolean).join(' ');
@@ -185,6 +202,7 @@ export function renderDeployments(p, state, actions, environment) {
     caption(`${runMeta(run) || 'Repository unknown'}${run.workflowPath ? ` · ${run.workflowPath}` : ''}${run.kind === 'deployment_run' && run.targetLabel ? ` · ${run.targetLabel}` : ''}`),
     caption(`${runTiming(run)}${isActiveRun(run) ? ` · as of ${formatWhen(detail.now)}` : ''}`),
     run.error && status('error', run.error),
+    run.state === 'blocked' && blockedText(run.blockedBy) && status('warning', blockedText(run.blockedBy)),
     detail.error && status('warning', detail.error),
     !inReleases && run.kind === 'deployment_run' && run.workflowRun && inline([caption(`Started by workflow ${run.workflowRun.workflowPath}${run.workflowStepKeys?.length ? ` · serves ${run.workflowStepKeys.join(', ')}` : ''}`),
       button(`deploy-workflow-${run.workflowRun.uid}`, 'Open workflow run', () => actions.openDeployment(run.workflowRun.uid, 'workflow_run', 'detail'), { plain: true })], { flexWrap: 'wrap' }),

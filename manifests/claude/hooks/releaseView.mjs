@@ -1,6 +1,6 @@
 import { clean } from './model.mjs';
 import { STATUS } from './primitives.mjs';
-import { stateLabel, formatDuration, formatWhen } from './deploymentView.mjs';
+import { stateLabel, formatDuration, formatWhen, blockedText } from './deploymentView.mjs';
 
 /** Releases: the environment's deployment history of resource releases, as in Command Center. Nothing here deploys. */
 export const RELEASE_DAYS = [1, 7, 30, 90];
@@ -55,8 +55,9 @@ function duration(deployment, nowIso) {
   const start = Date.parse(startOf(deployment)), now = Date.parse(nowIso || '') || Date.now();
   return Number.isFinite(start) ? `${formatDuration(Math.max(0, now - start))} so far` : 'In progress';
 }
-/** Why a deployment did not deploy: its error, else its outcome, as a blocked one often has only that. */
-export const reasonText = deployment => deployment.error || (['failed', 'blocked'].includes(deployment.state) ? humanize(deployment.outcome) : '');
+/** Why a deployment did not deploy: its error, else the workflow step that blocked it, else its outcome. */
+export const reasonText = deployment => deployment.error || (deployment.state === 'blocked' && blockedText(deployment.blockedBy))
+  || (['failed', 'blocked'].includes(deployment.state) ? humanize(deployment.outcome) : '');
 /** `6 of 6 stages`, and the stage it is at or stopped at. */
 export function progressText(deployment) {
   const steps = deployment.steps || [];
@@ -66,8 +67,10 @@ export function progressText(deployment) {
 }
 
 export function renderReleases(p, state, actions, { environment, target }) {
-  const { muted, caption, heading, status, column, inline, buttons, button, row, badge, empty, Text } = p;
+  const { caption, heading, status, column, inline, buttons, button, row, badge, empty, progress, Text } = p;
   const list = state.releases, entries = list?.results || [], watch = state.releaseWatch;
+  // A read the person started shows a bar until it answers: above the rows, or by Load more for the next page.
+  const reading = state.releasesLoading && state.releasesReading;
   return column([
     // Refresh sits beside the heading, where it shows without scrolling past the history. It always reads again:
     // a read already under way is overtaken, never waited for.
@@ -78,7 +81,7 @@ export function renderReleases(p, state, actions, { environment, target }) {
     buttons([...KINDS.map(([kind, label]) => button(`releases-kind-${kind || 'all'}`, label, () => actions.releasesKind(kind), state.releaseKind === kind ? { primary: true } : { plain: true, dim: true })),
       (target?.branchUid || state.releaseMine) && button('releases-mine', 'This repository', actions.releasesMine, state.releaseMine ? { primary: true } : { plain: true, dim: true })]),
     buttons(RELEASE_DAYS.map(days => button(`releases-days-${days}`, dayLabel(days), () => actions.releaseDays(days), state.releaseDays === days ? { primary: true } : { plain: true, dim: true }))),
-    state.releasesLoading && !list && muted('Loading deployment history…'),
+    reading && !reading.more && progress('releases-reading', reading.label),
     state.releasesError && status('error', state.releasesError),
     ...entries.map(entry => {
       const steps = entry.steps || [], kind = deploymentKind(entry.state);
@@ -94,6 +97,7 @@ export function renderReleases(p, state, actions, { environment, target }) {
     }),
     list && !entries.length && !state.releasesLoading && empty(`No deployments in the ${windowText(list.days)}`,
       `${state.releaseKind || state.releaseMine ? 'Nothing matching these filters was deployed.' : 'No resource release was deployed.'}${list.days < RELEASE_DAYS.at(-1) ? ' Choose a longer window for older deployments.' : ''}`),
+    reading && reading.more && progress('releases-reading-more', reading.label),
     list && entries.length < list.count ? button('releases-more', state.releasesLoading ? 'Loading…' : 'Load more', actions.moreReleases, { plain: true, available: !state.releasesLoading }) : null,
     entries.length ? caption(`Newest first. Times in ${zoneLabel(list.now)}.`) : null,
   ]);

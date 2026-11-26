@@ -254,12 +254,19 @@ not a list of releases: a release that wasn't deployed in the window has no row.
 Each row shows the repository and release (an agent by its own name, because release
 names such as `app` repeat across repositories), its type, branch, commit, the date and
 time it started, its state, its stages with the one it is at or stopped at, its duration,
-its source and, when it failed, the error. Times are written in the machine's time zone,
+its source and, when it failed, the error. A deployment its workflow blocked names the
+workflow step that failed, as Command Center does (`metatables-api.yaml: migrate failed`),
+rather than only `Workflow prerequisite failed`; so do its detail, the **Notify me** toast
+and the model tools. Times are written in the machine's time zone,
 named under the history (`Times in UTC+01:00.`). The history opens on the last day;
 **7 days / 30 days / 90 days** read longer ones when chosen, 25 deployments at a time
 (**Load more**). **All types / APIs / Agents / Static sites** and **This repository**
 (when the session folder is a known checkout) filter on the backend. A deployment opens
-its stages and logs.
+its stages and logs. While a read the person started is under way (opening the section,
+**Refresh**, a window or type, **Load more**), Claude's own progress bar says what is being
+read (`Loading the last 30 days`): above the rows, or beside **Load more** for the next
+page. A host without the progress element says it in text. The 30 s check below shows no
+bar.
 
 While the section is shown and the pane is open, one check every 30 s reads only the
 release deployments still queued or running, so a deployment that starts after the history
