@@ -9,7 +9,7 @@ export const OPERATION_STATUS = { running: 'Running', success: 'Completed', fail
 export const OPERATION_KIND = { running: 'warning', success: 'success', failure: 'error', cancelled: 'info', stale: 'info' };
 
 export function primitives(ui, state, actions) {
-  const { Box, Text, Button, Input, Select, Code, Markdown, Svg } = ui;
+  const { Box, Text, Button, Input, Select, Code, Markdown, Svg, Progress } = ui;
   const text = (value, props = {}) => Text({ ...props, children: [clean(value)] });
   const muted = (value, props = {}) => text(value, { dimColor: true, ...props });
   const caption = (value, props = {}) => text(value, { dimColor: true, size: 'caption', wrap: 'wrap', ...props });
@@ -51,6 +51,8 @@ export function primitives(ui, state, actions) {
   ] });
   const badge = (value, kind) => text(value, { size: 'caption', ...(kind ? { color: STATUS[kind].color } : { dimColor: true }) });
   const markdown = (value, props = {}) => Markdown ? Markdown({ text: clean(value), ...props }) : text(value, { wrap: 'wrap' });
+  /** A read under way with no known end: the host's own indeterminate bar, named for screen readers; text on a host without one. */
+  const progress = (key, label) => Box({ key, flexDirection: 'column', children: [Progress ? Progress({ label: clean(label) }) : muted(`${clean(label)}…`)] });
   /** An operation result: the summary coloured by outcome, partial-effect warnings, and collapsed details. */
   const result = key => {
     const value = state.results[key];
@@ -61,5 +63,5 @@ export function primitives(ui, state, actions) {
       state.expanded[`result-${key}`] && Code({ source: resultText(value), language: 'json', wrap: 'wrap' })], { gap: 0 });
   };
   const empty = (name, detail, controls = []) => column([title(name), detail && muted(detail), controls.length && buttons(controls)]);
-  return { Box, Text, Button, Input, Select, Code, Svg, grow, text, muted, caption, heading, title, status, column, inline, buttons, line, card, section, button, toggle, input, select, row, badge, markdown, result, empty };
+  return { Box, Text, Button, Input, Select, Code, Svg, grow, text, muted, caption, heading, title, status, column, inline, buttons, line, card, section, button, toggle, input, select, row, badge, markdown, progress, result, empty };
 }

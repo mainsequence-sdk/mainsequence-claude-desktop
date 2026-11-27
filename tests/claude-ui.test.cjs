@@ -105,8 +105,10 @@ function fixture(options = {}) {
   const stores = options.stores || new Map();
   // `tools` lists the MCP and agent tools; the fixed deployment status tool is recorded in `registered`.
   const hooks = [], calls = [], tools = [], registered = [], timers = [], env = new Map(Object.entries({HOME:'/fixture/home',...(options.env || {})}));
-  const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg', 'Link'].map(type => [type, props => {
+  // A host older than the Progress element hands out no Progress (`withoutProgress`).
+  const elements = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Code', 'Markdown', 'Svg', 'Link', ...(options.withoutProgress ? [] : ['Progress'])].map(type => [type, props => {
     if (type === 'Code' && props.wrap !== undefined) assert.equal(typeof props.wrap, 'string');
+    if (type === 'Progress') { assert.ok(typeof props.label === 'string' && props.label.trim(), 'Progress needs a label'); assert.equal(props.value, undefined, 'a read has no known end'); }
     if (type === 'Select') assert.ok(props.options.length > 0 && props.options.length <= 64, 'Native Select supports 1–64 options');
     return { type, props };
   }]));
@@ -2175,7 +2177,7 @@ const deploymentRow = (uid, state, extra = {}) => ({ uid, state, outcome: state 
   durationMs: ['queued', 'running'].includes(state) ? 120000 : 300000, error: '', errorCode: '',
   steps: [{ name: 'Build', state: 'succeeded' }, { name: 'Deploy', state: ['queued', 'running'].includes(state) ? 'running' : state }], ...extra });
 function releaseFixture(options = {}) {
-  const live = { deploying: options.deploying !== false, others: [], hold: false };
+  const live = { deploying: options.deploying !== false, others: [], hold: false, ended: null };
   const list = () => [...live.others, deploymentRow(ACTIVE_RUN, live.deploying ? 'running' : 'succeeded'),
     deploymentRow(DONE_RUN, 'succeeded', { commit: 'fff0000', createdAt: '2026-10-21T06:00:00.000Z', startedAt: '2026-10-21T06:00:00.000Z', finishedAt: '2026-10-21T06:05:00.000Z' }),
     deploymentRow(FAILED_RUN, 'failed', { releaseUid: RELEASE_AGENT, releaseName: 'tau', agentName: 'Risk Analyst', kind: 'harness_agent', kindLabel: 'Harness Agent', commit: 'bad0000',
@@ -2192,7 +2194,7 @@ function releaseFixture(options = {}) {
       const state = q.runUid === ACTIVE_RUN && live.deploying ? 'running' : 'succeeded';
       return success(q.action, { hidden: false, uid: q.runUid, kind: 'deployment_run', now: '2026-10-21T08:01:00.000Z',
         run: { kind: 'deployment_run', uid: q.runUid, state, commit: 'abc1234', error: '', targetLabel: 'FastAPI', repositoryName: 'Real project', branchName: 'main', workflowRun: { uid: relId(30), workflowPath: '.mainsequence/workflows/deploy.yaml', state },
-          steps: [{ id: 'a', state: 'succeeded' }, { id: 'b', state }] } });
+          steps: [{ id: 'a', state: 'succeeded' }, { id: 'b', state }], ...(state === 'succeeded' && live.ended || {}) } });
     }
     if (q.action === 'deployment-wait') return success(q.action, { hidden: false, uid: q.runUid, finished: !live.deploying, waitedMs: 120000, reads: 13, now: '2026-10-21T08:02:00.000Z',
       run: { kind: 'deployment_run', uid: q.runUid, state: live.deploying ? 'running' : 'succeeded', commit: 'abc1234', repositoryName: 'Real project', branchName: 'main', targetLabel: 'FastAPI', steps: [{ key: 'deploy', state: live.deploying ? 'running' : 'succeeded' }] } });
@@ -2246,6 +2248,69 @@ test('a blocked deployment without an error says why by its outcome', async () =
   f.live.others = [deploymentRow(relId(14), 'blocked', { outcome: 'workflow_prerequisite_failed' })];
   await f.start(); await f.press('tab-Releases'); await flush();
   assert.match(JSON.stringify(f.find(await f.pane(), `release-deployment-${relId(14)}`)), /Workflow prerequisite failed/);
+});
+
+// MetaTables on 2026-11-23: the workflow's migrate step failed, so the API and agent deployments it would have made were blocked.
+const METATABLES_BLOCK = { workflowRunUid: relId(31), workflowPath: '.mainsequence/workflows/metatables-api.yaml', workflowState: 'failed', steps: [{ key: 'migrate', state: 'failed' }] };
+test('a blocked deployment names the workflow step that failed, as Command Center does', async () => {
+  const { register } = await load(); const f = releaseFixture({ deploying: false }); register(f.on);
+  f.live.others = [deploymentRow(relId(14), 'blocked', { outcome: 'workflow_prerequisite_failed', blockedBy: METATABLES_BLOCK,
+    steps: [{ name: 'Resolve revision', state: 'skipped' }, { name: 'Deploy runtime', state: 'skipped' }] })];
+  await f.start(); await f.press('tab-Releases'); await flush();
+  const row = JSON.stringify(f.find(await f.pane(), `release-deployment-${relId(14)}`));
+  assert.match(row, /metatables-api\.yaml: migrate failed/); assert.doesNotMatch(row, /Workflow prerequisite failed/);
+  const told = (await f.emit('tool.call', { tool: 'mcp__mainsequence__ms_releases', tool_use_id: 'b1', action: 'history' })).result[0].text;
+  assert.match(told, /blocked · 0 of 2 stages · 5m 0s · repository event · metatables-api\.yaml: migrate failed · deployment/, 'the model is told the same');
+});
+
+test('blocked text groups the failed steps by state and falls back to the workflow state', async () => {
+  const { blockedText } = await import(pathToFileURL(path.resolve(__dirname, '../manifests/claude/hooks/deploymentView.mjs')).href);
+  assert.equal(blockedText(METATABLES_BLOCK), 'metatables-api.yaml: migrate failed');
+  assert.equal(blockedText({ ...METATABLES_BLOCK, steps: [{ key: 'image', state: 'failed' }, { key: 'agent_image', state: 'failed' }, { key: 'migrate', state: 'timed_out' }] }),
+    'metatables-api.yaml: image and agent_image failed, migrate timed out');
+  assert.equal(blockedText({ workflowPath: '', workflowState: 'cancelled', steps: [] }), 'Workflow: the workflow cancelled');
+  assert.equal(blockedText(null), ''); assert.equal(blockedText({ steps: [] }), '');
+});
+
+test('a watched deployment that ends blocked says which workflow step failed', async () => {
+  const { register } = await load(); const f = releaseFixture(); register(f.on); await f.start();
+  await f.press('tab-Releases'); await flush(); await f.press(`release-watch-${ACTIVE_RUN}`); await flush();
+  f.live.deploying = false; f.live.ended = { state: 'blocked', outcome: 'workflow_prerequisite_failed', blockedBy: METATABLES_BLOCK };
+  pollTimers(f, 15000)[0].callback(); await flush(); await flush();
+  assert.ok(f.calls.some(c => c.toast === 'Real project · app: the deployment blocked — metatables-api.yaml: migrate failed.'), JSON.stringify(f.calls.filter(c => c.toast)));
+});
+
+const readingBar = (tree, f, key = 'releases-reading') => { const box = f.find(tree, key); return box && box.props.children[0]; };
+test('a read the person starts shows a progress bar until it answers; the 30 s check shows none', async () => {
+  const { register } = await load(); const f = releaseFixture(); register(f.on); await f.start();
+  f.live.hold = true; await f.press('tab-Releases'); await flush();
+  assert.deepEqual(readingBar(await f.pane(), f), { type: 'Progress', props: { label: 'Loading deployment history' } }, 'opening the section');
+  f.live.hold = false; await f.press('releases-refresh'); await flush(); await flush();
+  assert.equal(f.find(await f.pane(), 'releases-reading'), undefined, 'gone once the history answers');
+  f.live.hold = true; await f.press('releases-refresh'); await flush();
+  assert.equal(readingBar(await f.pane(), f).props.label, 'Refreshing deployment history');
+  await f.press('releases-days-30'); await flush();
+  assert.equal(readingBar(await f.pane(), f).props.label, 'Loading the last 30 days', 'the newest read names itself');
+  await f.press('releases-kind-harness_agent'); await flush();
+  assert.equal(readingBar(await f.pane(), f).props.label, 'Loading deployment history');
+  f.live.hold = false; await f.press('releases-refresh'); await flush(); await flush();
+  assert.equal(f.find(await f.pane(), 'releases-reading'), undefined);
+  // A deployment that ends makes the 30 s check read the history again, quietly.
+  f.live.hold = true; f.live.deploying = false; f.now += 26000; pollTimers(f, 30000)[0].callback(); await flush(); await flush();
+  assert.equal(historyReads(f).at(-1).days, 30, 'the check read the history again');
+  assert.equal(f.find(await f.pane(), 'releases-reading'), undefined, 'and showed no bar');
+});
+
+test('Load more shows its bar by the button, and a host without Progress says it in text', async () => {
+  const { register } = await load(); const f = releaseFixture({ deploying: false, withoutProgress: true }); register(f.on); await f.start();
+  f.live.hold = true; await f.press('tab-Releases'); await flush();
+  assert.match(JSON.stringify(f.find(await f.pane(), 'releases-reading')), /Loading deployment history…/);
+  const many = releaseFixture({ deploying: false }); register(many.on); await many.start();
+  many.live.others = Array.from({ length: 30 }, (_, n) => deploymentRow(relId(40 + n), 'succeeded'));
+  await many.press('tab-Releases'); await flush(); await flush();
+  many.live.hold = true; await many.press('releases-more'); await flush();
+  const tree = await many.pane();
+  assert.equal(readingBar(tree, many, 'releases-reading-more').props.label, 'Loading more deployments'); assert.equal(many.find(tree, 'releases-reading'), undefined, 'not above the rows');
 });
 
 test('an empty history says there were no deployments', async () => {
