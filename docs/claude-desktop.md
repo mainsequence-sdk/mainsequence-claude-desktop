@@ -122,10 +122,21 @@ the composer when it shows, say so with **Copy sign-in link** and **Cancel**. Th
 the page the browser was sent to, for pasting into another browser; where the surface has
 no clipboard the link is shown instead. It stays in that session and never reaches Activity
 or the other sessions. When the page's host resolves to a local-network address (a private
-or link-local range, not loopback), the pane says that macOS keeps a browser from it until
-the browser is allowed under System Settings → Privacy & Security → Local Network. A
-browser that is not allowed fails with `ERR_ADDRESS_UNREACHABLE` while terminal tools still
-reach the same address.
+or link-local range, not loopback), macOS lets a browser open it only when the browser is
+allowed under System Settings → Privacy & Security → Local Network. A browser that is not
+allowed fails with `ERR_ADDRESS_UNREACHABLE` while terminal tools still reach the same
+address.
+
+Before the page opens, the worker reads that setting for the default browser from the
+network extension preferences (`/Library/Preferences/com.apple.networkextension.plist`),
+where macOS keeps one rule per executable path. Chrome also runs from copies of itself
+(`…code_sign_clone…/Google Chrome.app.bundle`), each with a rule of its own, so the rule
+of the copy that is running decides; a browser that is not running is judged by the rule
+for its installed path. When that rule is off, the pane and the band say so in the error
+colour, with the browser, the host and its address ("Google Chrome can't reach
+`<host>` (`<address>`): Local Network is off"), and how to turn it on. When the
+rule can't be read, or macOS has not asked about that copy yet, the pane keeps the hint
+above. Nothing is changed, and nothing leaves the machine.
 
 A MainSequence login ends a fixed time after sign-in (five days by default), however
 often it is used; devtools reads that moment from the saved login without contacting the

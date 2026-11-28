@@ -1919,7 +1919,7 @@ test('a login the backend revoked after the startup check called it usable is sh
   const refused = action => ({ schemaVersion: 1, action, status: 'failure', summary: 'The backend refused the saved session for https://api.main-sequence.app: it was revoked or belongs to another backend. Sign in again.',
     error: { code: 'AUTH_REJECTED', message: 'revoked' } });
   const f = fixture({ environments: { 'https://api.main-sequence.app': 'research' }, respond: ({ request: q }) => {
-    if (q.action === 'auth-status') { checks++; return q.check && expired ? refused(q.action) : success(q.action, { authenticated: true, username: 'jose@example.test' }); }
+    if (q.action === 'auth-status') { checks++; return q.check && expired ? refused(q.action) : success(q.action, { authenticated: true, username: 'person@example.test' }); }
     if (q.action === 'login') { expired = false; return success(q.action, {}); }
     if (q.action === 'mcp-environments') return expired ? refused(q.action) : success(q.action, [{ uid: 'research', name: 'Research' }, { uid: 'production', name: 'Production' }]);
     return success(q.action, []);
@@ -1929,18 +1929,18 @@ test('a login the backend revoked after the startup check called it usable is sh
   let tree = await f.pane();
   assert.match(JSON.stringify(tree), /it was revoked or belongs to another backend\. Sign in again\./, 'the reason is shown, not an empty selector');
   assert.ok(f.find(tree, 'login'), 'the header offers Sign in'); assert.ok(f.find(tree, 'blocker-login'));
-  assert.doesNotMatch(JSON.stringify(f.find(tree, 'login') ? tree.props.children[0] : {}), /jose@example\.test/);
+  assert.doesNotMatch(JSON.stringify(f.find(tree, 'login') ? tree.props.children[0] : {}), /person@example\.test/);
   assert.equal(f.calls.filter(c => c.request?.request.action === 'auth-status' && c.request.request.check === true).length, 1, 'the backend is asked once');
   await f.press('login'); await settle();
   tree = await f.pane();
-  assert.match(JSON.stringify(tree), /jose@example\.test/);
+  assert.match(JSON.stringify(tree), /person@example\.test/);
   assert.equal(f.find(tree, 'mcp-environment').props.value, 'research', 'the shared environment is selected again');
   assert.equal(f.calls.filter(c => c.store === 'changed:auth').length, 1, 'the other sessions are told to re-read the login');
 });
 
 test('an environment load that fails shows why, with Try again', async () => {
   let down = true;
-  const f = fixture({ respond: ({ request: q }) => q.action === 'auth-status' ? success(q.action, { authenticated: true, username: 'jose@example.test' })
+  const f = fixture({ respond: ({ request: q }) => q.action === 'auth-status' ? success(q.action, { authenticated: true, username: 'person@example.test' })
     : q.action === 'mcp-environments' ? (down ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'MainSequence could not be reached: the request timed out after 30 s.', error: { code: 'API_ERROR', message: 'timeout' } }
       : success(q.action, [{ uid: 'research', name: 'Research' }])) : success(q.action, []) });
   const { register } = await load(); register(f.on);
@@ -1959,7 +1959,7 @@ const localTime = (...parts) => new Date(2026, 10, ...parts).getTime();
 function loginFixture(options = {}) {
   const login = { endsAt: options.endsAt ?? localTime(6, 12, 30) };
   const f = fixture({ stores: options.stores, hostSessionId: options.hostSessionId, environments: { 'https://api.main-sequence.app': 'research' }, respond: ({ request: q }) => {
-    const ended = login.endsAt <= f.now, data = { authenticated: !ended, username: 'jose@example.test', sessionEndsAt: new Date(login.endsAt).toISOString() };
+    const ended = login.endsAt <= f.now, data = { authenticated: !ended, username: 'person@example.test', sessionEndsAt: new Date(login.endsAt).toISOString() };
     if (q.action === 'auth-status') return q.check && ended ? { schemaVersion: 1, action: q.action, status: 'failure', summary: 'The saved session ended. Sign in again.', error: { code: 'NOT_AUTHENTICATED', message: 'ended' } }
       : { ...success(q.action, data), summary: ended ? 'The saved session ended. Sign in again.' : 'The selected session is usable.' };
     if (q.action === 'login') { login.endsAt = f.now + 5 * 86_400_000; return success(q.action, {}); }
@@ -2004,7 +2004,7 @@ test('a login ending within a day is warned in the pane and above the composer, 
   assert.equal(f.find(await band(f), 'mainsequence-login-band'), undefined);
   await f.press('login'); await settle();
   tree = await f.pane();
-  assert.match(JSON.stringify(tree), /jose@example\.test/); assert.equal(f.find(tree, 'renew-login'), undefined);
+  assert.match(JSON.stringify(tree), /person@example\.test/); assert.equal(f.find(tree, 'renew-login'), undefined);
   assert.equal(f.find(await band(f), 'mainsequence-login-band'), undefined);
   await f.press('tab-Settings');
   const account = JSON.stringify(await f.pane()).match(/"(?:Connection verified|Using your saved MainSequence session)[^"]*"/)?.[0];
@@ -2035,8 +2035,8 @@ test('a login that ended before startup shows when it ended and asks nothing of 
 });
 
 // The worker names the page sign-in opened: the pane and the band offer its link, and say when macOS keeps a browser from it.
-const signInUrl = 'http://local-backend:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
-function signInFixture({ localNetwork = true, copied = true } = {}) {
+const signInUrl = 'http://dev-backend.test:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+function signInFixture({ localNetwork = true, copied = true, url = signInUrl, page = {} } = {}) {
   const { f } = loginFixture({ endsAt: localTime(2, 7, 16) });
   const original = f.$.process.spawn, copies = [], login = { cancelled: false };
   f.$.ui.copy = async args => { copies.push(args); return copied ? { isCopied: true } : { isCopied: false, reason: 'no clipboard' }; };
@@ -2044,7 +2044,7 @@ function signInFixture({ localNetwork = true, copied = true } = {}) {
     const envelope = JSON.parse(input.input);
     if (envelope.request.request.action !== 'login') return original(input);
     f.calls.push(envelope);
-    const lines = [{ type: 'browser', id: envelope.id, url: signInUrl, localNetwork }, { type: 'progress', id: envelope.id, message: 'Waiting for you to sign in in your browser…' }].map(m => JSON.stringify(m) + '\n');
+    const lines = [{ type: 'browser', id: envelope.id, url, localNetwork, ...page }, { type: 'progress', id: envelope.id, message: 'Waiting for you to sign in in your browser…' }].map(m => JSON.stringify(m) + '\n');
     let finish; const ended = new Promise(resolve => { finish = resolve; });
     // Waits for the browser until cancelled, as the worker does.
     return { [Symbol.asyncIterator]() { return this; },
@@ -2062,7 +2062,7 @@ test('a sign-in waiting on a local-network page offers its link and says how mac
   let tree = await f.pane();
   const card = f.find(tree, 'sign-in-waiting');
   assert.ok(card, 'the pane shows the waiting sign-in');
-  assert.match(JSON.stringify(card), /local-backend is on your local network, and macOS blocks a browser from it until you allow it in System Settings → Privacy & Security → Local Network/);
+  assert.match(JSON.stringify(card), /dev-backend\.test is on your local network, and macOS blocks a browser from it until you allow it in System Settings → Privacy & Security → Local Network/);
   assert.doesNotMatch(JSON.stringify(card), /fixture-state/, 'the link itself is not drawn');
   let footer = await band(f);
   assert.match(JSON.stringify(f.find(footer, 'mainsequence-login-band')), /Waiting for you to sign in in your browser/);
@@ -2096,6 +2096,47 @@ test('without a clipboard the sign-in link is shown to copy by hand, and a publi
   assert.equal(f.calls.some(c => typeof c.toast === 'string' && c.toast.startsWith('Sign-in link copied')), false);
 });
 
+// The worker read macOS's Local Network rule for the browser: the pane says what it found, not what may be.
+const lanSignInUrl = 'http://dev-backend.test:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+test('a browser with Local Network turned off is named as the reason the sign-in page cannot load', async () => {
+  const { f } = signInFixture({ url: lanSignInUrl, page: { address: '192.168.50.7', browser: { name: 'Example Browser', access: 'denied', rules: 3 } } });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  const card = f.find(await f.pane(), 'sign-in-waiting'), drawn = JSON.stringify(card);
+  assert.equal(card.props.borderColor, 'error');
+  assert.match(drawn, /Example Browser can't reach dev-backend\.test \(192\.168\.50\.7\): Local Network is off/);
+  assert.match(drawn, /Example Browser has Local Network turned off in macOS, so it can't open the sign-in page on dev-backend\.test \(192\.168\.50\.7\)\. Turn on Example Browser in System Settings → Privacy & Security → Local Network \(it is listed 3 times, once for each copy of itself it ran from: turn on every one\), quit Example Browser \(⌘Q\) and reopen it, then sign in again\./);
+  assert.doesNotMatch(drawn, /Page won't load/, 'no guess when the rule was read');
+  assert.ok(f.find(card, 'sign-in-copy'), 'the link can still be copied into an allowed browser');
+  const footer = JSON.stringify(f.find(await band(f), 'mainsequence-login-band'));
+  assert.match(footer, /Example Browser can't reach dev-backend\.test \(192\.168\.50\.7\): Local Network is off/);
+  assert.match(footer, /"color":"error"/);
+});
+
+test('an unread rule keeps the Local Network hint with the address, and an allowed browser gets none', async () => {
+  let { f } = signInFixture({ url: lanSignInUrl, page: { address: '192.168.50.7', browser: { name: 'Example Browser', access: 'unknown' } } });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  let drawn = JSON.stringify(f.find(await f.pane(), 'sign-in-waiting'));
+  assert.match(drawn, /Page won't load \(ERR_ADDRESS_UNREACHABLE\)\? dev-backend\.test \(192\.168\.50\.7\) is on your local network/);
+  assert.match(drawn, /Waiting for you to sign in in your browser/);
+  ({ f } = signInFixture({ url: lanSignInUrl, page: { address: '192.168.50.7', browser: { name: 'Example Browser', access: 'allowed' } } }));
+  await startLogin(f);
+  await f.press('login'); await settle();
+  drawn = JSON.stringify(f.find(await f.pane(), 'sign-in-waiting'));
+  assert.match(drawn, /Page didn't open\? Copy the link and paste it into your browser\./);
+  assert.doesNotMatch(drawn, /Local Network/);
+});
+
+test('a worker message with an unknown state or a malformed address draws no claim', async () => {
+  const { f } = signInFixture({ url: lanSignInUrl, page: { address: '<b>192.168.50.7</b>', browser: { name: 'Example Browser', access: 'blocked' } } });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  const drawn = JSON.stringify(f.find(await f.pane(), 'sign-in-waiting'));
+  assert.match(drawn, /Page won't load \(ERR_ADDRESS_UNREACHABLE\)\? dev-backend\.test is on your local network/);
+  assert.doesNotMatch(drawn, /<b>|Example Browser|Local Network is off/);
+});
+
 // The repositories folder is the one Codex and the mainsequence CLI keep (`mainsequence_path`); Claude's store copy follows it.
 function folderFixture({ shared, saved } = {}) {
   const writes = [];
@@ -2107,7 +2148,7 @@ function folderFixture({ shared, saved } = {}) {
       shared.value = { baseDir: q.baseDir.startsWith('/') ? q.baseDir : `/fixture/home/${q.baseDir}`, baseDirSaved: true };
       return success(q.action, { backend: 'https://api.main-sequence.app', ...shared.value });
     }
-    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'jose@example.test' });
+    if (q.action === 'auth-status') return success(q.action, { authenticated: true, username: 'person@example.test' });
     return success(q.action, []);
   } });
   return { f, writes };

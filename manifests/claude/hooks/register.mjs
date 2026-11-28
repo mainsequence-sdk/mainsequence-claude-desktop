@@ -1250,7 +1250,12 @@ export async function runWorker($, state, envelope, operation, onProgress) {
         if (message.type === 'progress' && typeof message.message === 'string' && !answer) onProgress(clean(message.message));
         // The sign-in link stays in this session: Activity shares the operation, never the link.
         else if (message.type === 'browser' && typeof message.url === 'string' && /^https?:\/\//.test(message.url) && message.url.length <= 4096 && !answer) {
-          operation.browser = { url: message.url, localNetwork: message.localNetwork === true };
+          // Whether macOS lets the browser reach a local-network page, as the worker read it: never guessed here.
+          const access = ['allowed', 'denied', 'unknown'].includes(message.browser?.access) ? message.browser.access : '';
+          operation.browser = { url: message.url, localNetwork: message.localNetwork === true,
+            address: typeof message.address === 'string' && /^[0-9a-fA-F:.]{2,45}$/.test(message.address) ? message.address : '',
+            browserName: access ? clean(String(message.browser.name || '')).slice(0, 60) : '', access,
+            browserRules: access && Number.isInteger(message.browser.rules) && message.browser.rules > 0 && message.browser.rules < 1000 ? message.browser.rules : 0 };
         }
         else if (message.type === 'result' && !answer && message.result?.schemaVersion === 1
           && ['success', 'failure', 'cancelled'].includes(message.result.status) && typeof message.result.summary === 'string') answer = message.result;

@@ -17,14 +17,28 @@ export function signedInState(state) {
     signedOut: auth?.data?.authenticated === false || ['NOT_AUTHENTICATED', 'AUTH_REJECTED'].includes(auth?.error?.code) };
 }
 
-/** Why a sign-in page may not load. macOS keeps an app from the local network until it is allowed
- * under Local Network, and a browser denied there fails with ERR_ADDRESS_UNREACHABLE. */
-export function signInHelp(browser) {
-  if (!browser.localNetwork) return 'Page didn\'t open? Copy the link and paste it into your browser.';
+/** The sign-in page's host, with the local-network address it resolved to: `dev-backend.test (192.168.50.7)`. */
+export function signInPlace(browser) {
   let host = 'The sign-in page';
   try { host = new URL(browser.url).hostname; } catch { /* the generic name stays */ }
-  return `Page won't load (ERR_ADDRESS_UNREACHABLE)? ${host} is on your local network, and macOS blocks a browser from it until you allow it in System Settings → Privacy & Security → Local Network. Paste the link into a browser that is allowed, or allow yours, quit and reopen it, and sign in again.`;
+  return browser.address && browser.address !== host.replace(/^\[|\]$/g, '') ? `${host} (${browser.address})` : host;
 }
+/** The worker read macOS's Local Network rule for the browser that opens the page, and it is off. */
+export const signInBlocked = browser => !!browser?.localNetwork && browser.access === 'denied';
+/** Why a sign-in page may not load. macOS keeps an app from the local network until it is allowed
+ * under Local Network, and a browser denied there fails with ERR_ADDRESS_UNREACHABLE. When the
+ * worker could read the browser's rule, the pane says what it found instead of what may be. */
+export function signInHelp(browser) {
+  if (!browser.localNetwork || browser.access === 'allowed') return 'Page didn\'t open? Copy the link and paste it into your browser.';
+  const place = signInPlace(browser), name = browser.browserName || 'Your browser';
+  // Chrome runs from a new copy of itself at each launch and macOS keeps a rule per copy, so the list repeats its name.
+  const rows = browser.browserRules > 1 ? ` (it is listed ${browser.browserRules} times, once for each copy of itself it ran from: turn on every one)` : '';
+  if (browser.access === 'denied') return `${name} has Local Network turned off in macOS, so it can't open the sign-in page on ${place}. Turn on ${name} in System Settings → Privacy & Security → Local Network${rows}, quit ${name} (⌘Q) and reopen it, then sign in again.`;
+  return `Page won't load (ERR_ADDRESS_UNREACHABLE)? ${place} is on your local network, and macOS blocks a browser from it until you allow it in System Settings → Privacy & Security → Local Network. Paste the link into a browser that is allowed, or allow yours, quit and reopen it, and sign in again.`;
+}
+/** The band's and the card's first line. */
+export const signInTitle = browser => signInBlocked(browser) ? `${browser.browserName || 'Your browser'} can't reach ${signInPlace(browser)}: Local Network is off`
+  : 'Waiting for you to sign in in your browser';
 
 /** The login's warning above every session's composer: it ends within a day, or it has ended. */
 export function renderLoginBand(ui, state, actions) {
@@ -35,7 +49,7 @@ export function renderLoginBand(ui, state, actions) {
   const row = ui.Box({ ...(waiting ? {} : { key: 'mainsequence-login-band' }), flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, children: [
     ui.Box({ flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: 1, children: [
       ui.Svg({ source: EMBLEM, alt: 'MainSequence emblem', width: 18, height: 18 }),
-      ui.Text({ color: 'warning', wrap: 'wrap', children: [waiting ? 'Waiting for you to sign in in your browser' : `MainSequence session ${notice.kind === 'soon' ? 'ends' : 'ended'} ${notice.when}`] })] }),
+      ui.Text({ color: waiting && signInBlocked(waiting.browser) ? 'error' : 'warning', wrap: 'wrap', children: [clean(waiting ? signInTitle(waiting.browser) : `MainSequence session ${notice.kind === 'soon' ? 'ends' : 'ended'} ${notice.when}`)] })] }),
     ui.Box({ flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: 1, children: waiting ? [
       ui.Button({ key: 'login-band-copy', label: 'Copy sign-in link', variant: 'primary', onPress: actions.copySignInLink }),
       ui.Button({ key: 'login-band-cancel', label: 'Cancel', plain: true, dimColor: true, onPress: () => actions.cancel(waiting.id) })] : [
@@ -43,7 +57,7 @@ export function renderLoginBand(ui, state, actions) {
       ui.Button({ key: 'login-band-hide', label: 'Not now', plain: true, dimColor: true, onPress: actions.hideLoginBand })] })] });
   if (!waiting) return row;
   return ui.Box({ key: 'mainsequence-login-band', flexDirection: 'column', gap: 0, children: [row,
-    ui.Text({ dimColor: true, size: 'caption', wrap: 'wrap', children: [clean(signInHelp(waiting.browser))] }),
+    ui.Text({ ...(signInBlocked(waiting.browser) ? { color: 'error' } : { dimColor: true }), size: 'caption', wrap: 'wrap', children: [clean(signInHelp(waiting.browser))] }),
     waiting.browser.shown && ui.Code({ source: clean(waiting.browser.url), language: 'text', wrap: 'wrap' })].filter(Boolean) });
 }
 
@@ -121,9 +135,10 @@ export function renderPane(ui, state, actions, options = {}) {
   })();
   // A sign-in waiting for the browser, on every view: the same link to copy, and why a page may not load.
   const waiting = signInWaiting(state);
-  const signInCard = waiting && Box({ key: 'sign-in-waiting', flexDirection: 'column', gap: 1, paddingX: 1, paddingY: 1, borderStyle: 'round', borderColor: 'warning', children: [
-    title('Waiting for you to sign in in your browser'),
-    caption(signInHelp(waiting.browser)),
+  const blocked = waiting && signInBlocked(waiting.browser);
+  const signInCard = waiting && Box({ key: 'sign-in-waiting', flexDirection: 'column', gap: 1, paddingX: 1, paddingY: 1, borderStyle: 'round', borderColor: blocked ? 'error' : 'warning', children: [
+    blocked ? status('error', signInTitle(waiting.browser), { weight: 'semibold' }) : title(signInTitle(waiting.browser)),
+    blocked ? text(signInHelp(waiting.browser), { wrap: 'wrap' }) : caption(signInHelp(waiting.browser)),
     waiting.browser.shown && Code({ source: clean(waiting.browser.url), language: 'text', wrap: 'wrap' }),
     buttons([button('sign-in-copy', 'Copy sign-in link', actions.copySignInLink, { primary: true }),
       button('sign-in-cancel', 'Cancel sign-in', () => actions.cancel(waiting.id), { plain: true })]),

@@ -67,8 +67,7 @@ still, a few KB. A PNG still heavier than that is decoded and shrunk in the work
 most 128 px, smaller when needed; nearest pixel for `pixelated` icons, an alpha-weighted
 average otherwise) and re-encoded, so a 512 px Command Center icon of about 105 KB is
 embedded as roughly 12 KB. The hook applies the same bound to records an older worker
-cached. The backend limit is tracked in
-[tdag-django#1136](https://github.com/Main-Sequence-Server-Side/tdag-django/issues/1136).
+cached.
 The adapter first tries the animated widget, then its frame-zero still, then a shrunk
 PNG still, and draws no image only when none of these fits (for example an oversized
 SVG, which is never rasterized). It never truncates SVG markup or changes the stored
