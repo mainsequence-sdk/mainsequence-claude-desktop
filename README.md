@@ -62,8 +62,9 @@ diagnostics → Executable overrides**.
    account** **Renew session** and **Sign out**, are in the same place. While the
    sign-in waits, **Copy sign-in link** gives you the page to paste into another
    browser. On macOS, a backend on your local network (such as `192.168.x.x`) loads only
-   in a browser allowed under System Settings → Privacy & Security → Local Network; the
-   pane says so when that applies.
+   in a browser allowed under System Settings → Privacy & Security → Local Network. The
+   pane reads that setting for your default browser and, when it is off, names the browser
+   and the address it can't reach.
 2. The backend defaults to `https://api.main-sequence.app`. If your organization runs its
    own MainSequence deployment, set its API URL as the backend in Settings before signing
    in. Set the **repositories folder** where local checkouts go. The **Command Center URL**

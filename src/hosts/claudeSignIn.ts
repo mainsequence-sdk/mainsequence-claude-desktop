@@ -1,6 +1,7 @@
 import * as dns from 'node:dns/promises';
 import * as net from 'node:net';
 import type { HostServices } from '@dev-mainsequence/devtools';
+import { readBrowserAccess, type BrowserAccess } from './localNetworkAccess';
 
 type Lookup = (host: string) => Promise<Array<{ address: string }>>;
 const LOOKUP_MS = 2_000;
@@ -24,26 +25,44 @@ export function localNetworkAddress(address: string): boolean {
  * ERR_ADDRESS_UNREACHABLE while every terminal tool still reaches the same address. */
 export async function signInOverLocalNetwork(url: string, platform: string = process.platform,
   lookup: Lookup = host => dns.lookup(host, { all: true })): Promise<boolean> {
-  if (platform !== 'darwin') return false;
+  return !!await signInLocalAddress(url, platform, lookup);
+}
+
+/** The local-network address the sign-in page's host resolves to on macOS, such as `192.168.50.7`;
+ * empty when the page is elsewhere or the lookup fails. */
+export async function signInLocalAddress(url: string, platform: string = process.platform,
+  lookup: Lookup = host => dns.lookup(host, { all: true })): Promise<string> {
+  if (platform !== 'darwin') return '';
   let timer: NodeJS.Timeout | undefined;
   try {
     const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
     const addresses = net.isIP(host) ? [host] : (await Promise.race([lookup(host),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('lookup timed out')), LOOKUP_MS); })])).map(entry => entry.address);
-    return addresses.some(localNetworkAddress);
-  } catch { return false; }
+    return addresses.find(localNetworkAddress) || '';
+  } catch { return ''; }
   finally { clearTimeout(timer); }
 }
 
-export type SignInPage = { type: 'browser'; url: string; localNetwork: boolean };
+/** What the pane says about the sign-in page: whether it is on the local network, the address,
+ * and whether the browser that opens it is allowed there. */
+export type SignInFindings = { localNetwork: boolean; address?: string; browser?: BrowserAccess };
+export type SignInPage = { type: 'browser'; url: string } & SignInFindings;
+
+export async function checkSignInPage(url: string, host: Pick<HostServices, 'runProcess'>): Promise<SignInFindings> {
+  const address = await signInLocalAddress(url);
+  if (!address) return { localNetwork: false };
+  const browser = await readBrowserAccess(host);
+  return { localNetwork: true, address, ...(browser ? { browser } : {}) };
+}
 
 /** Sign-in waits for the browser. Before the page opens, the pane learns its link, to copy into a
  * browser other than the default one, and whether the page is on the local network. */
 export function announceSignInPage(host: HostServices, write: (page: SignInPage) => void, progress: (message: string) => void,
-  check: (url: string) => Promise<boolean> = url => signInOverLocalNetwork(url)): void {
+  check: (url: string) => Promise<boolean | SignInFindings> = url => checkSignInPage(url, host)): void {
   const open = host.openBrowser.bind(host);
   host.openBrowser = async url => {
-    write({ type: 'browser', url, localNetwork: await check(url) });
+    const found = await check(url);
+    write({ type: 'browser', url, ...(typeof found === 'boolean' ? { localNetwork: found } : found) });
     progress('Waiting for you to sign in in your browser…');
     return open(url);
   };

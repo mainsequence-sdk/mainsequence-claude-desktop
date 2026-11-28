@@ -2036,7 +2036,7 @@ test('a login that ended before startup shows when it ended and asks nothing of 
 
 // The worker names the page sign-in opened: the pane and the band offer its link, and say when macOS keeps a browser from it.
 const signInUrl = 'http://local-backend:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
-function signInFixture({ localNetwork = true, copied = true } = {}) {
+function signInFixture({ localNetwork = true, copied = true, url = signInUrl, page = {} } = {}) {
   const { f } = loginFixture({ endsAt: localTime(2, 7, 16) });
   const original = f.$.process.spawn, copies = [], login = { cancelled: false };
   f.$.ui.copy = async args => { copies.push(args); return copied ? { isCopied: true } : { isCopied: false, reason: 'no clipboard' }; };
@@ -2044,7 +2044,7 @@ function signInFixture({ localNetwork = true, copied = true } = {}) {
     const envelope = JSON.parse(input.input);
     if (envelope.request.request.action !== 'login') return original(input);
     f.calls.push(envelope);
-    const lines = [{ type: 'browser', id: envelope.id, url: signInUrl, localNetwork }, { type: 'progress', id: envelope.id, message: 'Waiting for you to sign in in your browser…' }].map(m => JSON.stringify(m) + '\n');
+    const lines = [{ type: 'browser', id: envelope.id, url, localNetwork, ...page }, { type: 'progress', id: envelope.id, message: 'Waiting for you to sign in in your browser…' }].map(m => JSON.stringify(m) + '\n');
     let finish; const ended = new Promise(resolve => { finish = resolve; });
     // Waits for the browser until cancelled, as the worker does.
     return { [Symbol.asyncIterator]() { return this; },
@@ -2094,6 +2094,47 @@ test('without a clipboard the sign-in link is shown to copy by hand, and a publi
   assert.ok(JSON.stringify(card).includes(JSON.stringify(signInUrl)), 'the link is shown');
   assert.ok(JSON.stringify(await band(f)).includes(JSON.stringify(signInUrl)));
   assert.equal(f.calls.some(c => typeof c.toast === 'string' && c.toast.startsWith('Sign-in link copied')), false);
+});
+
+// The worker read macOS's Local Network rule for the browser: the pane says what it found, not what may be.
+const lanSignInUrl = 'http://dev-backend.test:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+test('a browser with Local Network turned off is named as the reason the sign-in page cannot load', async () => {
+  const { f } = signInFixture({ url: lanSignInUrl, page: { address: '192.168.50.7', browser: { name: 'Example Browser', access: 'denied', rules: 3 } } });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  const card = f.find(await f.pane(), 'sign-in-waiting'), drawn = JSON.stringify(card);
+  assert.equal(card.props.borderColor, 'error');
+  assert.match(drawn, /Example Browser can't reach dev-backend\.test \(192\.168\.50\.7\): Local Network is off/);
+  assert.match(drawn, /Example Browser has Local Network turned off in macOS, so it can't open the sign-in page on dev-backend\.test \(192\.168\.50\.7\)\. Turn on Example Browser in System Settings → Privacy & Security → Local Network \(it is listed 3 times, once for each copy of itself it ran from: turn on every one\), quit Example Browser \(⌘Q\) and reopen it, then sign in again\./);
+  assert.doesNotMatch(drawn, /Page won't load/, 'no guess when the rule was read');
+  assert.ok(f.find(card, 'sign-in-copy'), 'the link can still be copied into an allowed browser');
+  const footer = JSON.stringify(f.find(await band(f), 'mainsequence-login-band'));
+  assert.match(footer, /Example Browser can't reach dev-backend\.test \(192\.168\.50\.7\): Local Network is off/);
+  assert.match(footer, /"color":"error"/);
+});
+
+test('an unread rule keeps the Local Network hint with the address, and an allowed browser gets none', async () => {
+  let { f } = signInFixture({ url: lanSignInUrl, page: { address: '192.168.50.7', browser: { name: 'Example Browser', access: 'unknown' } } });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  let drawn = JSON.stringify(f.find(await f.pane(), 'sign-in-waiting'));
+  assert.match(drawn, /Page won't load \(ERR_ADDRESS_UNREACHABLE\)\? dev-backend\.test \(192\.168\.50\.7\) is on your local network/);
+  assert.match(drawn, /Waiting for you to sign in in your browser/);
+  ({ f } = signInFixture({ url: lanSignInUrl, page: { address: '192.168.50.7', browser: { name: 'Example Browser', access: 'allowed' } } }));
+  await startLogin(f);
+  await f.press('login'); await settle();
+  drawn = JSON.stringify(f.find(await f.pane(), 'sign-in-waiting'));
+  assert.match(drawn, /Page didn't open\? Copy the link and paste it into your browser\./);
+  assert.doesNotMatch(drawn, /Local Network/);
+});
+
+test('a worker message with an unknown state or a malformed address draws no claim', async () => {
+  const { f } = signInFixture({ url: lanSignInUrl, page: { address: '<b>192.168.50.7</b>', browser: { name: 'Example Browser', access: 'blocked' } } });
+  await startLogin(f);
+  await f.press('login'); await settle();
+  const drawn = JSON.stringify(f.find(await f.pane(), 'sign-in-waiting'));
+  assert.match(drawn, /Page won't load \(ERR_ADDRESS_UNREACHABLE\)\? dev-backend\.test is on your local network/);
+  assert.doesNotMatch(drawn, /<b>|Example Browser|Local Network is off/);
 });
 
 // The repositories folder is the one Codex and the mainsequence CLI keep (`mainsequence_path`); Claude's store copy follows it.

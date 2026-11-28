@@ -566,3 +566,39 @@ test('a sign-in waiting for the browser offers its link to copy and says when ma
   expect(await pane.find({key:'sign-in-waiting'})).toBeUndefined();
   await pane.unmount();
 });
+
+test('a browser with Local Network turned off is named in the pane and the band, in the host’s error colour', async ($, on) => {
+  const endsAt = new Date(2026, 10, 2, 7, 16).getTime();
+  const clock = mock.clock(on, {now:new Date(2026, 10, 6, 12, 0).getTime()}); mock.store(on); mock.env(on, {HOME:'/fixture/user'});
+  on('session.cwd', () => ({value:'/fixture/project'}));
+  on('session.id', () => ({value:'sign-in-blocked'}));
+  on('session.version', () => ({value:{version:'2.1.299'}}));
+  on('session.start', ($, e) => ({cwd:e.cwd}));
+  on('command.register', () => ({value:{command:'ms'}}));
+  on('ui.notify', () => ({value:{isSent:false,reason:'no-surface'}}));
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => { const { Text } = $.ui.resolve(e); return Text({ children: ['Existing composer band'] }); });
+  const url = 'http://dev-backend.test:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+  on('process.spawn', async function* ($, e, next) {
+    const envelope = JSON.parse(e.input), q = envelope.request.request;
+    if (q.action === 'login') {
+      yield {stream:'stdout',text:JSON.stringify({type:'browser',id:envelope.id,url,localNetwork:true,address:'192.168.50.7',browser:{name:'Example Browser',access:'denied'}})+'\n'};
+      await new Promise(resolve => next.signal.addEventListener('abort', resolve, { once: true }));
+      return {value:{code:null,signal:'SIGTERM'}};
+    }
+    const data = q.action === 'auth-status' ? {authenticated:false, username:'fixture@example.test', sessionEndsAt:new Date(endsAt).toISOString()} : {};
+    yield {stream:'stdout',text:JSON.stringify({type:'result',id:envelope.id,result:{schemaVersion:1,action:q.action,status:'success',summary:'Fixture complete',data}})+'\n'};
+    return {value:{code:0,signal:null}};
+  });
+  await $.session.start({cwd:'/fixture/project',surface:'desktop',isInteractive:true});
+  await clock.settle();
+  const pane = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'Pane',requestId:'mainsequence',props:{}});
+  await pane.press({key:'login'}); await clock.settle();
+  expect(await pane.find({key:'sign-in-waiting'}), 'the pane shows the blocked sign-in').toBeDefined();
+  expect(await pane.find({type:'Text',text:"! Example Browser can't reach dev-backend.test (192.168.50.7): Local Network is off"})).toBeDefined();
+  expect(await pane.find({type:'Text',text:"Example Browser has Local Network turned off in macOS, so it can't open the sign-in page on dev-backend.test (192.168.50.7). Turn on Example Browser in System Settings → Privacy & Security → Local Network, quit Example Browser (⌘Q) and reopen it, then sign in again."})).toBeDefined();
+  const band = await $.ui.mount({plugin:'mainsequence',surface:'desktop',component:'AbovePrompt',props:{}});
+  expect(await band.find({type:'Text',text:"Example Browser can't reach dev-backend.test (192.168.50.7): Local Network is off"}), 'the band names the browser').toBeDefined();
+  await band.unmount();
+  await pane.press({key:'sign-in-cancel'}); await clock.settle();
+  await pane.unmount();
+});
