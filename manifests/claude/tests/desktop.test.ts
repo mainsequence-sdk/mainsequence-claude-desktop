@@ -533,7 +533,7 @@ test('a sign-in waiting for the browser offers its link to copy and says when ma
   on('ui.toast', ($, e) => { toasts.push(e.text); return {value:undefined}; });
   on('ui.copy', ($, e) => { copies.push({ text: e.text, surface: e.surface }); return {value:{isCopied:true}}; });
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => { const { Text } = $.ui.resolve(e); return Text({ children: ['Existing composer band'] }); });
-  const url = 'http://local-backend:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
+  const url = 'http://dev-backend.test:8000/auth/cli/authorize/?client_id=mainsequence-cli&state=fixture-state';
   let closed = false;
   on('process.spawn', async function* ($, e, next) {
     const envelope = JSON.parse(e.input), q = envelope.request.request;
